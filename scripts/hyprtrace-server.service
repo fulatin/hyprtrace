@@ -1,0 +1,13 @@
+[Unit]
+Description=HyprTrace API Server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/hyprtrace-server
+Restart=on-failure
+RestartSec=5
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=default.target

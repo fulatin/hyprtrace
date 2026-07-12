@@ -1,0 +1,15 @@
+[Unit]
+Description=HyprTrace Window Time Tracker Daemon
+After=graphical-session.target
+PartOf=graphical-session.target
+Requires=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/hyprtrace-daemon
+Restart=on-failure
+RestartSec=5
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=graphical-session.target
