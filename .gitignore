@@ -21,7 +21,3 @@ Thumbs.db
 # Environment
 .env
 .env.local
-
-# Code arts (internal tooling)
-.arts/
-.codeartsdoer/
