@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { Bot, Loader2 } from 'lucide-react';
+import { Bot, Loader2, Trash2 } from 'lucide-react';
 import { api } from '../lib/api';
-import type { AiModelsResponse } from '../lib/types';
+import type { AiMessage, AiModelsResponse } from '../lib/types';
 import ChatMessageComponent from '../components/ChatMessage';
 import ChatInput from '../components/ChatInput';
 
@@ -24,6 +24,7 @@ export default function AIChat() {
   const [selectedProvider, setSelectedProvider] = useState('ollama');
   const [providers, setProviders] = useState<Record<string, string[]>>({});
   const [error, setError] = useState<string | null>(null);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -31,6 +32,17 @@ export default function AIChat() {
       setProviders(res.providers);
       setSelectedProvider(res.default);
     }).catch(() => {});
+
+    api.aiConversations().then((convs: AiMessage[]) => {
+      if (convs.length > 0) {
+        const historical: Message[] = convs.map((c) => ({
+          role: c.role as 'user' | 'assistant',
+          content: c.content,
+        }));
+        setMessages(historical);
+      }
+      setHistoryLoaded(true);
+    }).catch(() => setHistoryLoaded(true));
   }, []);
 
   useEffect(() => {
@@ -57,6 +69,16 @@ export default function AIChat() {
     }
   };
 
+  const handleClearContext = async () => {
+    setMessages([]);
+    setError(null);
+    try {
+      await api.clearConversations();
+    } catch {
+      // Ignore
+    }
+  };
+
   return (
     <div className="flex flex-col h-[calc(100vh-3rem)]">
       <div className="flex items-center justify-between mb-4">
@@ -64,10 +86,23 @@ export default function AIChat() {
           <Bot size={20} className="text-cyan-400" />
           AI Analysis
         </h2>
+        {messages.length > 0 && (
+          <button
+            onClick={handleClearContext}
+            className="flex items-center gap-1.5 bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-xs text-gray-400 hover:text-red-400 hover:border-red-800 transition-colors"
+          >
+            <Trash2 size={12} />
+            Clear context
+          </button>
+        )}
       </div>
 
       <div className="flex-1 overflow-auto bg-gray-900 border border-gray-800 rounded-t-xl p-4">
-        {messages.length === 0 && (
+        {!historyLoaded ? (
+          <div className="text-center py-12">
+            <Loader2 size={24} className="animate-spin text-gray-500 mx-auto" />
+          </div>
+        ) : messages.length === 0 && (
           <div className="text-center py-12">
             <Bot size={48} className="text-gray-500 mx-auto mb-4" />
             <p className="text-gray-400 mb-6">Hi! I can help analyze your window usage data.</p>

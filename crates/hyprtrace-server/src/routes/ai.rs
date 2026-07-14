@@ -1,4 +1,5 @@
 use crate::ai::ChatMessage;
+use crate::models::AiMessage;
 use crate::routes::AppState;
 use axum::extract::State;
 use axum::Json;
@@ -20,6 +21,32 @@ pub async fn ai_models(
         providers,
         default: ai.default_provider.clone(),
     })
+}
+
+pub async fn ai_conversations(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<AiMessage>>, Json<serde_json::Value>> {
+    let db = state.db.lock().await;
+    match db.ai_conversations(100) {
+        Ok(msgs) => Ok(Json(msgs)),
+        Err(e) => {
+            log::error!("Failed to get conversations: {}", e);
+            Err(Json(serde_json::json!({"error": "Internal server error"})))
+        }
+    }
+}
+
+pub async fn clear_conversations(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, Json<serde_json::Value>> {
+    let db = state.db.lock().await;
+    match db.clear_ai_conversations() {
+        Ok(_) => Ok(Json(serde_json::json!({"status": "ok"}))),
+        Err(e) => {
+            log::error!("Failed to clear conversations: {}", e);
+            Err(Json(serde_json::json!({"error": "Internal server error"})))
+        }
+    }
 }
 
 #[derive(Deserialize)]

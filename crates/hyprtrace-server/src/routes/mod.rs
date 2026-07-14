@@ -24,6 +24,8 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/api/app/{class}/trend", axum::routing::get(data::app_trend))
         .route("/api/ai/models", axum::routing::get(ai::ai_models))
         .route("/api/ai/chat", axum::routing::post(ai::ai_chat))
+        .route("/api/ai/conversations", axum::routing::get(ai::ai_conversations))
+        .route("/api/ai/conversations", axum::routing::delete(ai::clear_conversations))
         .route("/api/config", axum::routing::get(config::get_config))
         .route("/api/config", axum::routing::put(config::update_config))
         .with_state(state)

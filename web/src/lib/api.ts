@@ -4,6 +4,7 @@ import type {
   HourlyBucket,
   Session,
   DailyTrend,
+  AiMessage,
   AiChatResponse,
   AiModelsResponse,
   ConfigResponse,
@@ -59,6 +60,12 @@ export const api = {
         date_range: dateRange,
       }),
     }),
+
+  aiConversations: () =>
+    fetchJSON<AiMessage[]>('/api/ai/conversations'),
+
+  clearConversations: () =>
+    fetchJSON<{ status: string }>('/api/ai/conversations', { method: 'DELETE' }),
 
   getConfig: () =>
     fetchJSON<ConfigResponse>('/api/config'),

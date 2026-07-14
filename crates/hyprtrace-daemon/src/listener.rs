@@ -15,6 +15,13 @@ impl WindowTracker {
     }
 
     pub fn run(&mut self) -> anyhow::Result<()> {
+        // End any orphaned session left from a previous crash/improper shutdown
+        if let Ok(guard) = self.db.lock() {
+            if let Some(id) = guard.end_current_session().ok().flatten() {
+                log::info!("Ended orphaned session {} from previous run", id);
+            }
+        }
+
         let db = self.db.clone();
         let mut listener = EventListener::new();
 

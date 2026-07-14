@@ -240,4 +240,9 @@ impl Database {
         results.reverse();
         Ok(results)
     }
+
+    pub fn clear_ai_conversations(&self) -> anyhow::Result<()> {
+        self.conn.execute("DELETE FROM ai_conversations", [])?;
+        Ok(())
+    }
 }
