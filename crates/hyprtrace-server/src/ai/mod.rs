@@ -18,6 +18,11 @@ pub struct ChatMessage {
 #[async_trait]
 pub trait AiProvider: Send + Sync {
     async fn chat(&self, messages: &[ChatMessage]) -> anyhow::Result<String>;
+    async fn chat_stream(
+        &self,
+        messages: &[ChatMessage],
+        tx: tokio::sync::mpsc::Sender<String>,
+    ) -> anyhow::Result<()>;
     async fn list_models(&self) -> anyhow::Result<Vec<String>>;
     #[allow(dead_code)]
     fn name(&self) -> &str;
@@ -73,6 +78,19 @@ impl AiManager {
             .get(provider_name)
             .ok_or_else(|| anyhow::anyhow!("Unknown AI provider: {}", provider_name))?;
         provider.chat(messages).await
+    }
+
+    pub async fn chat_stream(
+        &self,
+        provider_name: &str,
+        messages: &[ChatMessage],
+        tx: tokio::sync::mpsc::Sender<String>,
+    ) -> anyhow::Result<()> {
+        let provider = self
+            .providers
+            .get(provider_name)
+            .ok_or_else(|| anyhow::anyhow!("Unknown AI provider: {}", provider_name))?;
+        provider.chat_stream(messages, tx).await
     }
 
     pub async fn list_all_models(&self) -> HashMap<String, Vec<String>> {
