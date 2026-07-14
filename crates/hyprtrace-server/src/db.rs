@@ -1,5 +1,6 @@
 use crate::models::{AiMessage, AppRank, DailyTrend, HourlyBucket, Session, TodaySummary};
 use anyhow::Context;
+use chrono::Timelike;
 use rusqlite::{params, Connection};
 use std::path::Path;
 
@@ -107,25 +108,27 @@ impl Database {
 
     pub fn hourly_breakdown(&self, date: &str) -> anyhow::Result<Vec<HourlyBucket>> {
         let mut stmt = self.conn.prepare(
-            "SELECT CAST(strftime('%H', started_at) AS INTEGER) as hour,
-                    SUM(duration_ms) as total_ms,
-                    COUNT(*) as session_count
-             FROM sessions WHERE date(started_at) = ?1 AND ended_at IS NOT NULL
-             GROUP BY hour ORDER BY hour",
+            "SELECT started_at, duration_ms
+             FROM sessions WHERE date(started_at) = ?1 AND ended_at IS NOT NULL",
         )?;
 
         let rows = stmt.query_map(params![date], |row| {
             Ok((
-                row.get::<_, u8>(0)?,
+                row.get::<_, String>(0)?,
                 row.get::<_, i64>(1)?,
-                row.get::<_, i64>(2)?,
             ))
         })?;
 
         let mut map = std::collections::HashMap::new();
         for r in rows {
-            let (hour, total_ms, session_count) = r?;
-            map.insert(hour, (total_ms, session_count));
+            let (started_at, duration_ms) = r?;
+            // Parse UTC timestamp and convert to local time
+            if let Ok(utc_dt) = chrono::DateTime::parse_from_rfc3339(&started_at) {
+                let local_hour = utc_dt.with_timezone(&chrono::Local).hour() as u8;
+                let entry = map.entry(local_hour).or_insert((0i64, 0i64));
+                entry.0 += duration_ms;
+                entry.1 += 1;
+            }
         }
 
         let mut results = Vec::with_capacity(24);
