@@ -245,6 +245,48 @@ impl Database {
         Ok(results)
     }
 
+    pub fn app_trend_hourly(
+        &self,
+        class: &str,
+        date: &str,
+    ) -> anyhow::Result<Vec<DailyTrend>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT started_at, duration_ms
+             FROM sessions
+             WHERE class = ?1 AND date(started_at) = ?2 AND ended_at IS NOT NULL",
+        )?;
+
+        let rows = stmt.query_map(params![class, date], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+            ))
+        })?;
+
+        let mut buckets = std::collections::BTreeMap::new();
+        for r in rows {
+            let (started_at, duration_ms) = r?;
+            if let Ok(utc_dt) = chrono::DateTime::parse_from_rfc3339(&started_at) {
+                let local_hour = utc_dt.with_timezone(&chrono::Local).hour() as u8;
+                let entry = buckets.entry(local_hour).or_insert((0i64, 0i64));
+                entry.0 += duration_ms;
+                entry.1 += 1;
+            }
+        }
+
+        let mut results = Vec::with_capacity(24);
+        for h in 0..24u8 {
+            let (total_ms, session_count) = buckets.get(&h).copied().unwrap_or((0, 0));
+            results.push(DailyTrend {
+                date: format!("{:02}:00", h),
+                total_ms,
+                session_count,
+            });
+        }
+
+        Ok(results)
+    }
+
     pub fn save_ai_message(&self, role: &str, content: &str, model: &str) -> anyhow::Result<()> {
         let now = chrono::Utc::now().to_rfc3339();
         self.conn.execute(

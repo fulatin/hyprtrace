@@ -21,7 +21,7 @@ export default function AppTrendChart({ data, range }: AppTrendChartProps) {
   }
 
   const formatXLabel = (dateStr: string) => {
-    if (range === 'today') return '';
+    if (range === 'today') return dateStr;
     return dateStr.slice(5);
   };
 
@@ -35,7 +35,9 @@ export default function AppTrendChart({ data, range }: AppTrendChartProps) {
   return (
     <div className="mt-4 bg-gray-900 border border-gray-800 rounded-xl p-4">
       <div className="flex items-center gap-2 mb-2">
-        <h4 className="text-sm font-medium text-gray-400">Daily Trend</h4>
+        <h4 className="text-sm font-medium text-gray-400">
+          {range === 'today' ? 'Hourly Trend' : 'Daily Trend'}
+        </h4>
         {range === 'week' && <span className="text-xs text-gray-500">(past 7 days)</span>}
         {range === 'month' && <span className="text-xs text-gray-500">(past 30 days)</span>}
       </div>

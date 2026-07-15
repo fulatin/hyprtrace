@@ -50,6 +50,7 @@ fn default_per_page() -> u32 {
 pub struct AppTrendQuery {
     pub from: Option<String>,
     pub to: Option<String>,
+    pub granularity: Option<String>,
 }
 
 pub async fn health() -> Json<serde_json::Value> {
@@ -155,18 +156,30 @@ pub async fn app_trend(
     Query(query): Query<AppTrendQuery>,
 ) -> Result<Json<Vec<crate::models::DailyTrend>>, Json<serde_json::Value>> {
     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-    let from = query.from.unwrap_or_else(|| {
-        let d = chrono::Utc::now() - chrono::Duration::days(7);
-        d.format("%Y-%m-%d").to_string()
-    });
-    let to = query.to.unwrap_or(today);
-
     let db = state.db.lock().await;
-    match db.app_daily_trend(&class, &from, &to) {
-        Ok(result) => Ok(Json(result)),
-        Err(e) => {
-            log::error!("Failed to get app trend: {}", e);
-            Err(Json(serde_json::json!({"error": "Internal server error"})))
+
+    if query.granularity.as_deref() == Some("hour") {
+        let date = query.from.as_deref().unwrap_or(&today);
+        match db.app_trend_hourly(&class, date) {
+            Ok(result) => Ok(Json(result)),
+            Err(e) => {
+                log::error!("Failed to get hourly app trend: {}", e);
+                Err(Json(serde_json::json!({"error": "Internal server error"})))
+            }
+        }
+    } else {
+        let from = query.from.unwrap_or_else(|| {
+            let d = chrono::Utc::now() - chrono::Duration::days(7);
+            d.format("%Y-%m-%d").to_string()
+        });
+        let to = query.to.unwrap_or(today);
+
+        match db.app_daily_trend(&class, &from, &to) {
+            Ok(result) => Ok(Json(result)),
+            Err(e) => {
+                log::error!("Failed to get app trend: {}", e);
+                Err(Json(serde_json::json!({"error": "Internal server error"})))
+            }
         }
     }
 }

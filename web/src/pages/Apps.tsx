@@ -41,7 +41,8 @@ export default function Apps() {
       return;
     }
     const { from, to } = getDateRange();
-    api.appTrend(selectedApp, from, to).then(setTrend);
+    const granularity = range === 'today' ? 'hour' : undefined;
+    api.appTrend(selectedApp, from, to, granularity).then(setTrend);
   }, [selectedApp, range]);
 
   return (
@@ -74,7 +75,7 @@ export default function Apps() {
           </div>
           {selectedApp && (
             <div>
-              <h3 className="text-sm font-medium text-gray-400 mb-2">{selectedApp} - {range === 'today' ? 'Today' : range === 'week' ? '7-Day' : '30-Day'} Trend</h3>
+              <h3 className="text-sm font-medium text-gray-400 mb-2">{selectedApp} - {range === 'today' ? 'Hourly' : range === 'week' ? '7-Day' : '30-Day'} Trend</h3>
               <AppTrendChart data={trend} range={range} />
             </div>
           )}
