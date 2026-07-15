@@ -282,4 +282,21 @@ impl Database {
         self.conn.execute("DELETE FROM ai_conversations", [])?;
         Ok(())
     }
+
+    /// Rebuild daily_summary from sessions table.
+    /// Useful after manually clearing daily_summary or repairing corrupted data.
+    pub fn rebuild_daily_summary(&self) -> anyhow::Result<()> {
+        self.conn.execute("DELETE FROM daily_summary", [])?;
+        self.conn.execute_batch(
+            "INSERT INTO daily_summary (date, class, total_ms, session_count)
+             SELECT date(started_at) as date,
+                    class,
+                    SUM(duration_ms) as total_ms,
+                    COUNT(*) as session_count
+             FROM sessions
+             WHERE ended_at IS NOT NULL AND duration_ms > 0
+             GROUP BY date(started_at), class",
+        )?;
+        Ok(())
+    }
 }

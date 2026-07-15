@@ -136,6 +136,19 @@ pub async fn sessions(
     }
 }
 
+pub async fn rebuild_summary(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, Json<serde_json::Value>> {
+    let db = state.db.lock().await;
+    match db.rebuild_daily_summary() {
+        Ok(_) => Ok(Json(serde_json::json!({"status": "ok"}))),
+        Err(e) => {
+            log::error!("Failed to rebuild daily_summary: {}", e);
+            Err(Json(serde_json::json!({"error": "Failed to rebuild daily summary"})))
+        }
+    }
+}
+
 pub async fn app_trend(
     State(state): State<Arc<AppState>>,
     Path(class): Path<String>,
