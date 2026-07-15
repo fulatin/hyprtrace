@@ -137,6 +137,30 @@ pub async fn sessions(
     }
 }
 
+#[derive(Deserialize)]
+pub struct DateRangeQuery {
+    pub from: Option<String>,
+    pub to: Option<String>,
+}
+
+pub async fn app_classes(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<DateRangeQuery>,
+) -> Result<Json<Vec<String>>, Json<serde_json::Value>> {
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let from = query.from.unwrap_or_else(|| today.clone());
+    let to = query.to.unwrap_or(today);
+
+    let db = state.db.lock().await;
+    match db.distinct_classes(&from, &to) {
+        Ok(classes) => Ok(Json(classes)),
+        Err(e) => {
+            log::error!("Failed to get app classes: {}", e);
+            Err(Json(serde_json::json!({"error": "Internal server error"})))
+        }
+    }
+}
+
 pub async fn rebuild_summary(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, Json<serde_json::Value>> {

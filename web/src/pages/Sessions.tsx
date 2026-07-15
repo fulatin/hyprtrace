@@ -33,6 +33,11 @@ export default function Sessions() {
   const [data, setData] = useState<PaginatedResponse<Session> | null>(null);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('');
+  const [classes, setClasses] = useState<string[]>([]);
+
+  useEffect(() => {
+    api.appClasses(weekAgo, today).then(setClasses).catch(() => {});
+  }, []);
 
   useEffect(() => {
     setPage(1);
@@ -45,8 +50,6 @@ export default function Sessions() {
       setLoading(false);
     });
   }, [page, filter]);
-
-  const classes = [...new Set(data?.data.map((s) => s.class) ?? [])];
   const getColor = (cls: string) => {
     const idx = classes.indexOf(cls);
     return COLORS[idx % COLORS.length];

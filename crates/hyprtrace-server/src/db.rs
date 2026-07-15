@@ -218,6 +218,22 @@ impl Database {
         Ok((sessions, total))
     }
 
+    pub fn distinct_classes(&self, from: &str, to: &str) -> anyhow::Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT class FROM sessions
+             WHERE date(started_at) BETWEEN ?1 AND ?2 AND ended_at IS NOT NULL
+             ORDER BY class",
+        )?;
+
+        let rows = stmt.query_map(params![from, to], |row| row.get::<_, String>(0))?;
+
+        let mut classes = Vec::new();
+        for r in rows {
+            classes.push(r?);
+        }
+        Ok(classes)
+    }
+
     pub fn app_daily_trend(
         &self,
         class: &str,

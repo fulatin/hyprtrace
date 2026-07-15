@@ -41,6 +41,9 @@ export const api = {
       `/api/sessions?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&page=${page}&per_page=${perPage}${cls ? `&class=${encodeURIComponent(cls)}` : ''}`
     ),
 
+  appClasses: (from: string, to: string) =>
+    fetchJSON<string[]>(`/api/apps/classes?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
+
   appTrend: (cls: string, from: string, to: string, granularity?: string) =>
     fetchJSON<DailyTrend[]>(
       `/api/app/${encodeURIComponent(cls)}/trend?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}${granularity ? `&granularity=${granularity}` : ''}`

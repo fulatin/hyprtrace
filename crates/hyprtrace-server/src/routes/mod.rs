@@ -22,6 +22,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/api/timeline", axum::routing::get(data::timeline))
         .route("/api/sessions", axum::routing::get(data::sessions))
         .route("/api/app/:class/trend", axum::routing::get(data::app_trend))
+        .route("/api/apps/classes", axum::routing::get(data::app_classes))
         .route("/api/summary/rebuild", axum::routing::post(data::rebuild_summary))
         .route("/api/ai/models", axum::routing::get(ai::ai_models))
         .route("/api/ai/chat", axum::routing::post(ai::ai_chat))
