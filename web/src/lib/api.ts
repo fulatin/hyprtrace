@@ -36,9 +36,9 @@ export const api = {
   timeline: (date: string) =>
     fetchJSON<HourlyBucket[]>(`/api/timeline?date=${encodeURIComponent(date)}`),
 
-  sessions: (from: string, to: string, page = 1, perPage = 50) =>
+  sessions: (from: string, to: string, page = 1, perPage = 50, cls?: string) =>
     fetchJSON<PaginatedResponse<Session>>(
-      `/api/sessions?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&page=${page}&per_page=${perPage}`
+      `/api/sessions?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&page=${page}&per_page=${perPage}${cls ? `&class=${encodeURIComponent(cls)}` : ''}`
     ),
 
   appTrend: (cls: string, from: string, to: string) =>

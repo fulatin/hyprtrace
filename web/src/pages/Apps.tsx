@@ -40,10 +40,9 @@ export default function Apps() {
       setTrend([]);
       return;
     }
-    const today = format(new Date(), 'yyyy-MM-dd');
-    const from = format(subDays(new Date(), 30), 'yyyy-MM-dd');
-    api.appTrend(selectedApp, from, today).then(setTrend);
-  }, [selectedApp]);
+    const { from, to } = getDateRange();
+    api.appTrend(selectedApp, from, to).then(setTrend);
+  }, [selectedApp, range]);
 
   return (
     <div className="space-y-6">
@@ -75,8 +74,8 @@ export default function Apps() {
           </div>
           {selectedApp && (
             <div>
-              <h3 className="text-sm font-medium text-gray-400 mb-2">{selectedApp} - Daily Trend</h3>
-              <AppTrendChart data={trend} />
+              <h3 className="text-sm font-medium text-gray-400 mb-2">{selectedApp} - {range === 'today' ? 'Today' : range === 'week' ? '7-Day' : '30-Day'} Trend</h3>
+              <AppTrendChart data={trend} range={range} />
             </div>
           )}
           <div className="space-y-2">

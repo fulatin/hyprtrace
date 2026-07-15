@@ -35,6 +35,7 @@ pub struct SessionQuery {
     pub page: u32,
     #[serde(default = "default_per_page")]
     pub per_page: u32,
+    pub class: Option<String>,
 }
 
 fn default_page() -> u32 {
@@ -121,7 +122,7 @@ pub async fn sessions(
     let to = query.to.unwrap_or(today);
 
     let db = state.db.lock().await;
-    match db.sessions_paginated(&from, &to, query.page, query.per_page) {
+    match db.sessions_paginated(&from, &to, query.page, query.per_page, query.class.as_deref()) {
         Ok((data, total)) => Ok(Json(PaginatedResponse {
             data,
             total,

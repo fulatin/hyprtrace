@@ -150,21 +150,55 @@ impl Database {
         to: &str,
         page: u32,
         per_page: u32,
+        class_filter: Option<&str>,
     ) -> anyhow::Result<(Vec<Session>, u32)> {
+        let (where_clause, param_values): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
+            if let Some(class) = class_filter {
+                (
+                    format!(
+                        "WHERE date(started_at) BETWEEN ?1 AND ?2 AND class = ?3"
+                    ),
+                    vec![
+                        Box::new(from.to_string()),
+                        Box::new(to.to_string()),
+                        Box::new(class.to_string()),
+                    ],
+                )
+            } else {
+                (
+                    "WHERE date(started_at) BETWEEN ?1 AND ?2".to_string(),
+                    vec![Box::new(from.to_string()), Box::new(to.to_string())],
+                )
+            };
+
+        let params_refs: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|b| b.as_ref()).collect();
+
         let total: u32 = self.conn.query_row(
-            "SELECT COUNT(*) FROM sessions WHERE date(started_at) BETWEEN ?1 AND ?2",
-            params![from, to],
+            &format!("SELECT COUNT(*) FROM sessions {}", where_clause),
+            params_refs.as_slice(),
             |row| row.get(0),
         )?;
 
         let offset = (page.saturating_sub(1)) * per_page;
-        let mut stmt = self.conn.prepare(
-            "SELECT id, class, title, workspace, started_at, ended_at, duration_ms
-             FROM sessions WHERE date(started_at) BETWEEN ?1 AND ?2
-             ORDER BY started_at DESC LIMIT ?3 OFFSET ?4",
-        )?;
 
-        let rows = stmt.query_map(params![from, to, per_page, offset], |row| {
+        let sql = format!(
+            "SELECT id, class, title, workspace, started_at, ended_at, duration_ms
+             FROM sessions {} ORDER BY started_at DESC LIMIT ?{} OFFSET ?{}",
+            where_clause,
+            param_values.len() + 1,
+            param_values.len() + 2,
+        );
+
+        let mut all_params: Vec<Box<dyn rusqlite::types::ToSql>> = param_values;
+        all_params.push(Box::new(per_page as i64));
+        all_params.push(Box::new(offset as i64));
+
+        let all_refs: Vec<&dyn rusqlite::types::ToSql> =
+            all_params.iter().map(|b| b.as_ref()).collect();
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(all_refs.as_slice(), |row| {
             Ok(Session {
                 id: row.get(0)?,
                 class: row.get(1)?,

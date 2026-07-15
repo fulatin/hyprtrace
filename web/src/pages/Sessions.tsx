@@ -35,16 +35,16 @@ export default function Sessions() {
   const [filter, setFilter] = useState('');
 
   useEffect(() => {
+    setPage(1);
+  }, [filter]);
+
+  useEffect(() => {
     setLoading(true);
-    api.sessions(weekAgo, today, page, 50).then((d) => {
+    api.sessions(weekAgo, today, page, 50, filter || undefined).then((d) => {
       setData(d);
       setLoading(false);
     });
-  }, [page]);
-
-  const filteredSessions = data?.data.filter(
-    (s) => !filter || s.class === filter
-  ) ?? [];
+  }, [page, filter]);
 
   const classes = [...new Set(data?.data.map((s) => s.class) ?? [])];
   const getColor = (cls: string) => {
@@ -83,7 +83,7 @@ export default function Sessions() {
               </tr>
             </thead>
             <tbody>
-              {filteredSessions.map((s) => (
+              {data?.data.map((s) => (
                 <tr key={s.id} className="border-b border-gray-800/50 hover:bg-gray-800/50">
                   <td className="px-4 py-2.5">
                     <span

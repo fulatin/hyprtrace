@@ -172,8 +172,9 @@ npm run build      # 生产构建
 | 守护进程 | Rust, hyprland-rs, rusqlite |
 | API 服务器 | Rust, Axum, tokio, reqwest |
 | 前端 | React 18, TypeScript, Vite, Tailwind CSS 3, Recharts, Lucide Icons |
+| AI 前端 | @ai-sdk/react, streamdown |
 | 数据库 | SQLite (WAL mode) |
-| AI | Ollama (本地), OpenAI 兼容 API (云端) |
+| AI 后端 | Ollama (本地 NDJSON 流), OpenAI 兼容 API (云端 SSE 流) |
 
 ## License
 
