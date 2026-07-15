@@ -133,4 +133,15 @@ impl Database {
             Ok(None)
         }
     }
+
+    /// Delete orphaned sessions (ended_at IS NULL) left from previous crashes/shutdowns.
+    /// These sessions cannot have accurate duration computed, so delete them
+    /// instead of calling end_session() which would compute a bogus multi-hour duration.
+    pub fn clear_orphaned_sessions(&self) -> anyhow::Result<usize> {
+        let count = self.conn.execute(
+            "DELETE FROM sessions WHERE ended_at IS NULL",
+            [],
+        )?;
+        Ok(count)
+    }
 }

@@ -15,10 +15,14 @@ impl WindowTracker {
     }
 
     pub fn run(&mut self) -> anyhow::Result<()> {
-        // End any orphaned session left from a previous crash/improper shutdown
+        // Delete orphaned sessions from previous crashes/improper shutdowns.
+        // end_session() would compute duration_ms from original start to now,
+        // producing absurdly long sessions (e.g. hours of phantom time) and
+        // corrupting daily_summary. Deleting them is safer.
         if let Ok(guard) = self.db.lock() {
-            if let Some(id) = guard.end_current_session().ok().flatten() {
-                log::info!("Ended orphaned session {} from previous run", id);
+            let count = guard.clear_orphaned_sessions().unwrap_or(0);
+            if count > 0 {
+                log::info!("Cleared {} orphaned session(s) from previous run", count);
             }
         }
 
