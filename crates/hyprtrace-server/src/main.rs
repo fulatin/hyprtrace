@@ -15,6 +15,7 @@ async fn main() -> anyhow::Result<()> {
     let cfg = config::Config::load()?;
     let db_path = cfg.db_path_expanded();
     let db = db::Database::open(&db_path, cfg.daemon.focused_threshold_seconds)?;
+    db.ensure_categories()?;
     let ai = ai::AiManager::from_config(&cfg.ai);
 
     let state = Arc::new(routes::AppState {

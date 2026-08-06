@@ -1,8 +1,8 @@
-use crate::models::{PaginatedResponse, Session};
+use crate::models::{CategoryRule, PaginatedResponse, Session};
 use crate::routes::AppState;
 use axum::extract::{Path, Query, State};
 use axum::Json;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 #[derive(Deserialize)]
@@ -58,6 +58,47 @@ pub async fn health() -> Json<serde_json::Value> {
         "status": "ok",
         "version": "0.1.0"
     }))
+}
+
+#[derive(Serialize)]
+pub struct CategoriesResponse {
+    pub rules: Vec<CategoryRule>,
+    pub categories: Vec<String>,
+}
+
+#[derive(Deserialize)]
+pub struct CategoriesUpdate {
+    pub rules: Vec<CategoryRule>,
+}
+
+pub async fn get_categories(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<CategoriesResponse>, Json<serde_json::Value>> {
+    let db = state.db.lock().await;
+    match db.categories() {
+        Ok(rules) => Ok(Json(CategoriesResponse {
+            rules,
+            categories: crate::db::Database::known_categories(),
+        })),
+        Err(e) => {
+            log::error!("Failed to load categories: {}", e);
+            Err(Json(serde_json::json!({"error": "Internal server error"})))
+        }
+    }
+}
+
+pub async fn put_categories(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CategoriesUpdate>,
+) -> Result<Json<serde_json::Value>, Json<serde_json::Value>> {
+    let db = state.db.lock().await;
+    match db.set_categories(&req.rules) {
+        Ok(()) => Ok(Json(serde_json::json!({"status": "ok"}))),
+        Err(e) => {
+            log::error!("Failed to save categories: {}", e);
+            Err(Json(serde_json::json!({"error": "Internal server error"})))
+        }
+    }
 }
 
 pub async fn summary(

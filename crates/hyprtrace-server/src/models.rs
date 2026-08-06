@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize)]
 pub struct TodaySummary {
@@ -19,6 +19,17 @@ pub struct AppRank {
     pub session_count: i64,
     pub focused_ms: i64,
     pub focused_session_count: i64,
+    #[serde(default)]
+    pub category: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CategoryRule {
+    pub id: Option<i64>,
+    pub pattern: String,
+    pub category: String,
+    #[serde(default)]
+    pub priority: i64,
 }
 
 #[derive(Debug, Serialize)]

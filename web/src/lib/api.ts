@@ -11,6 +11,8 @@ import type {
   ConfigUpdateRequest,
   PaginatedResponse,
   ActivityEvent,
+  CategoryRule,
+  CategoriesResponse,
 } from './types';
 
 async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
@@ -90,4 +92,14 @@ export const api = {
 
   rebuildHourlySummary: () =>
     fetchJSON<{ status: string }>('/api/hourly-summary/rebuild', { method: 'POST' }),
+
+  categories: () =>
+    fetchJSON<CategoriesResponse>('/api/categories'),
+
+  putCategories: (rules: CategoryRule[]) =>
+    fetchJSON<{ status: string }>('/api/categories', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rules }),
+    }),
 };

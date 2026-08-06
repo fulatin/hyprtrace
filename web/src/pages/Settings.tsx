@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
-import { Wifi, WifiOff, Download, Save, Key, Globe, Cpu, BarChart3 } from 'lucide-react';
-import type { AiModelsResponse, ConfigResponse, Session } from '../lib/types';
+import { Wifi, WifiOff, Download, Save, Key, Globe, Cpu, BarChart3, Tags, Plus, Trash2 } from 'lucide-react';
+import type { AiModelsResponse, CategoryRule, ConfigResponse, Session } from '../lib/types';
 
 export default function Settings() {
   const [status, setStatus] = useState<'online' | 'offline' | 'checking'>('checking');
@@ -18,6 +18,11 @@ export default function Settings() {
   const [rebuilding, setRebuilding] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState('');
+
+  const [categoryRules, setCategoryRules] = useState<CategoryRule[]>([]);
+  const [categoryNames, setCategoryNames] = useState<string[]>([]);
+  const [savingCategories, setSavingCategories] = useState(false);
+  const [categoryMsg, setCategoryMsg] = useState('');
 
   useEffect(() => {
     api.health()
@@ -38,6 +43,13 @@ export default function Settings() {
         setOpenaiModel(c.openai_model);
         setOllamaUrl(c.ollama_url);
         setOllamaModel(c.ollama_model);
+      })
+      .catch(() => {});
+
+    api.categories()
+      .then((res) => {
+        setCategoryRules(res.rules);
+        setCategoryNames(res.categories);
       })
       .catch(() => {});
   }, []);
@@ -116,6 +128,28 @@ export default function Settings() {
   };
 
   const aiProviderNames = aiInfo ? Object.keys(aiInfo.providers) : [];
+
+  const handleSaveCategories = async () => {
+    setSavingCategories(true);
+    setCategoryMsg('');
+    try {
+      const clean = categoryRules
+        .filter((r) => r.pattern.trim() && r.category.trim())
+        .map((r) => ({ pattern: r.pattern.trim(), category: r.category.trim(), priority: r.priority ?? 0 }));
+      await api.putCategories(clean);
+      setCategoryMsg('Saved');
+      const fresh = await api.categories();
+      setCategoryRules(fresh.rules);
+    } catch (e) {
+      setCategoryMsg('Save failed: ' + (e instanceof Error ? e.message : 'Unknown error'));
+    } finally {
+      setSavingCategories(false);
+    }
+  };
+
+  const updateRule = (i: number, patch: Partial<CategoryRule>) => {
+    setCategoryRules((prev) => prev.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
+  };
 
   return (
     <div className="space-y-6 max-w-2xl">
@@ -305,6 +339,68 @@ export default function Settings() {
             <Download size={14} />
             {exporting ? 'Exporting...' : 'Export Sessions (CSV)'}
           </button>
+        </div>
+
+        <div className="border-t border-gray-800 pt-4">
+          <h3 className="text-sm font-medium text-gray-400 mb-3 flex items-center gap-2">
+            <Tags size={14} /> App Categories
+          </h3>
+          <p className="text-xs text-gray-500 mb-3">
+            Classify apps by window class pattern (<code>%</code> = any sequence, <code>_</code> = one char,
+            case-insensitive). Used for efficiency scoring, reports and AI analysis.
+          </p>
+          <div className="space-y-2">
+            {categoryRules.map((rule, i) => (
+              <div key={rule.id ?? `new-${i}`} className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={rule.pattern}
+                  onChange={(e) => updateRule(i, { pattern: e.target.value })}
+                  placeholder="e.g. minecraft%"
+                  className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-200 placeholder-gray-500 focus:ring-cyan-500 focus:border-cyan-500 font-mono"
+                />
+                <select
+                  value={rule.category}
+                  onChange={(e) => updateRule(i, { category: e.target.value })}
+                  className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-sm text-gray-200 focus:ring-cyan-500"
+                >
+                  {categoryNames.map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+                <button
+                  onClick={() => setCategoryRules((prev) => prev.filter((_, idx) => idx !== i))}
+                  className="p-1.5 rounded hover:bg-gray-700 text-gray-400 hover:text-red-400 transition-colors"
+                  title="Delete rule"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            ))}
+            <button
+              onClick={() =>
+                setCategoryRules((prev) => [...prev, { pattern: '', category: 'other', priority: 0 }])
+              }
+              className="flex items-center gap-1.5 text-xs text-cyan-400 hover:text-cyan-300 transition-colors"
+            >
+              <Plus size={12} /> Add rule
+            </button>
+          </div>
+          <div className="flex items-center gap-3 mt-3">
+            <button
+              onClick={handleSaveCategories}
+              disabled={savingCategories}
+              className="flex items-center gap-2 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white rounded-lg px-4 py-2 text-sm transition-colors"
+            >
+              <Save size={14} />
+              {savingCategories ? 'Saving...' : 'Save Categories'}
+            </button>
+            {categoryMsg && (
+              <span className={`text-xs ${categoryMsg === 'Saved' ? 'text-emerald-400' : 'text-red-400'}`}>
+                {categoryMsg}
+              </span>
+            )}
+          </div>
         </div>
       </div>
     </div>

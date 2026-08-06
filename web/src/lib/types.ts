@@ -15,6 +15,19 @@ export interface AppRank {
   session_count: number;
   focused_ms: number;
   focused_session_count: number;
+  category?: string;
+}
+
+export interface CategoryRule {
+  id?: number | null;
+  pattern: string;
+  category: string;
+  priority?: number;
+}
+
+export interface CategoriesResponse {
+  rules: CategoryRule[];
+  categories: string[];
 }
 
 export interface HourlyBucket {

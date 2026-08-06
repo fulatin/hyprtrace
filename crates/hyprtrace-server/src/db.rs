@@ -1,5 +1,6 @@
 use crate::models::{
-    ActivityEvent, AiMessage, AppRank, DailyTrend, HourlyBucket, Session, TodaySummary,
+    ActivityEvent, AiMessage, AppRank, CategoryRule, DailyTrend, HourlyBucket, Session,
+    TodaySummary,
 };
 use anyhow::Context;
 use chrono::Timelike;
@@ -26,6 +27,134 @@ impl Database {
             conn,
             focused_threshold_ms: (focused_threshold_seconds * 1000) as i64,
         })
+    }
+
+    /// Create the app_categories table (if missing) and seed default rules.
+    pub fn ensure_categories(&self) -> anyhow::Result<()> {
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS app_categories (
+                id       INTEGER PRIMARY KEY AUTOINCREMENT,
+                pattern  TEXT NOT NULL UNIQUE,
+                category TEXT NOT NULL,
+                priority INTEGER NOT NULL DEFAULT 0
+            );",
+        )?;
+
+        let defaults: &[(&str, &str)] = &[
+            ("code", "development"),
+            ("code-insiders", "development"),
+            ("codium", "development"),
+            ("kitty", "development"),
+            ("alacritty", "development"),
+            ("wezterm", "development"),
+            ("ghostty", "development"),
+            ("foot", "development"),
+            ("vim", "development"),
+            ("nvim", "development"),
+            ("emacs", "development"),
+            ("idea%", "development"),
+            ("pycharm%", "development"),
+            ("webstorm%", "development"),
+            ("goland%", "development"),
+            ("clion%", "development"),
+            ("firefox", "browsing"),
+            ("chromium", "browsing"),
+            ("google-chrome%", "browsing"),
+            ("microsoft-edge%", "browsing"),
+            ("brave-browser", "browsing"),
+            ("zen", "browsing"),
+            ("minecraft%", "gaming"),
+            ("steam%", "gaming"),
+            ("lutris", "gaming"),
+            ("heroic", "gaming"),
+            ("qq%", "social"),
+            ("wechat%", "social"),
+            ("telegram%", "social"),
+            ("discord", "social"),
+            ("mihomo%", "utility"),
+            ("kdesystemsettings", "system"),
+            ("systemsettings", "system"),
+            ("gnome-control-center", "system"),
+            ("dolphin", "system"),
+            ("nautilus", "system"),
+            ("vlc", "media"),
+            ("mpv", "media"),
+            ("kdenlive", "media"),
+            ("obs", "media"),
+            ("spotify", "media"),
+            ("zathura", "productivity"),
+            ("obsidian", "productivity"),
+            ("logseq", "productivity"),
+            ("thunderbird", "productivity"),
+            ("evolution", "productivity"),
+        ];
+        let mut stmt = self.conn.prepare(
+            "INSERT OR IGNORE INTO app_categories (pattern, category, priority) VALUES (?1, ?2, 0)",
+        )?;
+        for (pattern, category) in defaults {
+            stmt.execute(params![pattern, category])?;
+        }
+        Ok(())
+    }
+
+    /// All category rules, highest priority first.
+    pub fn categories(&self) -> anyhow::Result<Vec<CategoryRule>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, pattern, category, priority FROM app_categories
+             ORDER BY priority DESC, id ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(CategoryRule {
+                id: Some(row.get(0)?),
+                pattern: row.get(1)?,
+                category: row.get(2)?,
+                priority: row.get(3)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Replace all category rules with the given list.
+    pub fn set_categories(&self, rules: &[CategoryRule]) -> anyhow::Result<()> {
+        self.conn.execute("DELETE FROM app_categories", [])?;
+        let mut stmt = self.conn.prepare(
+            "INSERT INTO app_categories (pattern, category, priority) VALUES (?1, ?2, ?3)",
+        )?;
+        for r in rules {
+            stmt.execute(params![r.pattern.trim(), r.category.trim(), r.priority])?;
+        }
+        Ok(())
+    }
+
+    /// Classify an app class by matching rules (SQLite LIKE semantics, case-insensitive).
+    pub fn categorize(&self, class: &str) -> String {
+        let rules = match self.categories() {
+            Ok(r) => r,
+            Err(_) => return "other".to_string(),
+        };
+        for rule in rules {
+            if like_match(&rule.pattern, class) {
+                return rule.category;
+            }
+        }
+        "other".to_string()
+    }
+
+    pub fn known_categories() -> Vec<String> {
+        [
+            "development",
+            "browsing",
+            "gaming",
+            "social",
+            "media",
+            "productivity",
+            "utility",
+            "system",
+            "other",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
     }
 
     pub fn today_summary(&self, date: &str) -> anyhow::Result<TodaySummary> {
@@ -117,6 +246,7 @@ impl Database {
             } else {
                 0.0
             };
+            let category = self.categorize(&class);
             results.push(AppRank {
                 class,
                 total_ms,
@@ -124,6 +254,7 @@ impl Database {
                 session_count,
                 focused_ms,
                 focused_session_count,
+                category,
             });
         }
 
@@ -535,4 +666,33 @@ impl Database {
 
         Ok(())
     }
+}
+
+/// SQLite LIKE-style pattern match: `%` = any sequence, `_` = one char.
+/// Case-insensitive. Used for app-category rules.
+fn like_match(pattern: &str, text: &str) -> bool {
+    let p: Vec<char> = pattern.to_lowercase().chars().collect();
+    let t: Vec<char> = text.to_lowercase().chars().collect();
+    let (mut pi, mut ti) = (0usize, 0usize);
+    let (mut star, mut mark) = (usize::MAX, 0usize);
+    while ti < t.len() {
+        if pi < p.len() && (p[pi] == '?' || p[pi] == '_' || p[pi] == t[ti]) {
+            pi += 1;
+            ti += 1;
+        } else if pi < p.len() && p[pi] == '%' {
+            star = pi;
+            mark = ti;
+            pi += 1;
+        } else if star != usize::MAX {
+            pi = star + 1;
+            mark += 1;
+            ti = mark;
+        } else {
+            return false;
+        }
+    }
+    while pi < p.len() && p[pi] == '%' {
+        pi += 1;
+    }
+    pi == p.len()
 }

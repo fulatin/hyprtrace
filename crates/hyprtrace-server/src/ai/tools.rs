@@ -38,6 +38,11 @@ fn obj_params(props: Value, required: &[&str]) -> Value {
 /// All available tools: live Hyprland state queries + usage DB queries.
 pub fn all_tools() -> Vec<ToolDef> {
     vec![
+        ToolDef {
+            name: "get_app_categories",
+            description: "List the app categorization rules (pattern -> category) used to classify apps into development/browsing/gaming/etc.",
+            parameters: empty_params(),
+        },
         // ---- Hyprland live state (read-only) ----
         ToolDef {
             name: "active_window",
@@ -244,6 +249,10 @@ pub async fn execute_tool(
             let date = arg_str(args, "date").map(String::from).unwrap_or_else(today);
             let r = db.lock().await.hourly_breakdown(&date)?;
             Ok(serde_json::to_value(r)?)
+        }
+        "get_app_categories" => {
+            let rules = db.lock().await.categories()?;
+            Ok(serde_json::to_value(rules)?)
         }
         "get_app_trend" => {
             let class = arg_str(args, "class")
