@@ -20,6 +20,8 @@ pub struct DaemonConfig {
     pub idle_timeout_seconds: u64,
     #[serde(default = "default_focused_threshold")]
     pub focused_threshold_seconds: u64,
+    #[serde(default = "default_enable_input_monitor")]
+    pub enable_input_monitor: bool,
 }
 
 fn default_db_path() -> String {
@@ -34,12 +36,17 @@ fn default_focused_threshold() -> u64 {
     20 * 60
 }
 
+fn default_enable_input_monitor() -> bool {
+    true
+}
+
 impl Default for DaemonConfig {
     fn default() -> Self {
         Self {
             db_path: default_db_path(),
             idle_timeout_seconds: default_idle_timeout(),
             focused_threshold_seconds: default_focused_threshold(),
+            enable_input_monitor: default_enable_input_monitor(),
         }
     }
 }

@@ -1,6 +1,7 @@
 mod config;
 mod db;
 mod idle_monitor;
+mod input_monitor;
 mod listener;
 
 use anyhow::Context;
@@ -31,6 +32,10 @@ fn main() -> anyhow::Result<()> {
         cfg.daemon.idle_timeout_seconds,
         cfg.daemon.focused_threshold_seconds,
     );
+
+    if cfg.daemon.enable_input_monitor {
+        input_monitor::spawn_input_monitor(activity.clone());
+    }
 
     let (tx, rx) = std::sync::mpsc::channel();
     let db_shutdown = db.clone();

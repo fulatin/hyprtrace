@@ -7,6 +7,19 @@ command -v cargo >/dev/null 2>&1 || { echo "Error: Rust toolchain (cargo) is req
 command -v node >/dev/null 2>&1 || { echo "Error: Node.js is required"; exit 1; }
 command -v npm >/dev/null 2>&1 || { echo "Error: npm is required"; exit 1; }
 
+# Input activity monitoring reads /dev/input/event* (keyboard/mouse). It is
+# optional: without it the idle fallback only notices window switches.
+if ! id -nG | tr ' ' '\n' | grep -qx input; then
+    echo "Note: your user is not in the 'input' group. Keyboard/mouse activity"
+    echo "detection (accurate idle tracking without loginctl) will be disabled."
+    if [ "$(id -u)" = "0" ]; then
+        usermod -aG input "$SUDO_USER"
+        echo "Added $SUDO_USER to the input group (re-login required)."
+    else
+        echo "Run this to enable it: sudo usermod -aG input \$USER  (then re-login)"
+    fi
+fi
+
 echo "Building Rust components..."
 cargo build --release
 cp target/release/hyprtrace-daemon ~/.local/bin/
