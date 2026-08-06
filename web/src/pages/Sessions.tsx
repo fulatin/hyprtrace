@@ -82,12 +82,21 @@ export default function Sessions() {
                 <th className="text-left px-4 py-3 text-gray-400 font-medium">Title</th>
                 <th className="text-left px-4 py-3 text-gray-400 font-medium">Start</th>
                 <th className="text-left px-4 py-3 text-gray-400 font-medium">End</th>
+                <th className="text-left px-4 py-3 text-gray-400 font-medium">State</th>
                 <th className="text-right px-4 py-3 text-gray-400 font-medium">Duration</th>
+                <th className="text-right px-4 py-3 text-gray-400 font-medium">Focus</th>
               </tr>
             </thead>
             <tbody>
-              {data?.data.map((s) => (
-                <tr key={s.id} className="border-b border-gray-800/50 hover:bg-gray-800/50">
+              {data?.data.map((s) => {
+                const stateColors: Record<string, string> = {
+                  active: 'bg-blue-500/20 text-blue-300 border-blue-500/30',
+                  focused: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30',
+                  idle: 'bg-gray-500/20 text-gray-300 border-gray-500/30',
+                  away: 'bg-red-500/20 text-red-300 border-red-500/30',
+                };
+                return (
+                <tr key={s.id} className="border-b border-gray-800/50 hover:bg-gray-800/50 transition-colors">
                   <td className="px-4 py-2.5">
                     <span
                       className="inline-block w-2 h-2 rounded-full mr-2"
@@ -95,12 +104,20 @@ export default function Sessions() {
                     />
                     {s.class}
                   </td>
-                  <td className="px-4 py-2.5 text-gray-400 truncate max-w-[200px]">{s.title || '-'}</td>
+                  <td className="px-4 py-2.5 text-gray-400 truncate max-w-[160px]">{s.title || '-'}</td>
                   <td className="px-4 py-2.5 text-gray-400">{formatTime(s.started_at)}</td>
                   <td className="px-4 py-2.5 text-gray-400">{s.ended_at ? formatTime(s.ended_at) : 'Active'}</td>
+                  <td className="px-4 py-2.5">
+                    {s.activity_state && (
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs border ${stateColors[s.activity_state] || 'bg-gray-500/20 text-gray-300'}`}>
+                        {s.activity_state}
+                      </span>
+                    )}
+                  </td>
                   <td className="px-4 py-2.5 text-right text-cyan-400">{formatDuration(s.duration_ms)}</td>
+                  <td className="px-4 py-2.5 text-right text-gray-400 text-xs">{formatDuration(s.focused_ms)}</td>
                 </tr>
-              ))}
+              )})}
             </tbody>
           </table>
 

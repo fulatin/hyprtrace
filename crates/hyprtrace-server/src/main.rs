@@ -14,7 +14,7 @@ async fn main() -> anyhow::Result<()> {
 
     let cfg = config::Config::load()?;
     let db_path = cfg.db_path_expanded();
-    let db = db::Database::open(&db_path)?;
+    let db = db::Database::open(&db_path, cfg.daemon.focused_threshold_seconds)?;
     let ai = ai::AiManager::from_config(&cfg.ai);
 
     let state = Arc::new(routes::AppState {
@@ -28,8 +28,19 @@ async fn main() -> anyhow::Result<()> {
         std::path::PathBuf::from(home).join(".local/share/hyprtrace/web")
     };
 
-    let router = routes::create_router(state)
-        .fallback_service(tower_http::services::ServeDir::new(&web_dir))
+    // SPA fallback: unknown non-API paths serve index.html (with a 200 status)
+    // so client-side routes (/apps, /timeline, ...) survive a page refresh.
+    // Note: use `.fallback()`, NOT `.not_found_service()` — the latter forces
+    // a 404 status which breaks client-side routing.
+    // API routes are nested under /api, so unmatched /api/* still returns a
+    // proper 404 instead of HTML.
+    let index_file = web_dir.join("index.html");
+    let static_service = tower_http::services::ServeDir::new(&web_dir)
+        .fallback(tower_http::services::ServeFile::new(&index_file));
+
+    let router = axum::Router::new()
+        .nest("/api", routes::create_router(state))
+        .fallback_service(static_service)
         .layer(tower_http::cors::CorsLayer::permissive());
 
     let addr = format!("{}:{}", cfg.server.host, cfg.server.port);

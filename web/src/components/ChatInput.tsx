@@ -9,6 +9,8 @@ interface ChatInputProps {
   selectedProvider: string;
   onProviderChange: (provider: string) => void;
   providers: Record<string, string[]>;
+  selectedModel: string;
+  onModelChange: (model: string) => void;
 }
 
 export default function ChatInput({
@@ -19,8 +21,12 @@ export default function ChatInput({
   selectedProvider,
   onProviderChange,
   providers,
+  selectedModel,
+  onModelChange,
 }: ChatInputProps) {
   const [message, setMessage] = useState('');
+
+  const models = providers[selectedProvider] ?? [];
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -32,7 +38,7 @@ export default function ChatInput({
 
   return (
     <form onSubmit={handleSubmit} className="border-t border-gray-800 p-4">
-      <div className="flex items-center gap-3 mb-2">
+      <div className="flex items-center gap-3 mb-2 flex-wrap">
         <label className="flex items-center gap-2 text-xs text-gray-400 cursor-pointer">
           <input
             type="checkbox"
@@ -54,6 +60,21 @@ export default function ChatInput({
             </option>
           ))}
         </select>
+
+        {models.length > 0 && (
+          <select
+            value={selectedModel}
+            onChange={(e) => onModelChange(e.target.value)}
+            className="text-xs bg-gray-800 border border-gray-700 rounded px-2 py-1 text-gray-300 focus:ring-cyan-500 focus:border-cyan-500 max-w-[220px]"
+            title="Model"
+          >
+            {models.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </select>
+        )}
       </div>
 
       <div className="flex gap-2">
@@ -61,7 +82,7 @@ export default function ChatInput({
           type="text"
           value={message}
           onChange={(e) => setMessage(e.target.value)}
-          placeholder="Ask about your usage data..."
+          placeholder="Ask about your usage data or live system state..."
           disabled={disabled}
           className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-sm text-gray-200 placeholder-gray-500 focus:ring-cyan-500 focus:border-cyan-500 disabled:opacity-50"
         />

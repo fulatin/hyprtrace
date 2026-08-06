@@ -1,5 +1,6 @@
 mod config;
 mod db;
+mod idle_monitor;
 mod listener;
 
 use anyhow::Context;
@@ -16,29 +17,64 @@ fn main() -> anyhow::Result<()> {
     cfg.ensure_db_dir().context("Failed to create database directory")?;
 
     let db_path = cfg.db_path_expanded();
-    let db = db::Database::open(&db_path).context("Failed to open database")?;
+    let db = db::Database::open(&db_path, cfg.daemon.focused_threshold_seconds).context("Failed to open database")?;
     db.migrate().context("Database migration failed")?;
     log::info!("Database ready: {:?}", db_path);
 
     let db = Arc::new(Mutex::new(db));
 
+    let activity = idle_monitor::ActivityState::new();
+
+    idle_monitor::spawn_idle_monitor(
+        db.clone(),
+        activity.clone(),
+        cfg.daemon.idle_timeout_seconds,
+        cfg.daemon.focused_threshold_seconds,
+    );
+
     let (tx, rx) = std::sync::mpsc::channel();
     let db_shutdown = db.clone();
     ctrlc::set_handler(move || {
         log::info!("Received termination signal, shutting down gracefully...");
-        if let Ok(guard) = db_shutdown.lock() {
-            if let Some(id) = guard.current_session_id().ok().flatten() {
-                if let Err(e) = guard.end_session(id) {
-                    log::error!("Failed to end active session {}: {}", id, e);
-                } else {
-                    log::info!("Ended active session {} on shutdown", id);
+
+        // Retry the DB lock briefly instead of silently skipping on contention
+        // (e.g. the idle monitor mid-tick). This is best-effort: during a fast
+        // system reboot the signal may never be delivered, so orphaned sessions
+        // are also finalized at the next daemon start.
+        let mut guard = None;
+        for _ in 0..20 {
+            match db_shutdown.try_lock() {
+                Ok(g) => {
+                    guard = Some(g);
+                    break;
+                }
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                Err(std::sync::TryLockError::Poisoned(e)) => {
+                    log::error!("DB mutex poisoned on shutdown, recovering: {}", e);
+                    guard = Some(e.into_inner());
+                    break;
                 }
             }
         }
+        if let Some(guard) = guard {
+            match guard.current_session_id() {
+                Ok(Some(id)) => match guard.end_session(id) {
+                    Ok(()) => log::info!("Ended active session {} on shutdown", id),
+                    Err(e) => log::error!("Failed to end active session {}: {}", id, e),
+                },
+                Ok(None) => {}
+                Err(e) => log::error!("Failed to query current session on shutdown: {}", e),
+            }
+        } else {
+            log::error!("Could not acquire DB lock on shutdown; session may linger");
+        }
+
         tx.send(()).ok();
     })?;
 
-    let mut tracker = listener::WindowTracker::new(db, cfg);
+    let mut tracker = listener::WindowTracker::new(db, cfg, activity);
     std::thread::spawn(move || {
         if let Err(e) = tracker.run() {
             log::error!("Window tracker exited with error: {}", e);

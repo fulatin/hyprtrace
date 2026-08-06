@@ -16,21 +16,34 @@ pub struct AppState {
 
 pub fn create_router(state: Arc<AppState>) -> Router {
     Router::new()
-        .route("/api/health", axum::routing::get(data::health))
-        .route("/api/summary", axum::routing::get(data::summary))
-        .route("/api/apps", axum::routing::get(data::app_ranking))
-        .route("/api/timeline", axum::routing::get(data::timeline))
-        .route("/api/sessions", axum::routing::get(data::sessions))
-        .route("/api/app/:class/trend", axum::routing::get(data::app_trend))
-        .route("/api/apps/classes", axum::routing::get(data::app_classes))
-        .route("/api/summary/rebuild", axum::routing::post(data::rebuild_summary))
-        .route("/api/ai/models", axum::routing::get(ai::ai_models))
-        .route("/api/ai/chat", axum::routing::post(ai::ai_chat))
-        .route("/api/ai/chat/stream", axum::routing::post(ai::chat_stream))
-        .route("/api/ai/chat/stream/text", axum::routing::post(ai::chat_stream_text))
-        .route("/api/ai/conversations", axum::routing::get(ai::ai_conversations))
-        .route("/api/ai/conversations", axum::routing::delete(ai::clear_conversations))
-        .route("/api/config", axum::routing::get(config::get_config))
-        .route("/api/config", axum::routing::put(config::update_config))
+        .route("/health", axum::routing::get(data::health))
+        .route("/summary", axum::routing::get(data::summary))
+        .route("/apps", axum::routing::get(data::app_ranking))
+        .route("/timeline", axum::routing::get(data::timeline))
+        .route("/sessions", axum::routing::get(data::sessions))
+        .route("/app/:class/trend", axum::routing::get(data::app_trend))
+        .route("/apps/classes", axum::routing::get(data::app_classes))
+        .route("/summary/rebuild", axum::routing::post(data::rebuild_summary))
+        .route("/hourly-summary/rebuild", axum::routing::post(data::rebuild_hourly_summary))
+        .route("/activity/events", axum::routing::get(data::activity_events))
+        .route("/ai/models", axum::routing::get(ai::ai_models))
+        .route("/ai/tools", axum::routing::get(ai::ai_tools))
+        .route("/ai/chat", axum::routing::post(ai::ai_chat))
+        .route("/ai/chat/stream", axum::routing::post(ai::chat_stream))
+        .route("/ai/chat/stream/text", axum::routing::post(ai::chat_stream_text))
+        .route("/ai/chat/agent", axum::routing::post(ai::chat_agent))
+        .route("/ai/conversations", axum::routing::get(ai::ai_conversations))
+        .route("/ai/conversations", axum::routing::delete(ai::clear_conversations))
+        .route("/config", axum::routing::get(config::get_config))
+        .route("/config", axum::routing::put(config::update_config))
+        // Explicit 404 for unmatched /api/* paths. Without this, axum's nest
+        // falls through to the outer SPA fallback and would serve index.html
+        // (with a 200) for unknown API paths.
+        .fallback(|| async {
+            (
+                axum::http::StatusCode::NOT_FOUND,
+                axum::Json(serde_json::json!({"error": "Not found"})),
+            )
+        })
         .with_state(state)
 }

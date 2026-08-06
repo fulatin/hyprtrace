@@ -1,0 +1,436 @@
+{
+  "rootHash": "d29b765a017b38ee4f5ae59f00d2cf7817596ce2490a002ba1dc8cd40665f415",
+  "timestamp": 1784086623139,
+  "fileCount": 24,
+  "files": [
+    {
+      "path": "web\\postcss.config.js",
+      "hash": "a70aea7bd2e8a8f5b58ec0f345a2ec200a8607e3623b3a45571c2b7cd76b1269",
+      "size": 84,
+      "modified": 1783828897787.0508
+    },
+    {
+      "path": "web\\tailwind.config.js",
+      "hash": "ba4eeebef8b793273b4738ad0beac4e0dc741ad9c2fc781aeda645c90e47e223",
+      "size": 433,
+      "modified": 1784000017129.3455
+    },
+    {
+      "path": "web\\vite.config.ts",
+      "hash": "fc6f585e7590764616c74a06cbf77b448259f273e3d27d12798e9fdfd0919dec",
+      "size": 215,
+      "modified": 1783828897786.0508
+    },
+    {
+      "path": "web\\src\\App.tsx",
+      "hash": "eab965f766c8ef5070b866d26f8394588ba4402dad4efdc760dcdf4d6eb1bd98",
+      "size": 1004,
+      "modified": 1783830001816.0488
+    },
+    {
+      "path": "web\\src\\main.tsx",
+      "hash": "86b65bfad3da721cd3b4a3823c780f3b9d627af29716d599ddd4452d3033a590",
+      "size": 240,
+      "modified": 1783828897788.0508
+    },
+    {
+      "path": "web\\src\\pages\\AIChat.tsx",
+      "hash": "9746fe0f0e864a17dace49db99abc4bac9516dc20ef5b280670ff3b82fb2d479",
+      "size": 6832,
+      "modified": 1784007503355.058
+    },
+    {
+      "path": "web\\src\\pages\\Apps.tsx",
+      "hash": "b43f9509c8c5c6915305540de874474d3f6aff4761a88c5a016909e24550401e",
+      "size": 4085,
+      "modified": 1784085981932.6055
+    },
+    {
+      "path": "web\\src\\pages\\Dashboard.tsx",
+      "hash": "0509937c62d74d2cbfbf773e14c853f0c2fdb6b7e66b0d892da5483ef7f7277b",
+      "size": 2721,
+      "modified": 1783828897824.4106
+    },
+    {
+      "path": "web\\src\\pages\\Sessions.tsx",
+      "hash": "0ff37dd8e03ef37782ee260f7cdec04a1776111b9a6cc1d4e11a8256fa12eb8c",
+      "size": 5173,
+      "modified": 1784086533653.9744
+    },
+    {
+      "path": "web\\src\\pages\\Settings.tsx",
+      "hash": "2178f46a4edde34fed1218f174eeda08199cbe39af665c2ae5291a6576423676",
+      "size": 10957,
+      "modified": 1783834697614.3757
+    },
+    {
+      "path": "web\\src\\pages\\Timeline.tsx",
+      "hash": "ca3e64545d0ddaec5eaef06aa0f843c3c06ac7adf680c66fd92ca74daf6af403",
+      "size": 1247,
+      "modified": 1783828897832.6677
+    },
+    {
+      "path": "web\\src\\lib\\api.ts",
+      "hash": "5bf29417df128c50ebb51e28a60a97f65288bda5fa9d07eaa72586d96211d308",
+      "size": 2697,
+      "modified": 1784086526021.0366
+    },
+    {
+      "path": "web\\src\\lib\\types.ts",
+      "hash": "d72558ca4b33ec6a660ef81f1846de7047fc35ada1a567420e8d682bd8d34ab9",
+      "size": 1648,
+      "modified": 1783834662034.659
+    },
+    {
+      "path": "web\\src\\components\\AppRankingBar.tsx",
+      "hash": "edb4865580cad0f6a8dc36fafaa1400f1a9f886b3e28db66d0fe0c8475e48a42",
+      "size": 2264,
+      "modified": 1783831604864.052
+    },
+    {
+      "path": "web\\src\\components\\AppTrendChart.tsx",
+      "hash": "6440fc039413ee1b60092fc404f0885c3402f086593d23fd3bc67ba991fab037",
+      "size": 2484,
+      "modified": 1784085998776.4587
+    },
+    {
+      "path": "web\\src\\components\\AppUsagePie.tsx",
+      "hash": "848d4af8a68d46ac7f620e91fe0b0044003b29e7e28780be8ed05287721b1e60",
+      "size": 2048,
+      "modified": 1783831587517.18
+    },
+    {
+      "path": "web\\src\\components\\ChatInput.tsx",
+      "hash": "8331a5dc9ea0e2fdf039640297d6327a5bcb8544efca5a1e71a8a25889aab638",
+      "size": 2487,
+      "modified": 1783831079423.0552
+    },
+    {
+      "path": "web\\src\\components\\ErrorBoundary.tsx",
+      "hash": "086e70352e5b6d6bf73053bf10559f6f0f104f8ebd00722b6f7c7ee99bef0505",
+      "size": 1606,
+      "modified": 1783829994448.1
+    },
+    {
+      "path": "web\\src\\components\\HourlyHeatmap.tsx",
+      "hash": "50288eb3d8d2d4749a7916414bb828907ed6288c1e0157dcd1f2ba497655f050",
+      "size": 1933,
+      "modified": 1783831598525.0986
+    },
+    {
+      "path": "web\\src\\components\\Layout.tsx",
+      "hash": "b28d7c00fd6fe8d7338450545def0c5df7363877d284e255bc588be7514181e9",
+      "size": 1855,
+      "modified": 1783831069964.1306
+    },
+    {
+      "path": "web\\src\\components\\StatCard.tsx",
+      "hash": "ab996bbe116b54e4a76d1fb2c8bd34c91679237955299837fdb1ac4114d8e112",
+      "size": 637,
+      "modified": 1783831112216.7952
+    },
+    {
+      "path": "web\\src\\components\\TimelineChart.tsx",
+      "hash": "1ce8bbf467750952c6a8126fa75d47ec58c281ab7250f3e972d75570e3887764",
+      "size": 2108,
+      "modified": 1783831593571.1353
+    },
+    {
+      "path": "scripts\\install.sh",
+      "hash": "392614f73a98cb4db0ba54a5695cd1a0975a3a6b216d07f25e8113ba860d1343",
+      "size": 1154,
+      "modified": 1783828897879.5657
+    },
+    {
+      "path": "scripts\\uninstall.sh",
+      "hash": "3eb7e420091b0c19d21fc2090625356ee6b73ec33f9ec5ee4879e2470a768913",
+      "size": 1797,
+      "modified": 1783834584682.275
+    }
+  ],
+  "tree": {
+    "hash": "d29b765a017b38ee4f5ae59f00d2cf7817596ce2490a002ba1dc8cd40665f415",
+    "left": {
+      "hash": "71e2db4b086dd3a70630e7db43eab5c9562a8567173c92817051cf4ad9bcbd97",
+      "left": {
+        "hash": "d63b0a958ffb9f980479d50053b103164d8beb6a51a94270a750877182b3b24f",
+        "left": {
+          "hash": "866066c20141b1b927186b22285f338c1926f6a194b6a8c42fd96e1f8a3eb2dd",
+          "left": {
+            "hash": "e9de258b327c0398f07d74bc64cbed8f17c794ddd0d21a5b60569f92bbc35f90",
+            "left": {
+              "hash": "392614f73a98cb4db0ba54a5695cd1a0975a3a6b216d07f25e8113ba860d1343",
+              "file": {
+                "path": "scripts\\install.sh",
+                "hash": "392614f73a98cb4db0ba54a5695cd1a0975a3a6b216d07f25e8113ba860d1343",
+                "size": 1154,
+                "modified": 1783828897879.5657
+              }
+            },
+            "right": {
+              "hash": "3eb7e420091b0c19d21fc2090625356ee6b73ec33f9ec5ee4879e2470a768913",
+              "file": {
+                "path": "scripts\\uninstall.sh",
+                "hash": "3eb7e420091b0c19d21fc2090625356ee6b73ec33f9ec5ee4879e2470a768913",
+                "size": 1797,
+                "modified": 1783834584682.275
+              }
+            }
+          },
+          "right": {
+            "hash": "fd19e1a9e5d6bb3972f7b02d2a8b62371881632930f5cacc8324654f003fac26",
+            "left": {
+              "hash": "a70aea7bd2e8a8f5b58ec0f345a2ec200a8607e3623b3a45571c2b7cd76b1269",
+              "file": {
+                "path": "web\\postcss.config.js",
+                "hash": "a70aea7bd2e8a8f5b58ec0f345a2ec200a8607e3623b3a45571c2b7cd76b1269",
+                "size": 84,
+                "modified": 1783828897787.0508
+              }
+            },
+            "right": {
+              "hash": "eab965f766c8ef5070b866d26f8394588ba4402dad4efdc760dcdf4d6eb1bd98",
+              "file": {
+                "path": "web\\src\\App.tsx",
+                "hash": "eab965f766c8ef5070b866d26f8394588ba4402dad4efdc760dcdf4d6eb1bd98",
+                "size": 1004,
+                "modified": 1783830001816.0488
+              }
+            }
+          }
+        },
+        "right": {
+          "hash": "ab807d260cb0e897ee88cb8ea12e0d27b42dbae2962df69a57432d0974d3c371",
+          "left": {
+            "hash": "6aefcfa419498a6122e22ed03a6509605d5a5f605b28eff04852d962da823983",
+            "left": {
+              "hash": "edb4865580cad0f6a8dc36fafaa1400f1a9f886b3e28db66d0fe0c8475e48a42",
+              "file": {
+                "path": "web\\src\\components\\AppRankingBar.tsx",
+                "hash": "edb4865580cad0f6a8dc36fafaa1400f1a9f886b3e28db66d0fe0c8475e48a42",
+                "size": 2264,
+                "modified": 1783831604864.052
+              }
+            },
+            "right": {
+              "hash": "6440fc039413ee1b60092fc404f0885c3402f086593d23fd3bc67ba991fab037",
+              "file": {
+                "path": "web\\src\\components\\AppTrendChart.tsx",
+                "hash": "6440fc039413ee1b60092fc404f0885c3402f086593d23fd3bc67ba991fab037",
+                "size": 2484,
+                "modified": 1784085998776.4587
+              }
+            }
+          },
+          "right": {
+            "hash": "c79477f2f4ad5b7cc99110e81bb93220ab6d51ac3168062b87fbf1e117b0c519",
+            "left": {
+              "hash": "848d4af8a68d46ac7f620e91fe0b0044003b29e7e28780be8ed05287721b1e60",
+              "file": {
+                "path": "web\\src\\components\\AppUsagePie.tsx",
+                "hash": "848d4af8a68d46ac7f620e91fe0b0044003b29e7e28780be8ed05287721b1e60",
+                "size": 2048,
+                "modified": 1783831587517.18
+              }
+            },
+            "right": {
+              "hash": "8331a5dc9ea0e2fdf039640297d6327a5bcb8544efca5a1e71a8a25889aab638",
+              "file": {
+                "path": "web\\src\\components\\ChatInput.tsx",
+                "hash": "8331a5dc9ea0e2fdf039640297d6327a5bcb8544efca5a1e71a8a25889aab638",
+                "size": 2487,
+                "modified": 1783831079423.0552
+              }
+            }
+          }
+        }
+      },
+      "right": {
+        "hash": "ba2fc26b775b671be5f4188f22c897168ca27077e4179826943476232d085322",
+        "left": {
+          "hash": "975d48e05f45c5f28bf0731ae50ba0088ec05ec316fc262c120bc25842c2c7b1",
+          "left": {
+            "hash": "40bcb85cc8b7db7facd821aeb26e620656df698c5ef40a9495c27a9e70877a5a",
+            "left": {
+              "hash": "086e70352e5b6d6bf73053bf10559f6f0f104f8ebd00722b6f7c7ee99bef0505",
+              "file": {
+                "path": "web\\src\\components\\ErrorBoundary.tsx",
+                "hash": "086e70352e5b6d6bf73053bf10559f6f0f104f8ebd00722b6f7c7ee99bef0505",
+                "size": 1606,
+                "modified": 1783829994448.1
+              }
+            },
+            "right": {
+              "hash": "50288eb3d8d2d4749a7916414bb828907ed6288c1e0157dcd1f2ba497655f050",
+              "file": {
+                "path": "web\\src\\components\\HourlyHeatmap.tsx",
+                "hash": "50288eb3d8d2d4749a7916414bb828907ed6288c1e0157dcd1f2ba497655f050",
+                "size": 1933,
+                "modified": 1783831598525.0986
+              }
+            }
+          },
+          "right": {
+            "hash": "4c9f8542b684637828cfad9e55cef2a9b91c1fdea40a4973705fc2823a407334",
+            "left": {
+              "hash": "b28d7c00fd6fe8d7338450545def0c5df7363877d284e255bc588be7514181e9",
+              "file": {
+                "path": "web\\src\\components\\Layout.tsx",
+                "hash": "b28d7c00fd6fe8d7338450545def0c5df7363877d284e255bc588be7514181e9",
+                "size": 1855,
+                "modified": 1783831069964.1306
+              }
+            },
+            "right": {
+              "hash": "ab996bbe116b54e4a76d1fb2c8bd34c91679237955299837fdb1ac4114d8e112",
+              "file": {
+                "path": "web\\src\\components\\StatCard.tsx",
+                "hash": "ab996bbe116b54e4a76d1fb2c8bd34c91679237955299837fdb1ac4114d8e112",
+                "size": 637,
+                "modified": 1783831112216.7952
+              }
+            }
+          }
+        },
+        "right": {
+          "hash": "e88f4a04279e326ef96877940ab046dc11bcece112803368ca176761c0b40761",
+          "left": {
+            "hash": "5d72edbcdfb9d9f32f677e0c8b54a60b55fffd81e57c68635cb6e51ecedcac7f",
+            "left": {
+              "hash": "1ce8bbf467750952c6a8126fa75d47ec58c281ab7250f3e972d75570e3887764",
+              "file": {
+                "path": "web\\src\\components\\TimelineChart.tsx",
+                "hash": "1ce8bbf467750952c6a8126fa75d47ec58c281ab7250f3e972d75570e3887764",
+                "size": 2108,
+                "modified": 1783831593571.1353
+              }
+            },
+            "right": {
+              "hash": "5bf29417df128c50ebb51e28a60a97f65288bda5fa9d07eaa72586d96211d308",
+              "file": {
+                "path": "web\\src\\lib\\api.ts",
+                "hash": "5bf29417df128c50ebb51e28a60a97f65288bda5fa9d07eaa72586d96211d308",
+                "size": 2697,
+                "modified": 1784086526021.0366
+              }
+            }
+          },
+          "right": {
+            "hash": "122cc7adff451a858824cf9962bdce1699dca949ef646b85453344a1bac2fb0f",
+            "left": {
+              "hash": "d72558ca4b33ec6a660ef81f1846de7047fc35ada1a567420e8d682bd8d34ab9",
+              "file": {
+                "path": "web\\src\\lib\\types.ts",
+                "hash": "d72558ca4b33ec6a660ef81f1846de7047fc35ada1a567420e8d682bd8d34ab9",
+                "size": 1648,
+                "modified": 1783834662034.659
+              }
+            },
+            "right": {
+              "hash": "86b65bfad3da721cd3b4a3823c780f3b9d627af29716d599ddd4452d3033a590",
+              "file": {
+                "path": "web\\src\\main.tsx",
+                "hash": "86b65bfad3da721cd3b4a3823c780f3b9d627af29716d599ddd4452d3033a590",
+                "size": 240,
+                "modified": 1783828897788.0508
+              }
+            }
+          }
+        }
+      }
+    },
+    "right": {
+      "hash": "bb2163055d47bdc70c7c10a3b256caa45b172b61a4a396f90d8da994b54ed946",
+      "left": {
+        "hash": "e4d64479446ff0412791ccc2016e0fd6b1670cbc9287200c425e50ae41cfef1f",
+        "left": {
+          "hash": "9ac5c613ab17838d077a2e48b8b8af3e07e59916f032ec0e633fe3c10a731c1f",
+          "left": {
+            "hash": "9746fe0f0e864a17dace49db99abc4bac9516dc20ef5b280670ff3b82fb2d479",
+            "file": {
+              "path": "web\\src\\pages\\AIChat.tsx",
+              "hash": "9746fe0f0e864a17dace49db99abc4bac9516dc20ef5b280670ff3b82fb2d479",
+              "size": 6832,
+              "modified": 1784007503355.058
+            }
+          },
+          "right": {
+            "hash": "b43f9509c8c5c6915305540de874474d3f6aff4761a88c5a016909e24550401e",
+            "file": {
+              "path": "web\\src\\pages\\Apps.tsx",
+              "hash": "b43f9509c8c5c6915305540de874474d3f6aff4761a88c5a016909e24550401e",
+              "size": 4085,
+              "modified": 1784085981932.6055
+            }
+          }
+        },
+        "right": {
+          "hash": "ba1869c6e5a023492c1ecf1f0355ee936d1388344ec7ac5081ed91c0d6343f2b",
+          "left": {
+            "hash": "0509937c62d74d2cbfbf773e14c853f0c2fdb6b7e66b0d892da5483ef7f7277b",
+            "file": {
+              "path": "web\\src\\pages\\Dashboard.tsx",
+              "hash": "0509937c62d74d2cbfbf773e14c853f0c2fdb6b7e66b0d892da5483ef7f7277b",
+              "size": 2721,
+              "modified": 1783828897824.4106
+            }
+          },
+          "right": {
+            "hash": "0ff37dd8e03ef37782ee260f7cdec04a1776111b9a6cc1d4e11a8256fa12eb8c",
+            "file": {
+              "path": "web\\src\\pages\\Sessions.tsx",
+              "hash": "0ff37dd8e03ef37782ee260f7cdec04a1776111b9a6cc1d4e11a8256fa12eb8c",
+              "size": 5173,
+              "modified": 1784086533653.9744
+            }
+          }
+        }
+      },
+      "right": {
+        "hash": "761dce14d81afbdc617419cca7d44e9ac202bb4788062ad7089bbde8f63ff3de",
+        "left": {
+          "hash": "6d043798547d87da4b7ea8440deba4acaefd5fe4018ade11204e0883fc2e43a5",
+          "left": {
+            "hash": "2178f46a4edde34fed1218f174eeda08199cbe39af665c2ae5291a6576423676",
+            "file": {
+              "path": "web\\src\\pages\\Settings.tsx",
+              "hash": "2178f46a4edde34fed1218f174eeda08199cbe39af665c2ae5291a6576423676",
+              "size": 10957,
+              "modified": 1783834697614.3757
+            }
+          },
+          "right": {
+            "hash": "ca3e64545d0ddaec5eaef06aa0f843c3c06ac7adf680c66fd92ca74daf6af403",
+            "file": {
+              "path": "web\\src\\pages\\Timeline.tsx",
+              "hash": "ca3e64545d0ddaec5eaef06aa0f843c3c06ac7adf680c66fd92ca74daf6af403",
+              "size": 1247,
+              "modified": 1783828897832.6677
+            }
+          }
+        },
+        "right": {
+          "hash": "dd20904373922a763a1931fb4bde40538d9a02b7bdf4e901a78924f396186813",
+          "left": {
+            "hash": "ba4eeebef8b793273b4738ad0beac4e0dc741ad9c2fc781aeda645c90e47e223",
+            "file": {
+              "path": "web\\tailwind.config.js",
+              "hash": "ba4eeebef8b793273b4738ad0beac4e0dc741ad9c2fc781aeda645c90e47e223",
+              "size": 433,
+              "modified": 1784000017129.3455
+            }
+          },
+          "right": {
+            "hash": "fc6f585e7590764616c74a06cbf77b448259f273e3d27d12798e9fdfd0919dec",
+            "file": {
+              "path": "web\\vite.config.ts",
+              "hash": "fc6f585e7590764616c74a06cbf77b448259f273e3d27d12798e9fdfd0919dec",
+              "size": 215,
+              "modified": 1783828897786.0508
+            }
+          }
+        }
+      }
+    }
+  }
+}

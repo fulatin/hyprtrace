@@ -1,4 +1,4 @@
-use super::{AiProvider, ChatMessage};
+use super::{AiProvider, ChatMessage, StreamEvent, ToolCall, ToolDef};
 use async_trait::async_trait;
 
 pub struct OpenAiProvider {
@@ -11,7 +11,7 @@ pub struct OpenAiProvider {
 impl OpenAiProvider {
     pub fn new(api_key: String, base_url: String, default_model: String) -> Self {
         let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(120))
+            .timeout(std::time::Duration::from_secs(300))
             .build()
             .unwrap_or_default();
         Self {
@@ -29,14 +29,14 @@ impl AiProvider for OpenAiProvider {
         "openai"
     }
 
-    async fn chat(&self, messages: &[ChatMessage]) -> anyhow::Result<String> {
+    async fn chat(&self, model: Option<&str>, messages: &[ChatMessage]) -> anyhow::Result<String> {
         if self.api_key.is_empty() {
             anyhow::bail!("OpenAI API key not configured");
         }
 
         let url = format!("{}/chat/completions", self.base_url);
         let body = serde_json::json!({
-            "model": self.default_model,
+            "model": model.unwrap_or(&self.default_model),
             "messages": messages,
         });
 
@@ -63,19 +63,50 @@ impl AiProvider for OpenAiProvider {
 
     async fn chat_stream(
         &self,
+        model: Option<&str>,
         messages: &[ChatMessage],
         tx: tokio::sync::mpsc::Sender<String>,
+    ) -> anyhow::Result<()> {
+        let (ev_tx, mut ev_rx) = tokio::sync::mpsc::channel::<StreamEvent>(64);
+        let fwd = tokio::spawn(async move {
+            while let Some(ev) = ev_rx.recv().await {
+                if let StreamEvent::Text(t) = ev {
+                    if tx.send(t).await.is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        self.chat_stream_events(model, messages, None, ev_tx)
+            .await?;
+        let _ = fwd.await;
+        Ok(())
+    }
+
+    async fn chat_stream_events(
+        &self,
+        model: Option<&str>,
+        messages: &[ChatMessage],
+        tools: Option<&[ToolDef]>,
+        tx: tokio::sync::mpsc::Sender<StreamEvent>,
     ) -> anyhow::Result<()> {
         if self.api_key.is_empty() {
             anyhow::bail!("OpenAI API key not configured");
         }
 
         let url = format!("{}/chat/completions", self.base_url);
-        let body = serde_json::json!({
-            "model": self.default_model,
+        let mut body = serde_json::json!({
+            "model": model.unwrap_or(&self.default_model),
             "messages": messages,
             "stream": true,
         });
+        if let Some(tools) = tools {
+            if !tools.is_empty() {
+                body["tools"] =
+                    serde_json::Value::Array(tools.iter().map(|t| t.to_api_json()).collect());
+                body["tool_choice"] = serde_json::json!("auto");
+            }
+        }
 
         let resp = self
             .client
@@ -94,9 +125,20 @@ impl AiProvider for OpenAiProvider {
         let mut stream = resp.bytes_stream();
         use futures::StreamExt;
         let mut buf: Vec<u8> = Vec::new();
+        // index -> (id, name, arguments buffer)
+        let mut pending: std::collections::BTreeMap<usize, (String, String, String)> =
+            std::collections::BTreeMap::new();
 
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk?;
+        let mut result: anyhow::Result<()> = Ok(());
+
+        'outer: while let Some(chunk) = stream.next().await {
+            let chunk = match chunk {
+                Ok(c) => c,
+                Err(e) => {
+                    result = Err(e.into());
+                    break;
+                }
+            };
             buf.extend_from_slice(&chunk);
 
             while let Some(line_end) = buf.iter().position(|&b| b == b'\n') {
@@ -112,13 +154,37 @@ impl AiProvider for OpenAiProvider {
 
                 let data = line[6..].trim().to_string();
                 if data == "[DONE]" {
-                    return Ok(());
+                    break 'outer;
                 }
 
                 if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data) {
-                    if let Some(content) = json["choices"][0]["delta"]["content"].as_str() {
+                    let delta = &json["choices"][0]["delta"];
+
+                    // Accumulate streamed tool_call fragments by index.
+                    if let Some(calls) = delta["tool_calls"].as_array() {
+                        for call in calls {
+                            let idx = call["index"].as_u64().unwrap_or(0) as usize;
+                            let entry =
+                                pending.entry(idx).or_insert_with(|| (String::new(), String::new(), String::new()));
+                            if let Some(id) = call["id"].as_str() {
+                                if !id.is_empty() {
+                                    entry.0 = id.to_string();
+                                }
+                            }
+                            if let Some(name) = call["function"]["name"].as_str() {
+                                if !name.is_empty() {
+                                    entry.1 = name.to_string();
+                                }
+                            }
+                            if let Some(args) = call["function"]["arguments"].as_str() {
+                                entry.2.push_str(args);
+                            }
+                        }
+                    }
+
+                    if let Some(content) = delta["content"].as_str() {
                         if !content.is_empty() {
-                            if tx.send(content.to_string()).await.is_err() {
+                            if tx.send(StreamEvent::Text(content.to_string())).await.is_err() {
                                 return Ok(());
                             }
                         }
@@ -127,7 +193,33 @@ impl AiProvider for OpenAiProvider {
             }
         }
 
-        Ok(())
+        // Flush accumulated tool calls.
+        for (idx, (id, name, args_buf)) in pending.into_iter() {
+            if name.is_empty() {
+                continue;
+            }
+            let arguments = if args_buf.trim().is_empty() {
+                serde_json::json!({})
+            } else {
+                serde_json::from_str(&args_buf).unwrap_or_else(|_| {
+                    log::warn!("Tool call {}: unparseable arguments: {}", name, args_buf);
+                    serde_json::json!({})
+                })
+            };
+            let _ = tx
+                .send(StreamEvent::ToolCall(ToolCall {
+                    id: if id.is_empty() {
+                        format!("call_{}", idx)
+                    } else {
+                        id
+                    },
+                    name,
+                    arguments,
+                }))
+                .await;
+        }
+
+        result
     }
 
     async fn list_models(&self) -> anyhow::Result<Vec<String>> {

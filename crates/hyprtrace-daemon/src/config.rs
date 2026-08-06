@@ -18,6 +18,8 @@ pub struct DaemonConfig {
     pub db_path: String,
     #[serde(default = "default_idle_timeout")]
     pub idle_timeout_seconds: u64,
+    #[serde(default = "default_focused_threshold")]
+    pub focused_threshold_seconds: u64,
 }
 
 fn default_db_path() -> String {
@@ -28,11 +30,16 @@ fn default_idle_timeout() -> u64 {
     300
 }
 
+fn default_focused_threshold() -> u64 {
+    20 * 60
+}
+
 impl Default for DaemonConfig {
     fn default() -> Self {
         Self {
             db_path: default_db_path(),
             idle_timeout_seconds: default_idle_timeout(),
+            focused_threshold_seconds: default_focused_threshold(),
         }
     }
 }

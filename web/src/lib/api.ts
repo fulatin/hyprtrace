@@ -10,6 +10,7 @@ import type {
   ConfigResponse,
   ConfigUpdateRequest,
   PaginatedResponse,
+  ActivityEvent,
 } from './types';
 
 async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
@@ -81,4 +82,12 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(req),
     }),
+
+  activityEvents: (from: string, to: string, limit = 100) =>
+    fetchJSON<ActivityEvent[]>(
+      `/api/activity/events?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&limit=${limit}`
+    ),
+
+  rebuildHourlySummary: () =>
+    fetchJSON<{ status: string }>('/api/hourly-summary/rebuild', { method: 'POST' }),
 };

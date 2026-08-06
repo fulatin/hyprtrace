@@ -870,6 +870,7 @@ dependencies = [
  "directories",
  "env_logger",
  "futures",
+ "hyprland",
  "log",
  "reqwest",
  "rusqlite",

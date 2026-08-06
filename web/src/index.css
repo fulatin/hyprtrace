@@ -21,3 +21,73 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   @apply bg-gray-600;
 }
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+@keyframes pulse-glow {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(34, 211, 238, 0.15);
+  }
+  50% {
+    box-shadow: 0 0 12px 4px rgba(34, 211, 238, 0.1);
+  }
+}
+
+@keyframes scaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.3s ease-out;
+}
+
+.animate-fadeInUp {
+  animation: fadeInUp 0.35s ease-out both;
+}
+
+.animate-blink {
+  animation: blink 0.8s ease-in-out infinite;
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+.animate-scaleIn {
+  animation: scaleIn 0.2s ease-out;
+}
+
+.stat-card-hover {
+  @apply transition-all duration-200;
+}
+
+.stat-card-hover:hover {
+  @apply border-cyan-500/20 shadow-lg shadow-cyan-500/5;
+  transform: translateY(-1px);
+}

@@ -2,6 +2,7 @@ export interface TodaySummary {
   date: string;
   total_active_ms: number;
   total_idle_ms: number;
+  total_focused_ms: number;
   app_count: number;
   session_count: number;
   top_apps: AppRank[];
@@ -12,12 +13,15 @@ export interface AppRank {
   total_ms: number;
   percentage: number;
   session_count: number;
+  focused_ms: number;
+  focused_session_count: number;
 }
 
 export interface HourlyBucket {
   hour: number;
   total_ms: number;
   session_count: number;
+  focused_ms: number;
 }
 
 export interface Session {
@@ -28,12 +32,15 @@ export interface Session {
   started_at: string;
   ended_at: string | null;
   duration_ms: number | null;
+  activity_state: string | null;
+  focused_ms: number | null;
 }
 
 export interface DailyTrend {
   date: string;
   total_ms: number;
   session_count: number;
+  focused_ms: number;
 }
 
 export interface AiMessage {
@@ -42,6 +49,7 @@ export interface AiMessage {
   role: string;
   content: string;
   model: string;
+  complete: boolean | null;
 }
 
 export interface PaginatedResponse<T> {
@@ -84,4 +92,13 @@ export interface ConfigUpdateRequest {
   ollama_url?: string;
   ollama_model?: string;
   default_provider?: string;
+}
+
+export interface ActivityEvent {
+  id: number;
+  session_id: number | null;
+  state: string;
+  started_at: string;
+  ended_at: string | null;
+  duration_ms: number | null;
 }

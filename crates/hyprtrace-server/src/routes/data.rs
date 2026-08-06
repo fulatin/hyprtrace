@@ -207,3 +207,46 @@ pub async fn app_trend(
         }
     }
 }
+
+#[derive(Deserialize)]
+pub struct ActivityEventsQuery {
+    pub from: Option<String>,
+    pub to: Option<String>,
+    #[serde(default = "default_events_limit")]
+    pub limit: usize,
+}
+
+fn default_events_limit() -> usize {
+    100
+}
+
+pub async fn activity_events(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<ActivityEventsQuery>,
+) -> Result<Json<Vec<crate::models::ActivityEvent>>, Json<serde_json::Value>> {
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let from = query.from.unwrap_or_else(|| today.clone());
+    let to = query.to.unwrap_or(today);
+
+    let db = state.db.lock().await;
+    match db.activity_events(&from, &to, query.limit) {
+        Ok(events) => Ok(Json(events)),
+        Err(e) => {
+            log::error!("Failed to get activity events: {}", e);
+            Err(Json(serde_json::json!({"error": "Internal server error"})))
+        }
+    }
+}
+
+pub async fn rebuild_hourly_summary(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, Json<serde_json::Value>> {
+    let db = state.db.lock().await;
+    match db.rebuild_hourly_summary() {
+        Ok(_) => Ok(Json(serde_json::json!({"status": "ok"}))),
+        Err(e) => {
+            log::error!("Failed to rebuild hourly_summary: {}", e);
+            Err(Json(serde_json::json!({"error": "Failed to rebuild hourly summary"})))
+        }
+    }
+}

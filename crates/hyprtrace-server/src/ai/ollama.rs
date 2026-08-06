@@ -1,4 +1,4 @@
-use super::{AiProvider, ChatMessage};
+use super::{AiProvider, ChatMessage, StreamEvent, ToolCall, ToolDef};
 use async_trait::async_trait;
 
 pub struct OllamaProvider {
@@ -10,7 +10,7 @@ pub struct OllamaProvider {
 impl OllamaProvider {
     pub fn new(base_url: String, default_model: String) -> Self {
         let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(120))
+            .timeout(std::time::Duration::from_secs(300))
             .build()
             .unwrap_or_default();
         Self {
@@ -27,10 +27,10 @@ impl AiProvider for OllamaProvider {
         "ollama"
     }
 
-    async fn chat(&self, messages: &[ChatMessage]) -> anyhow::Result<String> {
+    async fn chat(&self, model: Option<&str>, messages: &[ChatMessage]) -> anyhow::Result<String> {
         let url = format!("{}/api/chat", self.base_url);
         let body = serde_json::json!({
-            "model": self.default_model,
+            "model": model.unwrap_or(&self.default_model),
             "messages": messages,
             "stream": false
         });
@@ -52,15 +52,46 @@ impl AiProvider for OllamaProvider {
 
     async fn chat_stream(
         &self,
+        model: Option<&str>,
         messages: &[ChatMessage],
         tx: tokio::sync::mpsc::Sender<String>,
     ) -> anyhow::Result<()> {
+        let (ev_tx, mut ev_rx) = tokio::sync::mpsc::channel::<StreamEvent>(64);
+        let fwd = tokio::spawn(async move {
+            while let Some(ev) = ev_rx.recv().await {
+                if let StreamEvent::Text(t) = ev {
+                    if tx.send(t).await.is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        self.chat_stream_events(model, messages, None, ev_tx)
+            .await?;
+        let _ = fwd.await;
+        Ok(())
+    }
+
+    async fn chat_stream_events(
+        &self,
+        model: Option<&str>,
+        messages: &[ChatMessage],
+        tools: Option<&[ToolDef]>,
+        tx: tokio::sync::mpsc::Sender<StreamEvent>,
+    ) -> anyhow::Result<()> {
         let url = format!("{}/api/chat", self.base_url);
-        let body = serde_json::json!({
-            "model": self.default_model,
+        let mut body = serde_json::json!({
+            "model": model.unwrap_or(&self.default_model),
             "messages": messages,
             "stream": true
         });
+        if let Some(tools) = tools {
+            if !tools.is_empty() {
+                body["tools"] = serde_json::Value::Array(
+                    tools.iter().map(|t| t.to_api_json()).collect(),
+                );
+            }
+        }
 
         let resp = self.client.post(&url).json(&body).send().await?;
 
@@ -73,6 +104,7 @@ impl AiProvider for OllamaProvider {
         let mut stream = resp.bytes_stream();
         use futures::StreamExt;
         let mut buf: Vec<u8> = Vec::new();
+        let mut call_counter = 0u32;
 
         while let Some(chunk) = stream.next().await {
             let chunk = chunk?;
@@ -90,15 +122,43 @@ impl AiProvider for OllamaProvider {
                 }
 
                 if let Ok(json) = serde_json::from_str::<serde_json::Value>(&line) {
-                    if json["done"].as_bool().unwrap_or(false) {
-                        return Ok(());
+                    // Ollama emits complete tool_calls in a single chunk.
+                    if let Some(calls) = json["message"]["tool_calls"].as_array() {
+                        for call in calls {
+                            let name = call["function"]["name"]
+                                .as_str()
+                                .unwrap_or_default()
+                                .to_string();
+                            if name.is_empty() {
+                                continue;
+                            }
+                            // Ollama arguments are a JSON object (not a string).
+                            let arguments = call["function"]["arguments"].clone();
+                            call_counter += 1;
+                            let _ = tx
+                                .send(StreamEvent::ToolCall(ToolCall {
+                                    id: format!("call_{}", call_counter),
+                                    name,
+                                    arguments: if arguments.is_null() {
+                                        serde_json::json!({})
+                                    } else {
+                                        arguments
+                                    },
+                                }))
+                                .await;
+                        }
                     }
+
                     if let Some(content) = json["message"]["content"].as_str() {
                         if !content.is_empty() {
-                            if tx.send(content.to_string()).await.is_err() {
+                            if tx.send(StreamEvent::Text(content.to_string())).await.is_err() {
                                 return Ok(());
                             }
                         }
+                    }
+
+                    if json["done"].as_bool().unwrap_or(false) {
+                        return Ok(());
                     }
                 }
             }

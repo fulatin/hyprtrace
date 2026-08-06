@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
-import { Wifi, WifiOff, Download, Save, Key, Globe, Cpu } from 'lucide-react';
+import { Wifi, WifiOff, Download, Save, Key, Globe, Cpu, BarChart3 } from 'lucide-react';
 import type { AiModelsResponse, ConfigResponse, Session } from '../lib/types';
 
 export default function Settings() {
@@ -15,6 +15,7 @@ export default function Settings() {
   const [openaiModel, setOpenaiModel] = useState('');
   const [ollamaUrl, setOllamaUrl] = useState('');
   const [ollamaModel, setOllamaModel] = useState('');
+  const [rebuilding, setRebuilding] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState('');
 
@@ -63,6 +64,18 @@ export default function Settings() {
     }
   };
 
+  const handleRebuildHourly = async () => {
+    setRebuilding(true);
+    try {
+      await api.rebuildHourlySummary();
+      alert('Hourly summary rebuilt successfully');
+    } catch (e) {
+      alert('Rebuild failed: ' + (e instanceof Error ? e.message : 'Unknown error'));
+    } finally {
+      setRebuilding(false);
+    }
+  };
+
   const handleExport = async () => {
     setExporting(true);
     try {
@@ -82,9 +95,9 @@ export default function Settings() {
         page++;
       }
 
-      const header = ['ID', 'Class', 'Title', 'Workspace', 'Started At', 'Ended At', 'Duration (ms)'].join(',');
+      const header = ['ID', 'Class', 'Title', 'Workspace', 'Started At', 'Ended At', 'Duration (ms)', 'Activity State', 'Focus (ms)'].join(',');
       const rows = allSessions.map((s) =>
-        [s.id, `"${s.class}"`, `"${s.title.replace(/"/g, '""')}"`, s.workspace || '', s.started_at, s.ended_at || '', s.duration_ms || ''].join(',')
+        [s.id, `"${s.class}"`, `"${s.title.replace(/"/g, '""')}"`, s.workspace || '', s.started_at, s.ended_at || '', s.duration_ms || '', s.activity_state || '', s.focused_ms || ''].join(',')
       );
       const csv = [header, ...rows].join('\n');
 
@@ -131,7 +144,17 @@ export default function Settings() {
 
         <div className="border-t border-gray-800 pt-4">
           <h3 className="text-sm font-medium text-gray-400 mb-3">Database</h3>
-          <p className="text-sm text-gray-300">Path: ~/.local/share/hyprtrace/hyprtrace.db</p>
+          <p className="text-sm text-gray-300 mb-3">Path: ~/.local/share/hyprtrace/hyprtrace.db</p>
+          <div className="flex gap-2">
+            <button
+              onClick={handleRebuildHourly}
+              disabled={rebuilding}
+              className="flex items-center gap-2 bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-700 transition-colors disabled:opacity-50"
+            >
+              <BarChart3 size={12} />
+              {rebuilding ? 'Rebuilding...' : 'Rebuild Hourly Summary'}
+            </button>
+          </div>
         </div>
 
         <div className="border-t border-gray-800 pt-4">
@@ -205,8 +228,14 @@ export default function Settings() {
                   value={openaiModel}
                   onChange={(e) => setOpenaiModel(e.target.value)}
                   placeholder="gpt-4o-mini"
+                  list="openai-model-list"
                   className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-200 placeholder-gray-500 focus:ring-cyan-500 focus:border-cyan-500"
                 />
+                <datalist id="openai-model-list">
+                  {(aiInfo?.providers?.openai ?? []).map((m) => (
+                    <option key={m} value={m} />
+                  ))}
+                </datalist>
               </div>
             </div>
 
@@ -237,8 +266,14 @@ export default function Settings() {
                   value={ollamaModel}
                   onChange={(e) => setOllamaModel(e.target.value)}
                   placeholder="qwen2.5:7b"
+                  list="ollama-model-list"
                   className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-200 placeholder-gray-500 focus:ring-cyan-500 focus:border-cyan-500"
                 />
+                <datalist id="ollama-model-list">
+                  {(aiInfo?.providers?.ollama ?? []).map((m) => (
+                    <option key={m} value={m} />
+                  ))}
+                </datalist>
               </div>
             </div>
 
