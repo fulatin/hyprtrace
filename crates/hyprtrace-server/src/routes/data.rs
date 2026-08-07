@@ -412,6 +412,30 @@ pub struct ReportQuery {
     pub to: Option<String>,
 }
 
+#[derive(Deserialize)]
+pub struct PredictQuery {
+    #[serde(default = "default_predict_window")]
+    pub window: i64,
+}
+
+fn default_predict_window() -> i64 {
+    14
+}
+
+pub async fn predict(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<PredictQuery>,
+) -> Result<Json<crate::models::TrendPrediction>, Json<serde_json::Value>> {
+    let db = state.db.lock().await;
+    match db.predict(query.window) {
+        Ok(p) => Ok(Json(p)),
+        Err(e) => {
+            log::error!("Failed to compute prediction: {}", e);
+            Err(Json(serde_json::json!({"error": "Internal server error"})))
+        }
+    }
+}
+
 pub async fn report(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ReportQuery>,

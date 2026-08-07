@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { format } from 'date-fns';
-import { Clock, AppWindow, Hash, Moon, BrainCircuit, BellRing, Copy, Gauge, Target } from 'lucide-react';
+import { Clock, AppWindow, Hash, Moon, BrainCircuit, BellRing, Copy, Gauge, Target, TrendingUp } from 'lucide-react';
 import { api } from '../lib/api';
-import type { TodaySummary, HourlyBucket, DisruptionEvent, EfficiencyScore, GoalProgress } from '../lib/types';
+import type { TodaySummary, HourlyBucket, DisruptionEvent, EfficiencyScore, GoalProgress, TrendPrediction } from '../lib/types';
 import StatCard from '../components/StatCard';
 import AppUsagePie from '../components/AppUsagePie';
 import HourlyHeatmap from '../components/HourlyHeatmap';
@@ -22,6 +22,7 @@ export default function Dashboard() {
   const [disruptions, setDisruptions] = useState<DisruptionEvent[]>([]);
   const [efficiency, setEfficiency] = useState<EfficiencyScore | null>(null);
   const [goalProgress, setGoalProgress] = useState<GoalProgress[]>([]);
+  const [prediction, setPrediction] = useState<TrendPrediction | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -32,12 +33,14 @@ export default function Dashboard() {
       api.disruptions(today, today, 30).catch(() => []),
       api.efficiency(today).catch(() => null),
       api.goals().catch(() => ({ goals: [], progress: [] })),
-    ]).then(([s, t, d, e, g]) => {
+      api.predict(14).catch(() => null),
+    ]).then(([s, t, d, e, g, p]) => {
       setSummary(s);
       setTimeline(t);
       setDisruptions(d);
       setEfficiency(e);
       setGoalProgress(g.progress ?? []);
+      setPrediction(p);
       setLoading(false);
     });
   }, [today]);
@@ -99,6 +102,30 @@ export default function Dashboard() {
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {prediction && (
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 animate-fadeInUp" style={{ animationDelay: "180ms" }}>
+          <h3 className="text-sm font-medium text-gray-400 flex items-center gap-2 mb-2">
+            <TrendingUp size={14} className="text-emerald-400" />
+            Trend Prediction
+            <span className="text-xs text-gray-500">based on last {prediction.window_days} days</span>
+          </h3>
+          <div className="grid grid-cols-3 gap-4 text-sm">
+            <div>
+              <div className="text-xs text-gray-500">Today so far</div>
+              <div className="text-lg font-semibold text-gray-200">{Math.round(prediction.today_ms / 3600000)}h {Math.round((prediction.today_ms % 3600000) / 60000)}m</div>
+            </div>
+            <div>
+              <div className="text-xs text-gray-500">Today projected</div>
+              <div className="text-lg font-semibold text-cyan-400">{Math.round(prediction.predicted_today_ms / 3600000)}h {Math.round((prediction.predicted_today_ms % 3600000) / 60000)}m</div>
+            </div>
+            <div>
+              <div className="text-xs text-gray-500">Tomorrow projected</div>
+              <div className="text-lg font-semibold text-emerald-400">{Math.round(prediction.predicted_tomorrow_ms / 3600000)}h {Math.round((prediction.predicted_tomorrow_ms % 3600000) / 60000)}m</div>
+            </div>
+          </div>
         </div>
       )}
 

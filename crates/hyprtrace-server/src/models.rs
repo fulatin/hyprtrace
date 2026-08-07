@@ -138,3 +138,13 @@ pub struct GoalProgress {
     pub today_ms: i64,
     pub pct: f64,
 }
+
+#[derive(Debug, Serialize)]
+pub struct TrendPrediction {
+    pub today_ms: i64,
+    pub predicted_today_ms: i64,
+    pub predicted_tomorrow_ms: i64,
+    pub daily_avg_ms: i64,
+    pub slope: f64,
+    pub window_days: i64,
+}

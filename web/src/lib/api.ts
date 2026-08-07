@@ -18,6 +18,7 @@ import type {
   EfficiencyScore,
   Goal,
   GoalsResponse,
+  TrendPrediction,
 } from './types';
 
 async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
@@ -130,6 +131,9 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ goals }),
     }),
+
+  predict: (window = 14) =>
+    fetchJSON<TrendPrediction>(`/api/predict?window=${window}`),
 
   report: async (from: string, to: string): Promise<void> => {
     const res = await fetch(`/api/report?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);

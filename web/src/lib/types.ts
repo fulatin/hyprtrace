@@ -75,6 +75,15 @@ export interface GoalsResponse {
   progress: GoalProgress[];
 }
 
+export interface TrendPrediction {
+  today_ms: number;
+  predicted_today_ms: number;
+  predicted_tomorrow_ms: number;
+  daily_avg_ms: number;
+  slope: number;
+  window_days: number;
+}
+
 export interface HourlyBucket {
   hour: number;
   total_ms: number;
