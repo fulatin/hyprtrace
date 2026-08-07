@@ -6,6 +6,7 @@ mod idle_monitor;
 mod input_monitor;
 mod listener;
 mod resource_monitor;
+mod wellbeing_monitor;
 
 use anyhow::Context;
 use std::sync::{Arc, Mutex};
@@ -43,6 +44,14 @@ fn main() -> anyhow::Result<()> {
     resource_monitor::spawn_resource_monitor(db.clone(), 30);
 
     goal_monitor::spawn_goal_monitor(db.clone(), 300, cfg.daemon.break_after_minutes);
+
+    wellbeing_monitor::spawn_wellbeing_monitor(
+        db.clone(),
+        300,
+        cfg.daemon.late_night_start_hour,
+        cfg.daemon.late_night_end_hour,
+        cfg.daemon.hyprlock_command.clone(),
+    );
 
     let _disruption_monitor = disruption_monitor::DisruptionMonitor::start(db.clone());
 

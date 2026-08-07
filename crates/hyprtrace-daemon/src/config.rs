@@ -24,6 +24,12 @@ pub struct DaemonConfig {
     pub enable_input_monitor: bool,
     #[serde(default = "default_break_after_minutes")]
     pub break_after_minutes: u64,
+    #[serde(default = "default_late_night_start")]
+    pub late_night_start_hour: u32,
+    #[serde(default = "default_late_night_end")]
+    pub late_night_end_hour: u32,
+    #[serde(default)]
+    pub hyprlock_command: Option<String>,
 }
 
 fn default_db_path() -> String {
@@ -46,6 +52,14 @@ fn default_break_after_minutes() -> u64 {
     90
 }
 
+fn default_late_night_start() -> u32 {
+    23
+}
+
+fn default_late_night_end() -> u32 {
+    6
+}
+
 impl Default for DaemonConfig {
     fn default() -> Self {
         Self {
@@ -54,6 +68,9 @@ impl Default for DaemonConfig {
             focused_threshold_seconds: default_focused_threshold(),
             enable_input_monitor: default_enable_input_monitor(),
             break_after_minutes: default_break_after_minutes(),
+            late_night_start_hour: default_late_night_start(),
+            late_night_end_hour: default_late_night_end(),
+            hyprlock_command: None,
         }
     }
 }
