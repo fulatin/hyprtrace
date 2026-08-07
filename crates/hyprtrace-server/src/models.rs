@@ -79,6 +79,14 @@ pub struct PaginatedResponse<T: Serialize> {
     pub per_page: u32,
 }
 
+#[derive(Debug, Serialize, Clone)]
+pub struct AppResource {
+    pub class: String,
+    pub avg_cpu_pct: f64,
+    pub peak_mem_kb: i64,
+    pub sample_count: i64,
+}
+
 #[derive(Debug, Serialize)]
 pub struct ActivityEvent {
     pub id: i64,

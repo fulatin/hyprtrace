@@ -48,17 +48,18 @@ impl WindowTracker {
                     let class = win_data.class.to_lowercase();
                     let title = &win_data.title;
 
-                    let workspace = Client::get_active()
-                        .ok()
-                        .flatten()
-                        .map(|c| c.workspace.name)
+                    let active = Client::get_active().ok().flatten();
+                    let workspace = active
+                        .as_ref()
+                        .map(|c| c.workspace.name.clone())
                         .unwrap_or_default();
+                    let pid = active.map(|c| c.pid);
 
                     if let Some(prev_id) = end_current_session(&db) {
                         log::info!("Ended session {}", prev_id);
                     }
 
-                    match db.start_session(&class, title, &workspace) {
+                    match db.start_session(&class, title, &workspace, pid) {
                         Ok(new_id) => {
                             log::info!(
                                 "Started session {}: class={}, workspace={}",

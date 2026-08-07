@@ -206,7 +206,7 @@ fn resume_session(db: &Arc<Mutex<Database>>) -> anyhow::Result<()> {
             let workspace = client.workspace.name;
 
             let guard = db.lock().map_err(|e| anyhow::anyhow!("DB lock: {}", e))?;
-            match guard.start_session(&class, &title, &workspace) {
+            match guard.start_session(&class, &title, &workspace, Some(client.pid)) {
                 Ok(id) => {
                     log::info!(
                         "Resumed session {}: class={}, workspace={}",

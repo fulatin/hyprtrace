@@ -53,6 +53,14 @@ pub struct AppTrendQuery {
     pub granularity: Option<String>,
 }
 
+#[derive(Deserialize)]
+pub struct ResourceQuery {
+    pub from: Option<String>,
+    pub to: Option<String>,
+    #[serde(default = "default_limit")]
+    pub limit: usize,
+}
+
 pub async fn health() -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "status": "ok",
@@ -288,6 +296,25 @@ pub async fn rebuild_hourly_summary(
         Err(e) => {
             log::error!("Failed to rebuild hourly_summary: {}", e);
             Err(Json(serde_json::json!({"error": "Failed to rebuild hourly summary"})))
+        }
+    }
+}
+
+pub async fn resources(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<ResourceQuery>,
+) -> Result<Json<Vec<crate::models::AppResource>>, Json<serde_json::Value>> {
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let from = query.from.unwrap_or_else(|| today.clone());
+    let to = query.to.unwrap_or(today);
+    let limit = query.limit.clamp(1, 50);
+
+    let db = state.db.lock().await;
+    match db.resource_stats(&from, &to, limit) {
+        Ok(stats) => Ok(Json(stats)),
+        Err(e) => {
+            log::error!("Failed to get resource stats: {}", e);
+            Err(Json(serde_json::json!({"error": "Internal server error"})))
         }
     }
 }

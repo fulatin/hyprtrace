@@ -30,6 +30,13 @@ export interface CategoriesResponse {
   categories: string[];
 }
 
+export interface AppResource {
+  class: string;
+  avg_cpu_pct: number;
+  peak_mem_kb: number;
+  sample_count: number;
+}
+
 export interface HourlyBucket {
   hour: number;
   total_ms: number;

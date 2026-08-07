@@ -63,6 +63,27 @@ impl Database {
         )?;
 
         self.migrate_v2()?;
+        self.migrate_v3()?;
+        Ok(())
+    }
+
+    fn migrate_v3(&self) -> anyhow::Result<()> {
+        self.add_column_if_missing("sessions", "pid", "INTEGER", "NULL")?;
+
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS app_resources (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER,
+                class      TEXT NOT NULL,
+                sampled_at TEXT NOT NULL,
+                cpu_pct    REAL,
+                mem_kb     INTEGER,
+                FOREIGN KEY (session_id) REFERENCES sessions(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_app_resources_class ON app_resources(class);
+            CREATE INDEX IF NOT EXISTS idx_app_resources_session ON app_resources(session_id);",
+        )?;
         Ok(())
     }
 
@@ -137,12 +158,13 @@ impl Database {
         class: &str,
         title: &str,
         workspace: &str,
+        pid: Option<i32>,
     ) -> anyhow::Result<i64> {
         let now = chrono::Utc::now().to_rfc3339();
         self.conn.execute(
-            "INSERT INTO sessions (class, title, workspace, started_at, activity_state)
-             VALUES (?1, ?2, ?3, ?4, 'active')",
-            params![class, title, workspace, now],
+            "INSERT INTO sessions (class, title, workspace, started_at, activity_state, pid)
+             VALUES (?1, ?2, ?3, ?4, 'active', ?5)",
+            params![class, title, workspace, now, pid],
         )?;
         let id = self.conn.last_insert_rowid();
         self.save_activity_event(id, "active")?;
@@ -330,6 +352,44 @@ impl Database {
             .map_err(Into::into)
     }
 
+    /// Current open session's (id, class, pid), for resource sampling.
+    pub fn current_session_resources(&self) -> anyhow::Result<Option<(i64, String, i32)>> {
+        let result = self.conn.query_row(
+            "SELECT id, class, pid FROM sessions
+             WHERE ended_at IS NULL AND pid IS NOT NULL
+             ORDER BY started_at DESC LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        );
+        match result {
+            Ok(val) => Ok(Some(val)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Record a CPU/memory sample for a session.
+    pub fn save_resource_sample(
+        &self,
+        session_id: i64,
+        class: &str,
+        cpu_pct: f64,
+        mem_kb: i64,
+    ) -> anyhow::Result<()> {
+        self.conn.execute(
+            "INSERT INTO app_resources (session_id, class, sampled_at, cpu_pct, mem_kb)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                session_id,
+                class,
+                chrono::Utc::now().to_rfc3339(),
+                cpu_pct,
+                mem_kb
+            ],
+        )?;
+        Ok(())
+    }
+
     /// Update only the activity_state column, without touching activity_events.
     /// Used for retroactive state changes on already-ended sessions (e.g. idle → away).
     pub fn set_session_state_only(&self, session_id: i64, state: &str) -> anyhow::Result<()> {
@@ -407,7 +467,7 @@ mod tests {
         db.migrate().unwrap();
 
         // start → end session: focused_ms heuristic + hourly_summary upsert
-        let id = db.start_session("code", "main.rs", "1").unwrap();
+        let id = db.start_session("code", "main.rs", "1", None).unwrap();
         db.end_session(id).unwrap();
 
         let (state, focused): (String, i64) = db
@@ -449,10 +509,10 @@ mod tests {
         // Properly-ended session stays; orphans (with their open activity
         // events) get deleted — the FK constraint that previously made this
         // cleanup fail silently.
-        let ended = db.start_session("kitty", "normal", "5").unwrap();
+        let ended = db.start_session("kitty", "normal", "5", None).unwrap();
         db.end_session(ended).unwrap();
-        db.start_session("kitty", "reboot", "5").unwrap();
-        db.start_session("firefox", "tab", "2").unwrap();
+        db.start_session("kitty", "reboot", "5", None).unwrap();
+        db.start_session("firefox", "tab", "2", None).unwrap();
 
         // At this point two sessions are open; clear them like startup does.
         let count = db.clear_orphaned_sessions().unwrap();
@@ -483,7 +543,7 @@ mod tests {
         let db = Database::open(&path, 20 * 60).unwrap();
         db.migrate().unwrap();
 
-        let id = db.start_session("firefox", "github", "2").unwrap();
+        let id = db.start_session("firefox", "github", "2", None).unwrap();
         db.update_session_state(id, "focused").unwrap();
 
         let state: String = db

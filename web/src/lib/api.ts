@@ -13,6 +13,7 @@ import type {
   ActivityEvent,
   CategoryRule,
   CategoriesResponse,
+  AppResource,
 } from './types';
 
 async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
@@ -102,4 +103,9 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ rules }),
     }),
+
+  resources: (from: string, to: string, limit = 10) =>
+    fetchJSON<AppResource[]>(
+      `/api/resources?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&limit=${limit}`
+    ),
 };

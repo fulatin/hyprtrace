@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { format, subDays } from 'date-fns';
+import { Activity, MemoryStick } from 'lucide-react';
 import { api } from '../lib/api';
-import type { AppRank, DailyTrend } from '../lib/types';
+import type { AppRank, AppResource, DailyTrend } from '../lib/types';
 import AppRankingBar from '../components/AppRankingBar';
 import AppTrendChart from '../components/AppTrendChart';
 
@@ -13,6 +14,7 @@ export default function Apps() {
   const [loading, setLoading] = useState(true);
   const [selectedApp, setSelectedApp] = useState<string | null>(null);
   const [trend, setTrend] = useState<DailyTrend[]>([]);
+  const [resources, setResources] = useState<AppResource[]>([]);
 
   const getDateRange = () => {
     const today = format(new Date(), 'yyyy-MM-dd');
@@ -33,6 +35,7 @@ export default function Apps() {
       setData(d);
       setLoading(false);
     });
+    api.resources(from, to, 5).then(setResources).catch(() => setResources([]));
   }, [range]);
 
   useEffect(() => {
@@ -79,6 +82,40 @@ export default function Apps() {
               <AppTrendChart data={trend} range={range} />
             </div>
           )}
+
+          {resources.length > 0 && (
+            <div className="grid grid-cols-2 gap-4">
+              <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+                <h3 className="text-xs font-medium text-gray-400 flex items-center gap-2 mb-3">
+                  <Activity size={12} className="text-emerald-400" />
+                  Avg CPU Usage
+                </h3>
+                <div className="space-y-2">
+                  {resources.slice(0, 4).map((r) => (
+                    <div key={`cpu-${r.class}`} className="flex items-center justify-between text-sm">
+                      <span className="text-gray-300">{r.class}</span>
+                      <span className="text-emerald-400 font-mono text-xs">{r.avg_cpu_pct.toFixed(1)}%</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+                <h3 className="text-xs font-medium text-gray-400 flex items-center gap-2 mb-3">
+                  <MemoryStick size={12} className="text-purple-400" />
+                  Peak Memory
+                </h3>
+                <div className="space-y-2">
+                  {resources.map((r) => (
+                    <div key={`mem-${r.class}`} className="flex items-center justify-between text-sm">
+                      <span className="text-gray-300">{r.class}</span>
+                      <span className="text-purple-400 font-mono text-xs">{(r.peak_mem_kb / 1048576).toFixed(1)} GB</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="space-y-2">
             {data.map((app, i) => (
               <div

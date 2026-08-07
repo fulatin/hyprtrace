@@ -3,6 +3,7 @@ mod db;
 mod idle_monitor;
 mod input_monitor;
 mod listener;
+mod resource_monitor;
 
 use anyhow::Context;
 use std::sync::{Arc, Mutex};
@@ -36,6 +37,8 @@ fn main() -> anyhow::Result<()> {
     if cfg.daemon.enable_input_monitor {
         input_monitor::spawn_input_monitor(activity.clone());
     }
+
+    resource_monitor::spawn_resource_monitor(db.clone(), 30);
 
     let (tx, rx) = std::sync::mpsc::channel();
     let db_shutdown = db.clone();

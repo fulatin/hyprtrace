@@ -1,5 +1,5 @@
 use crate::models::{
-    ActivityEvent, AiMessage, AppRank, CategoryRule, DailyTrend, HourlyBucket, Session,
+    ActivityEvent, AiMessage, AppRank, AppResource, CategoryRule, DailyTrend, HourlyBucket, Session,
     TodaySummary,
 };
 use anyhow::Context;
@@ -163,7 +163,6 @@ impl Database {
             params![date],
             |row| row.get(0),
         )?;
-
         let total_focused_ms: i64 = self.conn.query_row(
             "SELECT COALESCE(SUM(focused_ms), 0) FROM daily_summary WHERE date = ?1",
             params![date],
@@ -259,6 +258,30 @@ impl Database {
         }
 
         Ok(results)
+    }
+
+    /// Aggregate resource samples by app class over a date range.
+    pub fn resource_stats(&self, from: &str, to: &str, limit: usize) -> anyhow::Result<Vec<AppResource>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT class,
+                    AVG(cpu_pct) as avg_cpu,
+                    MAX(mem_kb) as peak_mem,
+                    COUNT(*) as samples
+             FROM app_resources
+             WHERE date(sampled_at) BETWEEN ?1 AND ?2
+             GROUP BY class
+             ORDER BY avg_cpu DESC, peak_mem DESC
+             LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(params![from, to, limit as i64], |row| {
+            Ok(AppResource {
+                class: row.get(0)?,
+                avg_cpu_pct: row.get(1)?,
+                peak_mem_kb: row.get(2)?,
+                sample_count: row.get(3)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
     pub fn hourly_breakdown(&self, date: &str) -> anyhow::Result<Vec<HourlyBucket>> {
