@@ -15,6 +15,7 @@ import type {
   CategoriesResponse,
   AppResource,
   DisruptionEvent,
+  EfficiencyScore,
 } from './types';
 
 async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
@@ -114,4 +115,7 @@ export const api = {
     fetchJSON<DisruptionEvent[]>(
       `/api/disruptions?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&limit=${limit}`
     ),
+
+  efficiency: (date: string) =>
+    fetchJSON<EfficiencyScore>(`/api/efficiency?date=${encodeURIComponent(date)}`),
 };

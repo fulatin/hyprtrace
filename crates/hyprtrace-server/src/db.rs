@@ -1,6 +1,6 @@
 use crate::models::{
     ActivityEvent, AiMessage, AppRank, AppResource, CategoryRule, DailyTrend, DisruptionEvent,
-    HourlyBucket, Session, TodaySummary,
+    EfficiencyScore, HourlyBucket, Session, TodaySummary,
 };
 use anyhow::Context;
 use chrono::Timelike;
@@ -284,8 +284,7 @@ impl Database {
     }
 
     /// Recent disruption events (notifications + clipboard) over a date range.
-    pub fn disruptions(&self, from: &str, to: &str, limit: usize) -> anyhow::Result<Vec<DisruptionEvent>> {
-        let mut stmt = self.conn.prepare(
+    pub fn disruptions(&self, from: &str, to: &str, limit: usize) -> anyhow::Result<Vec<DisruptionEvent>> {        let mut stmt = self.conn.prepare(
             "SELECT id, kind, app, summary, occurred_at
              FROM disruptions
              WHERE date(occurred_at) BETWEEN ?1 AND ?2
@@ -302,6 +301,91 @@ impl Database {
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Compute a 0-100 efficiency score for a single day.
+    ///
+    /// Factors (each mapped to a sub-score, summed):
+    ///   - Focus ratio (focused_ms / active_ms)                    → up to 40
+    ///   - Session fragmentation (avg session length)              → up to 30
+    ///   - Late-night usage (23:00-05:59 share of active time)     → up to 15
+    ///   - Interruptions (notification count, 0-20)                → up to 15
+    pub fn efficiency_score(&self, date: &str) -> anyhow::Result<EfficiencyScore> {
+        let total_active_ms: i64 = self.conn.query_row(
+            "SELECT COALESCE(SUM(total_ms), 0) FROM daily_summary WHERE date = ?1",
+            params![date],
+            |row| row.get(0),
+        ).unwrap_or(0);
+
+        let total_focused_ms: i64 = self.conn.query_row(
+            "SELECT COALESCE(SUM(focused_ms), 0) FROM daily_summary WHERE date = ?1",
+            params![date],
+            |row| row.get(0),
+        ).unwrap_or(0);
+
+        let session_count: i64 = self.conn.query_row(
+            "SELECT COALESCE(SUM(session_count), 0) FROM daily_summary WHERE date = ?1",
+            params![date],
+            |row| row.get(0),
+        ).unwrap_or(0);
+
+        // Late-night share from hourly_summary (local hours 23, 0..6).
+        let late_night_ms: i64 = self.conn.query_row(
+            "SELECT COALESCE(SUM(total_ms), 0) FROM hourly_summary
+             WHERE date = ?1 AND hour >= 23 OR date = ?1 AND hour <= 5",
+            params![date, date],
+            |row| row.get(0),
+        ).unwrap_or(0);
+
+        let disruption_count: i64 = self.conn.query_row(
+            "SELECT COALESCE(COUNT(*), 0) FROM disruptions
+             WHERE date(occurred_at) = ?1 AND kind = 'notification'",
+            params![date],
+            |row| row.get(0),
+        ).unwrap_or(0);
+
+        let focus_ratio = if total_active_ms > 0 {
+            total_focused_ms as f64 / total_active_ms as f64
+        } else {
+            0.0
+        };
+        let avg_session_secs = if session_count > 0 {
+            total_active_ms as f64 / session_count as f64 / 1000.0
+        } else {
+            0.0
+        };
+        let late_night_pct = if total_active_ms > 0 {
+            (late_night_ms as f64 / total_active_ms as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        let focus_score = (focus_ratio * 40.0).clamp(0.0, 40.0);
+        // Ideal avg session 15-90 min → full fragmentation score.
+        let frag_score = if avg_session_secs >= 15.0 * 60.0 && avg_session_secs <= 90.0 * 60.0 {
+            30.0
+        } else if avg_session_secs < 15.0 * 60.0 {
+            // Very fragmented: scale from 0 (0s) to 30 (15min).
+            (avg_session_secs / (15.0 * 60.0)) * 30.0
+        } else {
+            // Long sessions: gently taper.
+            30.0_f64 - ((avg_session_secs - 90.0 * 60.0) / (180.0 * 60.0)) * 10.0
+        };
+        let late_score = (15.0 * (1.0 - late_night_pct / 100.0)).clamp(0.0, 15.0);
+        let disruption_score = (15.0 * (1.0 - (disruption_count as f64) / 20.0)).clamp(0.0, 15.0);
+
+        let score = (focus_score + frag_score.max(0.0) + late_score + disruption_score)
+            .round() as i64;
+
+        Ok(EfficiencyScore {
+            date: date.to_string(),
+            score: score.clamp(0, 100),
+            focus_ratio,
+            avg_session_secs,
+            late_night_pct,
+            disruption_count,
+            total_active_ms,
+        })
     }
 
     pub fn hourly_breakdown(&self, date: &str) -> anyhow::Result<Vec<HourlyBucket>> {

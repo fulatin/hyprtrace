@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { format } from 'date-fns';
-import { Clock, AppWindow, Hash, Moon, BrainCircuit, BellRing, Copy } from 'lucide-react';
+import { Clock, AppWindow, Hash, Moon, BrainCircuit, BellRing, Copy, Gauge } from 'lucide-react';
 import { api } from '../lib/api';
-import type { TodaySummary, HourlyBucket, DisruptionEvent } from '../lib/types';
+import type { TodaySummary, HourlyBucket, DisruptionEvent, EfficiencyScore } from '../lib/types';
 import StatCard from '../components/StatCard';
 import AppUsagePie from '../components/AppUsagePie';
 import HourlyHeatmap from '../components/HourlyHeatmap';
@@ -20,6 +20,7 @@ export default function Dashboard() {
   const [summary, setSummary] = useState<TodaySummary | null>(null);
   const [timeline, setTimeline] = useState<HourlyBucket[]>([]);
   const [disruptions, setDisruptions] = useState<DisruptionEvent[]>([]);
+  const [efficiency, setEfficiency] = useState<EfficiencyScore | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -28,10 +29,12 @@ export default function Dashboard() {
       api.summary(today).catch(() => null),
       api.timeline(today).catch(() => []),
       api.disruptions(today, today, 30).catch(() => []),
-    ]).then(([s, t, d]) => {
+      api.efficiency(today).catch(() => null),
+    ]).then(([s, t, d, e]) => {
       setSummary(s);
       setTimeline(t);
       setDisruptions(d);
+      setEfficiency(e);
       setLoading(false);
     });
   }, [today]);
@@ -56,13 +59,14 @@ export default function Dashboard() {
         <span className="text-sm text-gray-400">{today}</span>
       </div>
 
-      <div className="grid grid-cols-5 gap-4">
+      <div className="grid grid-cols-6 gap-4">
         {[
           { icon: <Clock size={16} />, label: "Active Time", value: formatDuration(summary?.total_active_ms ?? 0) },
           { icon: <BrainCircuit size={16} />, label: "Focus Time", value: formatDuration(summary?.total_focused_ms ?? 0), sub: `${Math.round(((summary?.total_focused_ms ?? 0) / Math.max((summary?.total_active_ms ?? 1), 1)) * 100)}% focused` },
           { icon: <AppWindow size={16} />, label: "Apps", value: String(summary?.app_count ?? 0) },
           { icon: <Hash size={16} />, label: "Sessions", value: String(summary?.session_count ?? 0) },
           { icon: <Moon size={16} />, label: "Idle Time", value: formatDuration(summary?.total_idle_ms ?? 0) },
+          { icon: <Gauge size={16} />, label: "Efficiency", value: efficiency ? `${efficiency.score}/100` : "—", sub: efficiency ? `${Math.round(efficiency.focus_ratio * 100)}% focus · ${Math.round(efficiency.avg_session_secs / 60)}m/session` : "" },
         ].map((card, i) => (
           <div key={card.label} className="animate-fadeInUp" style={{ animationDelay: `${i * 80}ms` }}>
             <StatCard icon={card.icon} label={card.label} value={card.value} subtext={(card as any).sub} />

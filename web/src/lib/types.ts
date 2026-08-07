@@ -45,6 +45,16 @@ export interface DisruptionEvent {
   occurred_at: string;
 }
 
+export interface EfficiencyScore {
+  date: string;
+  score: number;
+  focus_ratio: number;
+  avg_session_secs: number;
+  late_night_pct: number;
+  disruption_count: number;
+  total_active_ms: number;
+}
+
 export interface HourlyBucket {
   hour: number;
   total_ms: number;

@@ -105,3 +105,14 @@ pub struct DisruptionEvent {
     pub summary: Option<String>,
     pub occurred_at: String,
 }
+
+#[derive(Debug, Serialize)]
+pub struct EfficiencyScore {
+    pub date: String,
+    pub score: i64,
+    pub focus_ratio: f64,
+    pub avg_session_secs: f64,
+    pub late_night_pct: f64,
+    pub disruption_count: i64,
+    pub total_active_ms: i64,
+}

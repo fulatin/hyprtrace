@@ -329,8 +329,7 @@ pub struct DisruptionQuery {
 pub async fn disruptions(
     State(state): State<Arc<AppState>>,
     Query(query): Query<DisruptionQuery>,
-) -> Result<Json<Vec<crate::models::DisruptionEvent>>, Json<serde_json::Value>> {
-    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+) -> Result<Json<Vec<crate::models::DisruptionEvent>>, Json<serde_json::Value>> {    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
     let from = query.from.unwrap_or_else(|| today.clone());
     let to = query.to.unwrap_or(today);
     let limit = query.limit.clamp(1, 200);
@@ -340,6 +339,27 @@ pub async fn disruptions(
         Ok(events) => Ok(Json(events)),
         Err(e) => {
             log::error!("Failed to get disruptions: {}", e);
+            Err(Json(serde_json::json!({"error": "Internal server error"})))
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct EfficiencyQuery {
+    pub date: Option<String>,
+}
+
+pub async fn efficiency(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<EfficiencyQuery>,
+) -> Result<Json<crate::models::EfficiencyScore>, Json<serde_json::Value>> {
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let date = query.date.unwrap_or(today);
+    let db = state.db.lock().await;
+    match db.efficiency_score(&date) {
+        Ok(score) => Ok(Json(score)),
+        Err(e) => {
+            log::error!("Failed to compute efficiency score: {}", e);
             Err(Json(serde_json::json!({"error": "Internal server error"})))
         }
     }
