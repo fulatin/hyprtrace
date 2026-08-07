@@ -130,4 +130,17 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ goals }),
     }),
+
+  report: async (from: string, to: string): Promise<void> => {
+    const res = await fetch(`/api/report?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+    if (!res.ok) throw new Error(`API Error: ${res.status}`);
+    const md = await res.text();
+    const blob = new Blob([md], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `hyprtrace-report-${from}-${to}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+  },
 };

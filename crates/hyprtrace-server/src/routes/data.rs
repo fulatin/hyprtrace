@@ -405,3 +405,33 @@ pub async fn put_goals(
         }
     }
 }
+
+#[derive(Deserialize)]
+pub struct ReportQuery {
+    pub from: Option<String>,
+    pub to: Option<String>,
+}
+
+pub async fn report(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<ReportQuery>,
+) -> Result<axum::response::Response, Json<serde_json::Value>> {
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let to = query.to.unwrap_or_else(|| today.clone());
+    let from = query
+        .from
+        .unwrap_or_else(|| (chrono::Utc::now() - chrono::Duration::days(6)).format("%Y-%m-%d").to_string());
+
+    let db = state.db.lock().await;
+    match db.report(&from, &to) {
+        Ok(md) => Ok(axum::response::Response::builder()
+            .header("Content-Type", "text/markdown; charset=utf-8")
+            .header("Content-Disposition", format!("attachment; filename=\"hyprtrace-report-{}-{}.md\"", from, to))
+            .body(axum::body::Body::from(md))
+            .unwrap()),
+        Err(e) => {
+            log::error!("Failed to build report: {}", e);
+            Err(Json(serde_json::json!({"error": "Internal server error"})))
+        }
+    }
+}

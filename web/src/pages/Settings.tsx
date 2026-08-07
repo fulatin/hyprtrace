@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
-import { Wifi, WifiOff, Download, Save, Key, Globe, Cpu, BarChart3, Tags, Plus, Trash2, Target } from 'lucide-react';
+import { Wifi, WifiOff, Download, Save, Key, Globe, Cpu, BarChart3, Tags, Plus, Trash2, Target, FileText } from 'lucide-react';
 import type { AiModelsResponse, CategoryRule, ConfigResponse, Goal, Session } from '../lib/types';
 
 export default function Settings() {
@@ -509,14 +509,28 @@ export default function Settings() {
 
         <div className="border-t border-gray-800 pt-4">
           <h3 className="text-sm font-medium text-gray-400 mb-3">Data Export</h3>
-          <button
-            onClick={handleExport}
-            disabled={exporting}
-            className="flex items-center gap-2 bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-sm text-gray-300 hover:bg-gray-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <Download size={14} />
-            {exporting ? 'Exporting...' : 'Export Sessions (CSV)'}
-          </button>
+          <div className="flex gap-2 flex-wrap">
+            <button
+              onClick={handleExport}
+              disabled={exporting}
+              className="flex items-center gap-2 bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-sm text-gray-300 hover:bg-gray-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Download size={14} />
+              {exporting ? 'Exporting...' : 'Export Sessions (CSV)'}
+            </button>
+            <button
+              onClick={async () => {
+                const today = new Date().toISOString().slice(0, 10);
+                const weekAgo = new Date(Date.now() - 6 * 86400000).toISOString().slice(0, 10);
+                try { await api.report(weekAgo, today); }
+                catch (e) { alert('Report failed'); }
+              }}
+              className="flex items-center gap-2 bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-sm text-gray-300 hover:bg-gray-700 transition-colors"
+            >
+              <FileText size={14} />
+              Download Weekly Report (MD)
+            </button>
+          </div>
         </div>
       </div>
     </div>

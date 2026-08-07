@@ -31,6 +31,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/efficiency", axum::routing::get(data::efficiency))
         .route("/goals", axum::routing::get(data::get_goals))
         .route("/goals", axum::routing::put(data::put_goals))
+        .route("/report", axum::routing::get(data::report))
         .route("/categories", axum::routing::get(data::get_categories))
         .route("/categories", axum::routing::put(data::put_categories))
         .route("/ai/models", axum::routing::get(ai::ai_models))
