@@ -127,29 +127,35 @@ export default function Settings() {
     }
   };
 
-  const aiProviderNames = aiInfo ? Object.keys(aiInfo.providers) : [];
+  const handleAddCategory = () => {
+    setCategoryRules([...categoryRules, { pattern: '', category: 'other', priority: 0 }]);
+  };
+
+  const handleDeleteCategory = (idx: number) => {
+    setCategoryRules(categoryRules.filter((_, i) => i !== idx));
+  };
+
+  const handleUpdateCategory = (idx: number, field: 'pattern' | 'category', value: string) => {
+    setCategoryRules(categoryRules.map((r, i) => (i === idx ? { ...r, [field]: value } : r)));
+  };
 
   const handleSaveCategories = async () => {
     setSavingCategories(true);
     setCategoryMsg('');
     try {
-      const clean = categoryRules
-        .filter((r) => r.pattern.trim() && r.category.trim())
-        .map((r) => ({ pattern: r.pattern.trim(), category: r.category.trim(), priority: r.priority ?? 0 }));
-      await api.putCategories(clean);
-      setCategoryMsg('Saved');
+      const rules = categoryRules.filter((r) => r.pattern.trim());
+      await api.putCategories(rules);
       const fresh = await api.categories();
       setCategoryRules(fresh.rules);
+      setCategoryMsg('Saved');
     } catch (e) {
-      setCategoryMsg('Save failed: ' + (e instanceof Error ? e.message : 'Unknown error'));
+      setCategoryMsg('Save failed');
     } finally {
       setSavingCategories(false);
     }
   };
 
-  const updateRule = (i: number, patch: Partial<CategoryRule>) => {
-    setCategoryRules((prev) => prev.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
-  };
+  const aiProviderNames = aiInfo ? Object.keys(aiInfo.providers) : [];
 
   return (
     <div className="space-y-6 max-w-2xl">
@@ -330,63 +336,47 @@ export default function Settings() {
         </div>
 
         <div className="border-t border-gray-800 pt-4">
-          <h3 className="text-sm font-medium text-gray-400 mb-3">Data Export</h3>
-          <button
-            onClick={handleExport}
-            disabled={exporting}
-            className="flex items-center gap-2 bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-sm text-gray-300 hover:bg-gray-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <Download size={14} />
-            {exporting ? 'Exporting...' : 'Export Sessions (CSV)'}
-          </button>
-        </div>
-
-        <div className="border-t border-gray-800 pt-4">
           <h3 className="text-sm font-medium text-gray-400 mb-3 flex items-center gap-2">
-            <Tags size={14} /> App Categories
+            <Tags size={14} />
+            App Categories
           </h3>
-          <p className="text-xs text-gray-500 mb-3">
-            Classify apps by window class pattern (<code>%</code> = any sequence, <code>_</code> = one char,
-            case-insensitive). Used for efficiency scoring, reports and AI analysis.
-          </p>
-          <div className="space-y-2">
+          <p className="text-xs text-gray-500 mb-3">Classify apps by class name pattern (SQL LIKE: % matches anything). Higher items take priority.</p>
+          <div className="space-y-2 mb-4">
             {categoryRules.map((rule, i) => (
-              <div key={rule.id ?? `new-${i}`} className="flex items-center gap-2">
+              <div key={i} className="flex items-center gap-2">
                 <input
                   type="text"
                   value={rule.pattern}
-                  onChange={(e) => updateRule(i, { pattern: e.target.value })}
-                  placeholder="e.g. minecraft%"
-                  className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-200 placeholder-gray-500 focus:ring-cyan-500 focus:border-cyan-500 font-mono"
+                  onChange={(e) => handleUpdateCategory(i, 'pattern', e.target.value)}
+                  placeholder="kitty"
+                  className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-2 py-1 text-xs text-gray-200 placeholder-gray-500 focus:ring-cyan-500"
                 />
                 <select
                   value={rule.category}
-                  onChange={(e) => updateRule(i, { category: e.target.value })}
-                  className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-sm text-gray-200 focus:ring-cyan-500"
+                  onChange={(e) => handleUpdateCategory(i, 'category', e.target.value)}
+                  className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1 text-xs text-gray-200 focus:ring-cyan-500"
                 >
                   {categoryNames.map((c) => (
                     <option key={c} value={c}>{c}</option>
                   ))}
                 </select>
                 <button
-                  onClick={() => setCategoryRules((prev) => prev.filter((_, idx) => idx !== i))}
-                  className="p-1.5 rounded hover:bg-gray-700 text-gray-400 hover:text-red-400 transition-colors"
-                  title="Delete rule"
+                  onClick={() => handleDeleteCategory(i)}
+                  className="p-1 text-gray-500 hover:text-red-400 transition-colors"
                 >
-                  <Trash2 size={14} />
+                  <Trash2 size={12} />
                 </button>
               </div>
             ))}
-            <button
-              onClick={() =>
-                setCategoryRules((prev) => [...prev, { pattern: '', category: 'other', priority: 0 }])
-              }
-              className="flex items-center gap-1.5 text-xs text-cyan-400 hover:text-cyan-300 transition-colors"
-            >
-              <Plus size={12} /> Add rule
-            </button>
           </div>
-          <div className="flex items-center gap-3 mt-3">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={handleAddCategory}
+              className="flex items-center gap-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-1 text-xs text-gray-300 hover:bg-gray-700 transition-colors"
+            >
+              <Plus size={12} />
+              Add Rule
+            </button>
             <button
               onClick={handleSaveCategories}
               disabled={savingCategories}
@@ -401,6 +391,18 @@ export default function Settings() {
               </span>
             )}
           </div>
+        </div>
+
+        <div className="border-t border-gray-800 pt-4">
+          <h3 className="text-sm font-medium text-gray-400 mb-3">Data Export</h3>
+          <button
+            onClick={handleExport}
+            disabled={exporting}
+            className="flex items-center gap-2 bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-sm text-gray-300 hover:bg-gray-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Download size={14} />
+            {exporting ? 'Exporting...' : 'Export Sessions (CSV)'}
+          </button>
         </div>
       </div>
     </div>
