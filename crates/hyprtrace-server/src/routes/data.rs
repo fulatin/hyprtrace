@@ -436,6 +436,19 @@ pub async fn predict(
     }
 }
 
+pub async fn current_status(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<crate::models::CurrentStatus>, Json<serde_json::Value>> {
+    let db = state.db.lock().await;
+    match db.current_status() {
+        Ok(s) => Ok(Json(s)),
+        Err(e) => {
+            log::error!("Failed to get current status: {}", e);
+            Err(Json(serde_json::json!({"error": "Internal server error"})))
+        }
+    }
+}
+
 pub async fn report(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ReportQuery>,

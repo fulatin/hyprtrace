@@ -148,3 +148,14 @@ pub struct TrendPrediction {
     pub slope: f64,
     pub window_days: i64,
 }
+
+#[derive(Debug, Serialize)]
+pub struct CurrentStatus {
+    pub current_app: String,
+    pub current_session_min: i64,
+    pub today_ms: i64,
+    pub today_focused_ms: i64,
+    pub today_pct_goal: f64,
+    pub goal_name: Option<String>,
+    pub efficiency_score: Option<i64>,
+}
