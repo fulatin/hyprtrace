@@ -449,6 +449,30 @@ pub async fn current_status(
     }
 }
 
+#[derive(Deserialize)]
+pub struct WorkspaceQuery {
+    #[serde(default = "default_ws_days")]
+    pub days: i64,
+}
+
+fn default_ws_days() -> i64 {
+    14
+}
+
+pub async fn workspace_recommendations(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<WorkspaceQuery>,
+) -> Result<Json<Vec<crate::models::WorkspaceRecommendation>>, Json<serde_json::Value>> {
+    let db = state.db.lock().await;
+    match db.workspace_recommendations(query.days) {
+        Ok(r) => Ok(Json(r)),
+        Err(e) => {
+            log::error!("Failed to compute workspace recommendations: {}", e);
+            Err(Json(serde_json::json!({"error": "Internal server error"})))
+        }
+    }
+}
+
 pub async fn report(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ReportQuery>,

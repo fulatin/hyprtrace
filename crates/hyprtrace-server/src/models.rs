@@ -159,3 +159,13 @@ pub struct CurrentStatus {
     pub goal_name: Option<String>,
     pub efficiency_score: Option<i64>,
 }
+
+#[derive(Debug, Serialize)]
+pub struct WorkspaceRecommendation {
+    pub app: String,
+    pub workspace: String,
+    pub time_pct: f64,
+    pub session_count: i64,
+    pub total_ms: i64,
+    pub confidence: String,
+}

@@ -43,6 +43,11 @@ pub fn all_tools() -> Vec<ToolDef> {
             description: "List the app categorization rules (pattern -> category) used to classify apps into development/browsing/gaming/etc.",
             parameters: empty_params(),
         },
+        ToolDef {
+            name: "workspace_recommendations",
+            description: "Analyze the last 14 days of sessions and recommend which workspace each app should be assigned to (where the user spends the most time per app).",
+            parameters: empty_params(),
+        },
         // ---- Write/action tools (mutate goals, fire desktop notifications) ----
         ToolDef {
             name: "get_goals",
@@ -293,6 +298,10 @@ pub async fn execute_tool(
         "get_app_categories" => {
             let rules = db.lock().await.categories()?;
             Ok(serde_json::to_value(rules)?)
+        }
+        "workspace_recommendations" => {
+            let r = db.lock().await.workspace_recommendations(14)?;
+            Ok(serde_json::to_value(r)?)
         }
         "get_goals" => {
             let db = db.lock().await;
