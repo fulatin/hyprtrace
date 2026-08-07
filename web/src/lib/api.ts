@@ -147,4 +147,11 @@ export const api = {
     a.click();
     URL.revokeObjectURL(url);
   },
+
+  weeklyReport: (provider: string, model?: string) =>
+    fetchJSON<{ report: string }>('/api/ai/report/weekly', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider, model }),
+    }),
 };

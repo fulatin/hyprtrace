@@ -40,6 +40,84 @@ pub async fn ai_tools() -> Json<serde_json::Value> {
     }))
 }
 
+#[derive(Deserialize)]
+pub struct WeeklyReportRequest {
+    pub provider: Option<String>,
+    pub model: Option<String>,
+}
+
+/// POST /api/ai/report/weekly — ask the AI to write an insightful weekly report
+/// from the last 7 days of usage data. Returns Markdown.
+pub async fn ai_weekly_report(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<WeeklyReportRequest>,
+) -> Result<Json<serde_json::Value>, Json<serde_json::Value>> {
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let from = (chrono::Utc::now() - chrono::Duration::days(6)).format("%Y-%m-%d").to_string();
+
+    // Snapshot data without holding the lock across the AI call.
+    let snapshot = {
+        let db = state.db.lock().await;
+        let mut parts = Vec::new();
+        if let Ok(summary) = db.report(&from, &today) {
+            parts.push(summary);
+        }
+        if let Ok(goals) = db.goal_progress() {
+            let gs: Vec<String> = goals
+                .iter()
+                .map(|p| {
+                    format!(
+                        "{}: {}% ({}/{} target)",
+                        p.goal.name,
+                        p.pct.round(),
+                        p.today_ms,
+                        p.goal.daily_target_ms
+                    )
+                })
+                .collect();
+            if !gs.is_empty() {
+                parts.push(format!("Today's goals progress:\n{}", gs.join("\n")));
+            }
+        }
+        if let Ok(pred) = db.predict(14) {
+            parts.push(format!(
+                "Trend: daily avg {:.1}h, tomorrow projected {:.1}h",
+                pred.daily_avg_ms as f64 / 3_600_000.0,
+                pred.predicted_tomorrow_ms as f64 / 3_600_000.0
+            ));
+        }
+        parts.join("\n\n")
+    };
+
+    let prompt = format!(
+        "You are HyprTrace's analytics reporter. Below is raw usage data for the last week. \
+         Write a well-structured Markdown weekly report in the user's language (Chinese if the \
+         data suggests Chinese, otherwise English). Include: 1) a summary headline, 2) key \
+         stats, 3) 2-3 specific insights about their habits, 4) 2-3 concrete suggestions. \
+         Be honest and specific. Keep it under 500 words.\n\nDATA:\n{}",
+        snapshot
+    );
+
+    let messages = vec![
+        crate::ai::ChatMessage::new("system", "You are a concise analytics reporter."),
+        crate::ai::ChatMessage::new("user", prompt),
+    ];
+
+    let (provider_name, ai) = {
+        let ai = state.ai.lock().await;
+        let p = req.provider.clone().unwrap_or_else(|| ai.default_provider.clone());
+        (p, ai)
+    };
+    let reply = match ai.chat(&provider_name, req.model.as_deref(), &messages).await {
+        Ok(r) => r,
+        Err(e) => {
+            log::error!("AI weekly report failed: {}", e);
+            return Err(Json(json!({"error": format!("AI error: {}", e)})));
+        }
+    };
+    Ok(Json(json!({ "report": reply })))
+}
+
 pub async fn ai_conversations(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<AiMessage>>, Json<serde_json::Value>> {

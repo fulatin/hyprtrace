@@ -41,6 +41,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/ai/chat/stream", axum::routing::post(ai::chat_stream))
         .route("/ai/chat/stream/text", axum::routing::post(ai::chat_stream_text))
         .route("/ai/chat/agent", axum::routing::post(ai::chat_agent))
+        .route("/ai/report/weekly", axum::routing::post(ai::ai_weekly_report))
         .route("/ai/conversations", axum::routing::get(ai::ai_conversations))
         .route("/ai/conversations", axum::routing::delete(ai::clear_conversations))
         .route("/config", axum::routing::get(config::get_config))

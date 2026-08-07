@@ -97,6 +97,20 @@ export default function AIChat() {
     [sendMessage],
   );
 
+  const [reportLoading, setReportLoading] = useState(false);
+
+  const handleWeeklyReport = async () => {
+    setReportLoading(true);
+    try {
+      const res = await api.weeklyReport(selectedProvider, selectedModel || undefined);
+      handleSend(res.report || 'Weekly report generated');
+    } catch (e) {
+      alert('Weekly report failed: ' + (e instanceof Error ? e.message : 'Unknown error'));
+    } finally {
+      setReportLoading(false);
+    }
+  };
+
   useEffect(() => {
     api
       .aiModels()
@@ -228,6 +242,14 @@ export default function AIChat() {
           AI Analysis
         </h2>
         <div className="flex items-center gap-3">
+          <button
+            onClick={handleWeeklyReport}
+            disabled={reportLoading}
+            className="flex items-center gap-1.5 bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-700 transition-colors disabled:opacity-50"
+          >
+            <Sparkles size={12} className="text-cyan-400" />
+            {reportLoading ? 'Generating...' : 'Weekly Report'}
+          </button>
           <select
             value={dateRange}
             onChange={(e) => setDateRange(e.target.value)}
