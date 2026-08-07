@@ -37,6 +37,14 @@ export interface AppResource {
   sample_count: number;
 }
 
+export interface DisruptionEvent {
+  id: number;
+  kind: string;
+  app: string | null;
+  summary: string | null;
+  occurred_at: string;
+}
+
 export interface HourlyBucket {
   hour: number;
   total_ms: number;

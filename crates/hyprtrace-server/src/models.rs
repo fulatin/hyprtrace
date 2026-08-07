@@ -96,3 +96,12 @@ pub struct ActivityEvent {
     pub ended_at: Option<String>,
     pub duration_ms: Option<i64>,
 }
+
+#[derive(Debug, Serialize)]
+pub struct DisruptionEvent {
+    pub id: i64,
+    pub kind: String,
+    pub app: Option<String>,
+    pub summary: Option<String>,
+    pub occurred_at: String,
+}

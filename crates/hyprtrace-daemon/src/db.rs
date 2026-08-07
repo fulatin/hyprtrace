@@ -64,6 +64,23 @@ impl Database {
 
         self.migrate_v2()?;
         self.migrate_v3()?;
+        self.migrate_v4()?;
+        Ok(())
+    }
+
+    fn migrate_v4(&self) -> anyhow::Result<()> {
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS disruptions (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                kind       TEXT NOT NULL,
+                app        TEXT,
+                summary    TEXT,
+                occurred_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_disruptions_at ON disruptions(occurred_at);
+            CREATE INDEX IF NOT EXISTS idx_disruptions_kind ON disruptions(kind);",
+        )?;
         Ok(())
     }
 
@@ -386,6 +403,24 @@ impl Database {
                 cpu_pct,
                 mem_kb
             ],
+        )?;
+        Ok(())
+    }
+
+    /// Record a desktop notification (an interruption).
+    pub fn save_notification(&self, app: &str, summary: &str) -> anyhow::Result<()> {
+        self.conn.execute(
+            "INSERT INTO disruptions (kind, app, summary, occurred_at) VALUES ('notification', ?1, ?2, ?3)",
+            params![app, summary, chrono::Utc::now().to_rfc3339()],
+        )?;
+        Ok(())
+    }
+
+    /// Record a clipboard copy event.
+    pub fn save_clipboard(&self) -> anyhow::Result<()> {
+        self.conn.execute(
+            "INSERT INTO disruptions (kind, occurred_at) VALUES ('clipboard', ?1)",
+            params![chrono::Utc::now().to_rfc3339()],
         )?;
         Ok(())
     }

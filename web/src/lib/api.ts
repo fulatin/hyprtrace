@@ -14,6 +14,7 @@ import type {
   CategoryRule,
   CategoriesResponse,
   AppResource,
+  DisruptionEvent,
 } from './types';
 
 async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
@@ -107,5 +108,10 @@ export const api = {
   resources: (from: string, to: string, limit = 10) =>
     fetchJSON<AppResource[]>(
       `/api/resources?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&limit=${limit}`
+    ),
+
+  disruptions: (from: string, to: string, limit = 50) =>
+    fetchJSON<DisruptionEvent[]>(
+      `/api/disruptions?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&limit=${limit}`
     ),
 };

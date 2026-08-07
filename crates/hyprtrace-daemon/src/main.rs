@@ -1,5 +1,6 @@
 mod config;
 mod db;
+mod disruption_monitor;
 mod idle_monitor;
 mod input_monitor;
 mod listener;
@@ -39,6 +40,8 @@ fn main() -> anyhow::Result<()> {
     }
 
     resource_monitor::spawn_resource_monitor(db.clone(), 30);
+
+    let _disruption_monitor = disruption_monitor::DisruptionMonitor::start(db.clone());
 
     let (tx, rx) = std::sync::mpsc::channel();
     let db_shutdown = db.clone();

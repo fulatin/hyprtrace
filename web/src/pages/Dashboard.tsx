@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { format } from 'date-fns';
-import { Clock, AppWindow, Hash, Moon, BrainCircuit } from 'lucide-react';
+import { Clock, AppWindow, Hash, Moon, BrainCircuit, BellRing, Copy } from 'lucide-react';
 import { api } from '../lib/api';
-import type { TodaySummary, HourlyBucket } from '../lib/types';
+import type { TodaySummary, HourlyBucket, DisruptionEvent } from '../lib/types';
 import StatCard from '../components/StatCard';
 import AppUsagePie from '../components/AppUsagePie';
 import HourlyHeatmap from '../components/HourlyHeatmap';
@@ -19,6 +19,7 @@ export default function Dashboard() {
   const today = format(new Date(), 'yyyy-MM-dd');
   const [summary, setSummary] = useState<TodaySummary | null>(null);
   const [timeline, setTimeline] = useState<HourlyBucket[]>([]);
+  const [disruptions, setDisruptions] = useState<DisruptionEvent[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -26,9 +27,11 @@ export default function Dashboard() {
     Promise.all([
       api.summary(today).catch(() => null),
       api.timeline(today).catch(() => []),
-    ]).then(([s, t]) => {
+      api.disruptions(today, today, 30).catch(() => []),
+    ]).then(([s, t, d]) => {
       setSummary(s);
       setTimeline(t);
+      setDisruptions(d);
       setLoading(false);
     });
   }, [today]);
@@ -71,6 +74,37 @@ export default function Dashboard() {
         <AppUsagePie data={summary?.top_apps ?? []} />
         <HourlyHeatmap data={timeline} />
       </div>
+
+      {disruptions.length > 0 && (
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 animate-fadeInUp" style={{ animationDelay: "300ms" }}>
+          <h3 className="text-sm font-medium text-gray-400 flex items-center gap-2 mb-3">
+            <BellRing size={14} className="text-amber-400" />
+            Today's Interruptions
+            <span className="text-xs text-gray-500">
+              {disruptions.filter((d) => d.kind === 'notification').length} notifications · {disruptions.filter((d) => d.kind === 'clipboard').length} copies
+            </span>
+          </h3>
+          <div className="space-y-1.5 max-h-64 overflow-auto">
+            {disruptions.slice(0, 12).map((d) => (
+              <div key={d.id} className="flex items-center gap-2 text-sm">
+                {d.kind === 'notification' ? (
+                  <BellRing size={12} className="text-amber-400 shrink-0" />
+                ) : (
+                  <Copy size={12} className="text-cyan-400 shrink-0" />
+                )}
+                <span className="text-gray-300 truncate">
+                  {d.kind === 'notification'
+                    ? `${d.app ?? 'unknown'}: ${d.summary ?? ''}`
+                    : 'Clipboard copy'}
+                </span>
+                <span className="text-xs text-gray-500 ml-auto shrink-0">
+                  {new Date(d.occurred_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

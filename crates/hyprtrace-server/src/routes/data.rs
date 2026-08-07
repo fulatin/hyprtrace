@@ -303,8 +303,7 @@ pub async fn rebuild_hourly_summary(
 pub async fn resources(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ResourceQuery>,
-) -> Result<Json<Vec<crate::models::AppResource>>, Json<serde_json::Value>> {
-    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+) -> Result<Json<Vec<crate::models::AppResource>>, Json<serde_json::Value>> {    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
     let from = query.from.unwrap_or_else(|| today.clone());
     let to = query.to.unwrap_or(today);
     let limit = query.limit.clamp(1, 50);
@@ -314,6 +313,33 @@ pub async fn resources(
         Ok(stats) => Ok(Json(stats)),
         Err(e) => {
             log::error!("Failed to get resource stats: {}", e);
+            Err(Json(serde_json::json!({"error": "Internal server error"})))
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct DisruptionQuery {
+    pub from: Option<String>,
+    pub to: Option<String>,
+    #[serde(default = "default_limit")]
+    pub limit: usize,
+}
+
+pub async fn disruptions(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<DisruptionQuery>,
+) -> Result<Json<Vec<crate::models::DisruptionEvent>>, Json<serde_json::Value>> {
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let from = query.from.unwrap_or_else(|| today.clone());
+    let to = query.to.unwrap_or(today);
+    let limit = query.limit.clamp(1, 200);
+
+    let db = state.db.lock().await;
+    match db.disruptions(&from, &to, limit) {
+        Ok(events) => Ok(Json(events)),
+        Err(e) => {
+            log::error!("Failed to get disruptions: {}", e);
             Err(Json(serde_json::json!({"error": "Internal server error"})))
         }
     }
