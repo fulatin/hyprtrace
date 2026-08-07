@@ -1,5 +1,12 @@
-import { useState } from 'react';
-import { Send } from 'lucide-react';
+import { useState, useRef, useCallback, useEffect } from 'react';
+import { Send, Mic, MicOff } from 'lucide-react';
+
+declare global {
+  interface Window {
+    SpeechRecognition?: any;
+    webkitSpeechRecognition?: any;
+  }
+}
 
 interface ChatInputProps {
   onSend: (message: string) => void;
@@ -25,12 +32,61 @@ export default function ChatInput({
   onModelChange,
 }: ChatInputProps) {
   const [message, setMessage] = useState('');
+  const [listening, setListening] = useState(false);
+  const recognitionRef = useRef<any>(null);
 
   const models = providers[selectedProvider] ?? [];
+
+  const speechSupported = typeof window !== 'undefined' && !!(
+    window.SpeechRecognition || window.webkitSpeechRecognition
+  );
+
+  const stopListening = useCallback(() => {
+    if (recognitionRef.current) {
+      try { recognitionRef.current.stop(); } catch {}
+    }
+    recognitionRef.current = null;
+    setListening(false);
+  }, []);
+
+  const toggleListening = () => {
+    if (listening) {
+      stopListening();
+      return;
+    }
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) return;
+    const rec = new SR();
+    recognitionRef.current = rec;
+    rec.continuous = false;
+    rec.interimResults = false;
+    rec.lang = navigator.language || 'en-US';
+    rec.onresult = (e: any) => {
+      const text = e.results?.[0]?.[0]?.transcript ?? '';
+      if (text) {
+        setMessage((prev) => (prev.trim() ? prev + ' ' + text : text));
+      }
+    };
+    rec.onend = () => {
+      setListening(false);
+      recognitionRef.current = null;
+    };
+    rec.onerror = () => {
+      setListening(false);
+      recognitionRef.current = null;
+    };
+    setListening(true);
+    try { rec.start(); } catch {}
+  };
+
+  useEffect(() => {
+    return () => stopListening();
+  }, [stopListening]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (message.trim() && !disabled) {
+      stopListening();
       onSend(message.trim());
       setMessage('');
     }
@@ -86,6 +142,21 @@ export default function ChatInput({
           disabled={disabled}
           className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-sm text-gray-200 placeholder-gray-500 focus:ring-cyan-500 focus:border-cyan-500 disabled:opacity-50"
         />
+        {speechSupported && (
+          <button
+            type="button"
+            onClick={toggleListening}
+            disabled={disabled}
+            title={listening ? 'Stop listening' : 'Voice input'}
+            className={`rounded-lg px-3 py-2 text-sm transition-colors border ${
+              listening
+                ? 'bg-red-600/20 border-red-500/40 text-red-400 animate-pulse'
+                : 'bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700'
+            } disabled:opacity-50`}
+          >
+            {listening ? <MicOff size={16} /> : <Mic size={16} />}
+          </button>
+        )}
         <button
           type="submit"
           disabled={disabled || !message.trim()}
