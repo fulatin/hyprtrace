@@ -16,6 +16,8 @@ import type {
   AppResource,
   DisruptionEvent,
   EfficiencyScore,
+  Goal,
+  GoalsResponse,
 } from './types';
 
 async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
@@ -118,4 +120,14 @@ export const api = {
 
   efficiency: (date: string) =>
     fetchJSON<EfficiencyScore>(`/api/efficiency?date=${encodeURIComponent(date)}`),
+
+  goals: () =>
+    fetchJSON<GoalsResponse>('/api/goals'),
+
+  putGoals: (goals: Goal[]) =>
+    fetchJSON<{ status: string }>('/api/goals', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ goals }),
+    }),
 };

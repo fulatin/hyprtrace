@@ -8,6 +8,16 @@ pub struct Database {
     focused_threshold_ms: i64,
 }
 
+#[derive(Debug, Clone)]
+pub struct Goal {
+    pub id: Option<i64>,
+    pub name: String,
+    pub target_type: String, // "all" | "class"
+    pub target_key: Option<String>,
+    pub daily_target_ms: i64,
+    pub enabled: bool,
+}
+
 impl Database {
     pub fn open(path: &Path, focused_threshold_seconds: u64) -> anyhow::Result<Self> {
         if let Some(parent) = path.parent() {
@@ -65,6 +75,21 @@ impl Database {
         self.migrate_v2()?;
         self.migrate_v3()?;
         self.migrate_v4()?;
+        self.migrate_v5()?;
+        Ok(())
+    }
+
+    fn migrate_v5(&self) -> anyhow::Result<()> {
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS goals (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                name            TEXT NOT NULL,
+                target_type     TEXT NOT NULL DEFAULT 'all',
+                target_key      TEXT,
+                daily_target_ms INTEGER NOT NULL,
+                enabled         INTEGER NOT NULL DEFAULT 1
+            );",
+        )?;
         Ok(())
     }
 
@@ -423,6 +448,80 @@ impl Database {
             params![chrono::Utc::now().to_rfc3339()],
         )?;
         Ok(())
+    }
+
+    pub fn goals(&self) -> anyhow::Result<Vec<Goal>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, target_type, target_key, daily_target_ms, enabled FROM goals",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(Goal {
+                id: Some(row.get(0)?),
+                name: row.get(1)?,
+                target_type: row.get(2)?,
+                target_key: row.get(3)?,
+                daily_target_ms: row.get(4)?,
+                enabled: row.get::<_, i64>(5)? != 0,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn set_goals(&self, goals: &[Goal]) -> anyhow::Result<()> {
+        self.conn.execute("DELETE FROM goals", [])?;
+        let mut stmt = self.conn.prepare(
+            "INSERT INTO goals (name, target_type, target_key, daily_target_ms, enabled)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+        )?;
+        for g in goals {
+            stmt.execute(params![
+                g.name.trim(),
+                g.target_type,
+                g.target_key.as_deref(),
+                g.daily_target_ms,
+                if g.enabled { 1 } else { 0 },
+            ])?;
+        }
+        Ok(())
+    }
+
+    /// Today's active milliseconds for a goal. "all" = total across classes.
+    pub fn today_active_for_goal(&self, goal: &Goal) -> i64 {
+        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let sql = if goal.target_type == "class" {
+            "SELECT COALESCE(SUM(total_ms), 0) FROM daily_summary WHERE date = ?1 AND class = ?2"
+        } else {
+            "SELECT COALESCE(SUM(total_ms), 0) FROM daily_summary WHERE date = ?1"
+        };
+        let params = if goal.target_type == "class" {
+            params![today, goal.target_key.as_deref().unwrap_or("")]
+        } else {
+            params![today]
+        };
+        self.conn
+            .query_row(sql, params, |row| row.get(0))
+            .unwrap_or(0)
+    }
+
+    /// Duration (ms) the current focused session has been running.
+    pub fn current_focused_duration_ms(&self) -> i64 {
+        let result: rusqlite::Result<(String, String)> = self.conn.query_row(
+            "SELECT started_at, activity_state FROM sessions
+             WHERE ended_at IS NULL ORDER BY started_at DESC LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        );
+        match result {
+            Ok((started_at, state)) if state == "focused" => {
+                if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&started_at) {
+                    let dur = chrono::Utc::now().signed_duration_since(dt.with_timezone(&chrono::Utc));
+                    dur.num_milliseconds().max(0)
+                } else {
+                    0
+                }
+            }
+            _ => 0,
+        }
     }
 
     /// Update only the activity_state column, without touching activity_events.

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
-import { Wifi, WifiOff, Download, Save, Key, Globe, Cpu, BarChart3, Tags, Plus, Trash2 } from 'lucide-react';
-import type { AiModelsResponse, CategoryRule, ConfigResponse, Session } from '../lib/types';
+import { Wifi, WifiOff, Download, Save, Key, Globe, Cpu, BarChart3, Tags, Plus, Trash2, Target } from 'lucide-react';
+import type { AiModelsResponse, CategoryRule, ConfigResponse, Goal, Session } from '../lib/types';
 
 export default function Settings() {
   const [status, setStatus] = useState<'online' | 'offline' | 'checking'>('checking');
@@ -23,6 +23,10 @@ export default function Settings() {
   const [categoryNames, setCategoryNames] = useState<string[]>([]);
   const [savingCategories, setSavingCategories] = useState(false);
   const [categoryMsg, setCategoryMsg] = useState('');
+
+  const [goals, setGoals] = useState<Goal[]>([]);
+  const [savingGoals, setSavingGoals] = useState(false);
+  const [goalMsg, setGoalMsg] = useState('');
 
   useEffect(() => {
     api.health()
@@ -51,6 +55,10 @@ export default function Settings() {
         setCategoryRules(res.rules);
         setCategoryNames(res.categories);
       })
+      .catch(() => {});
+
+    api.goals()
+      .then((res) => setGoals(res.goals))
       .catch(() => {});
   }, []);
 
@@ -152,6 +160,32 @@ export default function Settings() {
       setCategoryMsg('Save failed');
     } finally {
       setSavingCategories(false);
+    }
+  };
+
+  const handleAddGoal = () => {
+    setGoals([...goals, { name: '', target_type: 'all', target_key: '', daily_target_ms: 4 * 3600000, enabled: true }]);
+  };
+
+  const handleDeleteGoal = (idx: number) => {
+    setGoals(goals.filter((_, i) => i !== idx));
+  };
+
+  const handleUpdateGoal = (idx: number, field: keyof Goal, value: string | number | boolean) => {
+    setGoals(goals.map((g, i) => (i === idx ? { ...g, [field]: value } : g)));
+  };
+
+  const handleSaveGoals = async () => {
+    setSavingGoals(true);
+    setGoalMsg('');
+    try {
+      const list = goals.filter((g) => g.name.trim());
+      await api.putGoals(list);
+      setGoalMsg('Saved');
+    } catch (e) {
+      setGoalMsg('Save failed');
+    } finally {
+      setSavingGoals(false);
     }
   };
 
@@ -388,6 +422,86 @@ export default function Settings() {
             {categoryMsg && (
               <span className={`text-xs ${categoryMsg === 'Saved' ? 'text-emerald-400' : 'text-red-400'}`}>
                 {categoryMsg}
+              </span>
+            )}
+          </div>
+        </div>
+
+        <div className="border-t border-gray-800 pt-4">
+          <h3 className="text-sm font-medium text-gray-400 mb-3 flex items-center gap-2">
+            <Target size={14} />
+            Daily Goals
+          </h3>
+          <p className="text-xs text-gray-500 mb-3">Set daily active-time targets. The daemon notifies you at 50% and 100% progress, and reminds you to take a break after long focused stretches.</p>
+          <div className="space-y-2 mb-4">
+            {goals.map((goal, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={goal.name}
+                  onChange={(e) => handleUpdateGoal(i, 'name', e.target.value)}
+                  placeholder="Deep work"
+                  className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-2 py-1 text-xs text-gray-200 placeholder-gray-500 focus:ring-cyan-500"
+                />
+                <select
+                  value={goal.target_type}
+                  onChange={(e) => handleUpdateGoal(i, 'target_type', e.target.value)}
+                  className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1 text-xs text-gray-200"
+                >
+                  <option value="all">All apps</option>
+                  <option value="class">Specific app</option>
+                </select>
+                {goal.target_type === 'class' && (
+                  <input
+                    type="text"
+                    value={goal.target_key ?? ''}
+                    onChange={(e) => handleUpdateGoal(i, 'target_key', e.target.value)}
+                    placeholder="kitty"
+                    className="w-24 bg-gray-800 border border-gray-700 rounded-lg px-2 py-1 text-xs text-gray-200"
+                  />
+                )}
+                <input
+                  type="number"
+                  value={Math.round((goal.daily_target_ms || 0) / 3600000)}
+                  onChange={(e) => handleUpdateGoal(i, 'daily_target_ms', Number(e.target.value) * 3600000)}
+                  min={1}
+                  className="w-16 bg-gray-800 border border-gray-700 rounded-lg px-2 py-1 text-xs text-gray-200"
+                />
+                <span className="text-xs text-gray-500">h</span>
+                <input
+                  type="checkbox"
+                  checked={goal.enabled}
+                  onChange={(e) => handleUpdateGoal(i, 'enabled', e.target.checked)}
+                  className="accent-cyan-500"
+                />
+                <button
+                  onClick={() => handleDeleteGoal(i)}
+                  className="p-1 text-gray-500 hover:text-red-400 transition-colors"
+                >
+                  <Trash2 size={12} />
+                </button>
+              </div>
+            ))}
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={handleAddGoal}
+              className="flex items-center gap-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-1 text-xs text-gray-300 hover:bg-gray-700 transition-colors"
+            >
+              <Plus size={12} />
+              Add Goal
+            </button>
+            <button
+              onClick={handleSaveGoals}
+              disabled={savingGoals}
+              className="flex items-center gap-2 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white rounded-lg px-4 py-2 text-sm transition-colors"
+            >
+              <Save size={14} />
+              {savingGoals ? 'Saving...' : 'Save Goals'}
+            </button>
+            {goalMsg && (
+              <span className={`text-xs ${goalMsg === 'Saved' ? 'text-emerald-400' : 'text-red-400'}`}>
+                {goalMsg}
               </span>
             )}
           </div>

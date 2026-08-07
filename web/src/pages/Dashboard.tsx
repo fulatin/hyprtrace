@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { format } from 'date-fns';
-import { Clock, AppWindow, Hash, Moon, BrainCircuit, BellRing, Copy, Gauge } from 'lucide-react';
+import { Clock, AppWindow, Hash, Moon, BrainCircuit, BellRing, Copy, Gauge, Target } from 'lucide-react';
 import { api } from '../lib/api';
-import type { TodaySummary, HourlyBucket, DisruptionEvent, EfficiencyScore } from '../lib/types';
+import type { TodaySummary, HourlyBucket, DisruptionEvent, EfficiencyScore, GoalProgress } from '../lib/types';
 import StatCard from '../components/StatCard';
 import AppUsagePie from '../components/AppUsagePie';
 import HourlyHeatmap from '../components/HourlyHeatmap';
@@ -21,6 +21,7 @@ export default function Dashboard() {
   const [timeline, setTimeline] = useState<HourlyBucket[]>([]);
   const [disruptions, setDisruptions] = useState<DisruptionEvent[]>([]);
   const [efficiency, setEfficiency] = useState<EfficiencyScore | null>(null);
+  const [goalProgress, setGoalProgress] = useState<GoalProgress[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -30,11 +31,13 @@ export default function Dashboard() {
       api.timeline(today).catch(() => []),
       api.disruptions(today, today, 30).catch(() => []),
       api.efficiency(today).catch(() => null),
-    ]).then(([s, t, d, e]) => {
+      api.goals().catch(() => ({ goals: [], progress: [] })),
+    ]).then(([s, t, d, e, g]) => {
       setSummary(s);
       setTimeline(t);
       setDisruptions(d);
       setEfficiency(e);
+      setGoalProgress(g.progress ?? []);
       setLoading(false);
     });
   }, [today]);
@@ -73,6 +76,31 @@ export default function Dashboard() {
           </div>
         ))}
       </div>
+
+      {goalProgress.length > 0 && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 animate-fadeInUp" style={{ animationDelay: "150ms" }}>
+          {goalProgress.map((p) => (
+            <div key={p.goal.id ?? p.goal.name} className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm font-medium flex items-center gap-2">
+                  <Target size={14} className="text-cyan-400" />
+                  {p.goal.name}
+                </span>
+                <span className="text-xs text-gray-400">{Math.round(p.pct)}%</span>
+              </div>
+              <div className="w-full h-2 bg-gray-800 rounded-full overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-all duration-500 ${p.pct >= 100 ? 'bg-emerald-500' : 'bg-cyan-500'}`}
+                  style={{ width: `${Math.min(p.pct, 100)}%` }}
+                />
+              </div>
+              <div className="mt-2 text-xs text-gray-500">
+                {Math.round(p.today_ms / 3600000)}h {Math.round((p.today_ms % 3600000) / 60000)}m / {Math.round((p.goal.daily_target_ms || 0) / 3600000)}h
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className="grid grid-cols-2 gap-4 animate-fadeInUp" style={{ animationDelay: "200ms" }}>
         <AppUsagePie data={summary?.top_apps ?? []} />

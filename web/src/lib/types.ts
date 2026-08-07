@@ -55,6 +55,26 @@ export interface EfficiencyScore {
   total_active_ms: number;
 }
 
+export interface Goal {
+  id?: number | null;
+  name: string;
+  target_type: string;
+  target_key?: string | null;
+  daily_target_ms: number;
+  enabled: boolean;
+}
+
+export interface GoalProgress {
+  goal: Goal;
+  today_ms: number;
+  pct: number;
+}
+
+export interface GoalsResponse {
+  goals: Goal[];
+  progress: GoalProgress[];
+}
+
 export interface HourlyBucket {
   hour: number;
   total_ms: number;

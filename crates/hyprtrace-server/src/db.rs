@@ -1,6 +1,6 @@
 use crate::models::{
     ActivityEvent, AiMessage, AppRank, AppResource, CategoryRule, DailyTrend, DisruptionEvent,
-    EfficiencyScore, HourlyBucket, Session, TodaySummary,
+    EfficiencyScore, Goal, GoalProgress, HourlyBucket, Session, TodaySummary,
 };
 use anyhow::Context;
 use chrono::Timelike;
@@ -386,6 +386,78 @@ impl Database {
             disruption_count,
             total_active_ms,
         })
+    }
+
+    pub fn goals(&self) -> anyhow::Result<Vec<Goal>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, target_type, target_key, daily_target_ms, enabled FROM goals",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(Goal {
+                id: Some(row.get(0)?),
+                name: row.get(1)?,
+                target_type: row.get(2)?,
+                target_key: row.get(3)?,
+                daily_target_ms: row.get(4)?,
+                enabled: row.get::<_, i64>(5)? != 0,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn set_goals(&self, goals: &[Goal]) -> anyhow::Result<()> {
+        self.conn.execute("DELETE FROM goals", [])?;
+        let mut stmt = self.conn.prepare(
+            "INSERT INTO goals (name, target_type, target_key, daily_target_ms, enabled)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+        )?;
+        for g in goals {
+            stmt.execute(params![
+                g.name.trim(),
+                g.target_type,
+                g.target_key.as_deref(),
+                g.daily_target_ms,
+                if g.enabled { 1 } else { 0 },
+            ])?;
+        }
+        Ok(())
+    }
+
+    /// Compute today's progress toward each goal.
+    pub fn goal_progress(&self) -> anyhow::Result<Vec<GoalProgress>> {
+        let goals = self.goals()?;
+        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let mut out = Vec::new();
+        for goal in goals {
+            let today_ms = if goal.target_type == "class" {
+                self.conn
+                    .query_row(
+                        "SELECT COALESCE(SUM(total_ms), 0) FROM daily_summary WHERE date = ?1 AND class = ?2",
+                        params![today, goal.target_key.as_deref().unwrap_or("")],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .unwrap_or(0)
+            } else {
+                self.conn
+                    .query_row(
+                        "SELECT COALESCE(SUM(total_ms), 0) FROM daily_summary WHERE date = ?1",
+                        params![today],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .unwrap_or(0)
+            };
+            let pct = if goal.daily_target_ms > 0 {
+                (today_ms as f64 / goal.daily_target_ms as f64) * 100.0
+            } else {
+                0.0
+            };
+            out.push(GoalProgress {
+                goal,
+                today_ms,
+                pct,
+            });
+        }
+        Ok(out)
     }
 
     pub fn hourly_breakdown(&self, date: &str) -> anyhow::Result<Vec<HourlyBucket>> {

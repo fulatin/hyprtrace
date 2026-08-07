@@ -364,3 +364,44 @@ pub async fn efficiency(
         }
     }
 }
+
+#[derive(Serialize)]
+pub struct GoalsResponse {
+    pub goals: Vec<crate::models::Goal>,
+    pub progress: Vec<crate::models::GoalProgress>,
+}
+
+#[derive(Deserialize)]
+pub struct GoalsUpdate {
+    pub goals: Vec<crate::models::Goal>,
+}
+
+pub async fn get_goals(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<GoalsResponse>, Json<serde_json::Value>> {
+    let db = state.db.lock().await;
+    match db.goal_progress() {
+        Ok(progress) => {
+            let goals = progress.iter().map(|p| p.goal.clone()).collect();
+            Ok(Json(GoalsResponse { goals, progress }))
+        }
+        Err(e) => {
+            log::error!("Failed to load goals: {}", e);
+            Err(Json(serde_json::json!({"error": "Internal server error"})))
+        }
+    }
+}
+
+pub async fn put_goals(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<GoalsUpdate>,
+) -> Result<Json<serde_json::Value>, Json<serde_json::Value>> {
+    let db = state.db.lock().await;
+    match db.set_goals(&req.goals) {
+        Ok(()) => Ok(Json(serde_json::json!({"status": "ok"}))),
+        Err(e) => {
+            log::error!("Failed to save goals: {}", e);
+            Err(Json(serde_json::json!({"error": "Internal server error"})))
+        }
+    }
+}

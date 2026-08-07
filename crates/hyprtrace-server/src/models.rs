@@ -116,3 +116,25 @@ pub struct EfficiencyScore {
     pub disruption_count: i64,
     pub total_active_ms: i64,
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Goal {
+    pub id: Option<i64>,
+    pub name: String,
+    pub target_type: String,
+    pub target_key: Option<String>,
+    pub daily_target_ms: i64,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Serialize)]
+pub struct GoalProgress {
+    pub goal: Goal,
+    pub today_ms: i64,
+    pub pct: f64,
+}

@@ -1,6 +1,7 @@
 mod config;
 mod db;
 mod disruption_monitor;
+mod goal_monitor;
 mod idle_monitor;
 mod input_monitor;
 mod listener;
@@ -40,6 +41,8 @@ fn main() -> anyhow::Result<()> {
     }
 
     resource_monitor::spawn_resource_monitor(db.clone(), 30);
+
+    goal_monitor::spawn_goal_monitor(db.clone(), 300, cfg.daemon.break_after_minutes);
 
     let _disruption_monitor = disruption_monitor::DisruptionMonitor::start(db.clone());
 
