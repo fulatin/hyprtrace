@@ -43,6 +43,46 @@ pub fn all_tools() -> Vec<ToolDef> {
             description: "List the app categorization rules (pattern -> category) used to classify apps into development/browsing/gaming/etc.",
             parameters: empty_params(),
         },
+        // ---- Write/action tools (mutate goals, fire desktop notifications) ----
+        ToolDef {
+            name: "get_goals",
+            description: "List the user's daily usage goals (name, scope, target hours, enabled) with today's progress.",
+            parameters: empty_params(),
+        },
+        ToolDef {
+            name: "set_goal",
+            description: "Create or update a daily usage goal. Replace all existing goals with the given list. target_type is 'all' or 'class'; target_key is the app class when type is 'class'; daily_target_ms is milliseconds.",
+            parameters: obj_params(
+                json!({
+                    "goals": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string"},
+                                "target_type": {"type": "string", "enum": ["all", "class"]},
+                                "target_key": {"type": "string"},
+                                "daily_target_ms": {"type": "integer"},
+                                "enabled": {"type": "boolean"}
+                            },
+                            "required": ["name", "target_type", "daily_target_ms"]
+                        }
+                    }
+                }),
+                &["goals"],
+            ),
+        },
+        ToolDef {
+            name: "send_reminder",
+            description: "Send a desktop notification to the user with a title and message (e.g. a productivity tip or caution).",
+            parameters: obj_params(
+                json!({
+                    "title": {"type": "string"},
+                    "message": {"type": "string"}
+                }),
+                &["title", "message"],
+            ),
+        },
         // ---- Hyprland live state (read-only) ----
         ToolDef {
             name: "active_window",
@@ -253,6 +293,63 @@ pub async fn execute_tool(
         "get_app_categories" => {
             let rules = db.lock().await.categories()?;
             Ok(serde_json::to_value(rules)?)
+        }
+        "get_goals" => {
+            let db = db.lock().await;
+            let progress = db.goal_progress()?;
+            let payload: Vec<Value> = progress
+                .iter()
+                .map(|p| {
+                    json!({
+                        "name": p.goal.name,
+                        "target_type": p.goal.target_type,
+                        "target_key": p.goal.target_key,
+                        "daily_target_ms": p.goal.daily_target_ms,
+                        "enabled": p.goal.enabled,
+                        "today_ms": p.today_ms,
+                        "pct": p.pct,
+                    })
+                })
+                .collect();
+            Ok(json!(payload))
+        }
+        "set_goal" => {
+            let goals = args
+                .get("goals")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            let parsed: Vec<crate::models::Goal> = goals
+                .iter()
+                .filter_map(|g| {
+                    let name = g.get("name")?.as_str()?.to_string();
+                    let target_type = g.get("target_type").and_then(|v| v.as_str()).unwrap_or("all").to_string();
+                    let target_key = g.get("target_key").and_then(|v| v.as_str()).map(String::from);
+                    let daily_target_ms = g.get("daily_target_ms").and_then(|v| v.as_i64()).unwrap_or(0);
+                    Some(crate::models::Goal {
+                        id: None,
+                        name,
+                        target_type,
+                        target_key,
+                        daily_target_ms,
+                        enabled: g.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true),
+                    })
+                })
+                .collect();
+            if parsed.is_empty() {
+                anyhow::bail!("set_goal requires at least one goal with a name");
+            }
+            db.lock().await.set_goals(&parsed)?;
+            Ok(json!({"status": "ok", "goals_set": parsed.len()}))
+        }
+        "send_reminder" => {
+            let title = arg_str(args, "title").unwrap_or("HyprTrace");
+            let message = arg_str(args, "message").unwrap_or("");
+            let spawned = std::process::Command::new("notify-send")
+                .args(["-a", "hyprtrace", title, message])
+                .spawn()
+                .is_ok();
+            Ok(json!({"sent": spawned}))
         }
         "get_app_trend" => {
             let class = arg_str(args, "class")

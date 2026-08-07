@@ -2,6 +2,7 @@ mod ai;
 mod config;
 mod db;
 mod models;
+mod proactive;
 mod routes;
 
 use std::sync::Arc;
@@ -23,6 +24,8 @@ async fn main() -> anyhow::Result<()> {
         config: tokio::sync::Mutex::new(cfg.clone()),
         ai: tokio::sync::Mutex::new(ai),
     });
+
+    proactive::spawn_proactive_monitor(state.clone(), cfg.ai.proactive_interval_minutes);
 
     let web_dir = {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());

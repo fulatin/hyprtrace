@@ -84,10 +84,16 @@ pub struct AiConfig {
     pub ollama: OllamaConfig,
     #[serde(default)]
     pub openai: OpenAiConfig,
+    #[serde(default = "default_proactive_interval")]
+    pub proactive_interval_minutes: u64,
 }
 
 fn default_ai_provider() -> String {
     "ollama".to_string()
+}
+
+fn default_proactive_interval() -> u64 {
+    120
 }
 
 impl Default for AiConfig {
@@ -96,6 +102,7 @@ impl Default for AiConfig {
             default_provider: default_ai_provider(),
             ollama: OllamaConfig::default(),
             openai: OpenAiConfig::default(),
+            proactive_interval_minutes: default_proactive_interval(),
         }
     }
 }
