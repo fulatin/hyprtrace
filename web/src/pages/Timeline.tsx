@@ -8,6 +8,10 @@ const CATEGORY_COLORS = [
   '#60a5fa', '#f87171', '#4ade80', '#e879f9', '#38bdf8',
 ];
 
+// Padding (minutes) added on both sides of the active time range.
+const AXIS_PADDING = 15;
+const DAY_MINUTES = 1440;
+
 function colorForClass(cls: string): string {
   let h = 0;
   for (let i = 0; i < cls.length; i++) h = (h * 31 + cls.charCodeAt(i)) >>> 0;
@@ -52,6 +56,46 @@ export default function Timeline() {
     return Array.from(map.entries());
   }, [sessions]);
 
+  // Dynamic horizontal axis: only show the window where the user was actually
+  // active (clamped to the day), padded slightly on each side. Falls back to
+  // the full 24h when there are no sessions.
+  const axis = useMemo(() => {
+    if (sessions.length === 0) {
+      return { start: 0, end: DAY_MINUTES };
+    }
+    let minStart = DAY_MINUTES;
+    let maxEnd = 0;
+    for (const s of sessions) {
+      const startM = Math.max(0, Math.min(toMinutes(new Date(s.started_at).toISOString()), DAY_MINUTES));
+      const endM = s.ended_at
+        ? Math.max(0, Math.min(toMinutes(new Date(s.ended_at).toISOString()), DAY_MINUTES))
+        : DAY_MINUTES;
+      if (startM < minStart) minStart = startM;
+      if (endM > maxEnd) maxEnd = endM;
+    }
+    let start = Math.max(0, minStart - AXIS_PADDING);
+    let end = Math.min(DAY_MINUTES, maxEnd + AXIS_PADDING);
+    // Guarantee a minimum visible span so tiny windows stay readable.
+    const MIN_SPAN = 60;
+    if (end - start < MIN_SPAN) {
+      const mid = (start + end) / 2;
+      start = Math.max(0, mid - MIN_SPAN / 2);
+      end = Math.min(DAY_MINUTES, mid + MIN_SPAN / 2);
+    }
+    return { start, end };
+  }, [sessions]);
+
+  const axisLen = Math.max(axis.end - axis.start, 1);
+
+  // Hour tick marks within the active window.
+  const hourTicks = useMemo(() => {
+    const ticks: number[] = [];
+    for (let h = Math.floor(axis.start / 60); h * 60 <= axis.end; h++) {
+      ticks.push(h);
+    }
+    return ticks;
+  }, [axis]);
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -86,31 +130,45 @@ export default function Timeline() {
               )}
             </div>
 
-            {/* Chart area: 24h = 1440 minutes */}
-            <div className="flex-1 min-w-[960px]">
+            {/* Chart area: dynamic active-time axis */}
+            <div className="flex-1 min-w-[480px]">
               {/* Hour labels in normal flow (not clipped) */}
               <div className="relative h-6 mb-1">
-                {Array.from({ length: 24 }, (_, i) => (
-                  <div
-                    key={`l${i}`}
-                    className="absolute -translate-x-1/2 text-[10px] text-gray-600 whitespace-nowrap"
-                    style={{ left: `${(i / 24) * 100}%` }}
-                  >
-                    {i}
-                  </div>
-                ))}
+                {hourTicks.map((h) => {
+                  const hh = h % 24;
+                  const left = (((h * 60 - axis.start) / axisLen) * 100);
+                  return (
+                    <div
+                      key={`l${h}`}
+                      className="absolute -translate-x-1/2 text-[10px] text-gray-600 whitespace-nowrap"
+                      style={{ left: `${left}%` }}
+                    >
+                      {hh}:00
+                    </div>
+                  );
+                })}
               </div>
 
               {/* Time blocks, one row per app class */}
               <div className="relative">
-                {/* Hour gridlines */}
-                {Array.from({ length: 25 }, (_, i) => (
-                  <div
-                    key={i}
-                    className="absolute top-0 bottom-0 border-l border-gray-800/60"
-                    style={{ left: `${(i / 24) * 100}%` }}
-                  />
-                ))}
+                {/* Gridlines: every 30 min faint, every hour stronger */}
+                {(() => {
+                  const lines: JSX.Element[] = [];
+                  for (let m = Math.floor(axis.start / 30) * 30; m <= axis.end; m += 30) {
+                    const left = ((m - axis.start) / axisLen) * 100;
+                    lines.push(
+                      <div
+                        key={`g${m}`}
+                        className="absolute top-0 bottom-0 border-l"
+                        style={{
+                          left: `${left}%`,
+                          borderColor: m % 60 === 0 ? 'rgba(75,85,99,0.5)' : 'rgba(75,85,99,0.2)',
+                        }}
+                      />,
+                    );
+                  }
+                  return lines;
+                })()}
 
                 {groups.map(([cls, items]) => (
                   <div key={cls} className="relative h-7">
@@ -118,11 +176,13 @@ export default function Timeline() {
                       const start = new Date(s.started_at);
                       const end = s.ended_at ? new Date(s.ended_at) : new Date();
                       // Clamp to day bounds
-                      const startM = Math.max(toMinutes(start.toISOString()), 0);
-                      const endM = Math.min(toMinutes(end.toISOString()), 1440);
+                      const startM = Math.max(0, Math.min(toMinutes(start.toISOString()), DAY_MINUTES));
+                      const endM = s.ended_at
+                        ? Math.max(0, Math.min(toMinutes(end.toISOString()), DAY_MINUTES))
+                        : DAY_MINUTES;
                       if (endM <= startM) return null;
-                      const left = (startM / 1440) * 100;
-                      const width = ((endM - startM) / 1440) * 100;
+                      const left = ((startM - axis.start) / axisLen) * 100;
+                      const width = ((endM - startM) / axisLen) * 100;
                       const color = colorForClass(cls);
                       const mins = Math.round((s.duration_ms ?? 0) / 60000);
                       return (
@@ -138,7 +198,7 @@ export default function Timeline() {
                           title={`${cls} — ${s.title} — ${formatDur(s.duration_ms ?? 0)}`}
                         >
                           <span className="text-[9px] text-gray-300 px-1 truncate">
-                            {width > 4 ? `${mins}m` : ''}
+                            {width > 3 ? `${mins}m` : ''}
                           </span>
                         </div>
                       );
