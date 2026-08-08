@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { format } from 'date-fns';
 import { api } from '../lib/api';
 import type { Session } from '../lib/types';
@@ -40,6 +40,18 @@ export default function Timeline() {
     });
   }, [date]);
 
+  // Group sessions by app class so each app occupies a single row with all of
+  // its time blocks, instead of one row per session.
+  const groups = useMemo(() => {
+    const map = new Map<string, Session[]>();
+    for (const s of sessions) {
+      const arr = map.get(s.class) ?? [];
+      arr.push(s);
+      map.set(s.class, arr);
+    }
+    return Array.from(map.entries());
+  }, [sessions]);
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -59,66 +71,81 @@ export default function Timeline() {
           <div className="flex">
             {/* Row labels */}
             <div className="shrink-0 w-40 pr-3">
-              {sessions.map((s) => (
-                <div key={s.id} className="h-7 flex items-center overflow-hidden">
-                  <span className="text-xs text-gray-400 truncate" title={s.title}>
-                    {s.class}
+              {/* Spacer matching the hour-label row so app rows align */}
+              <div className="h-6 mb-1" />
+              {groups.map(([cls, items]) => (
+                <div key={cls} className="h-7 flex items-center overflow-hidden">
+                  <span className="text-xs text-gray-400 truncate" title={cls}>
+                    {cls}
+                    <span className="text-gray-600"> ({items.length})</span>
                   </span>
                 </div>
               ))}
-              {sessions.length === 0 && (
+              {groups.length === 0 && (
                 <span className="text-xs text-gray-500">No sessions this day</span>
               )}
             </div>
 
             {/* Chart area: 24h = 1440 minutes */}
-            <div className="relative flex-1 min-w-[960px]">
-              {/* Hour gridlines */}
-              {Array.from({ length: 25 }, (_, i) => (
-                <div
-                  key={i}
-                  className="absolute top-0 bottom-0 border-l border-gray-800/60"
-                  style={{ left: `${(i / 24) * 100}%` }}
-                />
-              ))}
-              {/* Hour labels */}
-              {Array.from({ length: 24 }, (_, i) => (
-                <div
-                  key={`l${i}`}
-                  className="absolute -top-6 text-[10px] text-gray-600"
-                  style={{ left: `${(i / 24) * 100}%` }}
-                >
-                  {i}
-                </div>
-              ))}
-
-              {sessions.map((s) => {
-                const start = new Date(s.started_at);
-                const end = s.ended_at ? new Date(s.ended_at) : new Date();
-                // Clamp to day bounds
-                const startM = Math.max(toMinutes(start.toISOString()), 0);
-                const endM = Math.min(toMinutes(end.toISOString()), 1440);
-                if (endM <= startM) return null;
-                const left = (startM / 1440) * 100;
-                const width = ((endM - startM) / 1440) * 100;
-                const color = colorForClass(s.class);
-                const mins = Math.round((s.duration_ms ?? 0) / 60000);
-                return (
+            <div className="flex-1 min-w-[960px]">
+              {/* Hour labels in normal flow (not clipped) */}
+              <div className="relative h-6 mb-1">
+                {Array.from({ length: 24 }, (_, i) => (
                   <div
-                    key={s.id}
-                    className="absolute h-5 mt-1 rounded-sm flex items-center overflow-hidden"
-                    style={{ left: `${left}%`, width: `${width}%`, backgroundColor: `${color}33`, border: `1px solid ${color}66` }}
-                    title={`${s.class} — ${s.title} — ${formatDur(s.duration_ms ?? 0)}`}
+                    key={`l${i}`}
+                    className="absolute -translate-x-1/2 text-[10px] text-gray-600 whitespace-nowrap"
+                    style={{ left: `${(i / 24) * 100}%` }}
                   >
-                    <span
-                      className="text-[9px] text-gray-300 px-1 truncate"
-                      style={{ minWidth: width > 2 ? undefined : 0 }}
-                    >
-                      {width > 4 ? `${s.class} ${mins}m` : ''}
-                    </span>
+                    {i}
                   </div>
-                );
-              })}
+                ))}
+              </div>
+
+              {/* Time blocks, one row per app class */}
+              <div className="relative">
+                {/* Hour gridlines */}
+                {Array.from({ length: 25 }, (_, i) => (
+                  <div
+                    key={i}
+                    className="absolute top-0 bottom-0 border-l border-gray-800/60"
+                    style={{ left: `${(i / 24) * 100}%` }}
+                  />
+                ))}
+
+                {groups.map(([cls, items]) => (
+                  <div key={cls} className="relative h-7">
+                    {items.map((s) => {
+                      const start = new Date(s.started_at);
+                      const end = s.ended_at ? new Date(s.ended_at) : new Date();
+                      // Clamp to day bounds
+                      const startM = Math.max(toMinutes(start.toISOString()), 0);
+                      const endM = Math.min(toMinutes(end.toISOString()), 1440);
+                      if (endM <= startM) return null;
+                      const left = (startM / 1440) * 100;
+                      const width = ((endM - startM) / 1440) * 100;
+                      const color = colorForClass(cls);
+                      const mins = Math.round((s.duration_ms ?? 0) / 60000);
+                      return (
+                        <div
+                          key={s.id}
+                          className="absolute top-1 h-5 rounded-sm flex items-center overflow-hidden"
+                          style={{
+                            left: `${left}%`,
+                            width: `${width}%`,
+                            backgroundColor: `${color}33`,
+                            border: `1px solid ${color}66`,
+                          }}
+                          title={`${cls} — ${s.title} — ${formatDur(s.duration_ms ?? 0)}`}
+                        >
+                          <span className="text-[9px] text-gray-300 px-1 truncate">
+                            {width > 4 ? `${mins}m` : ''}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         </div>
