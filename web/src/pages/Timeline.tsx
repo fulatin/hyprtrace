@@ -23,6 +23,12 @@ function toMinutes(iso: string): number {
   return d.getHours() * 60 + d.getMinutes();
 }
 
+// Minutes of the current moment, clamped to [0, 1440]. Used as the end point
+// of an ongoing (not-yet-ended) session so its block doesn't stretch to 23:59.
+function nowMinutes(): number {
+  return Math.max(0, Math.min(toMinutes(new Date().toISOString()), DAY_MINUTES));
+}
+
 function formatDur(ms: number): string {
   const m = Math.round(ms / 60000);
   if (m >= 60) return `${Math.floor(m / 60)}h ${m % 60}m`;
@@ -69,7 +75,7 @@ export default function Timeline() {
       const startM = Math.max(0, Math.min(toMinutes(new Date(s.started_at).toISOString()), DAY_MINUTES));
       const endM = s.ended_at
         ? Math.max(0, Math.min(toMinutes(new Date(s.ended_at).toISOString()), DAY_MINUTES))
-        : DAY_MINUTES;
+        : nowMinutes();
       if (startM < minStart) minStart = startM;
       if (endM > maxEnd) maxEnd = endM;
     }
@@ -174,12 +180,12 @@ export default function Timeline() {
                   <div key={cls} className="relative h-7">
                     {items.map((s) => {
                       const start = new Date(s.started_at);
-                      const end = s.ended_at ? new Date(s.ended_at) : new Date();
-                      // Clamp to day bounds
+                      // Clamp to day bounds. An ongoing session ends at "now"
+                      // instead of stretching to 23:59.
                       const startM = Math.max(0, Math.min(toMinutes(start.toISOString()), DAY_MINUTES));
                       const endM = s.ended_at
-                        ? Math.max(0, Math.min(toMinutes(end.toISOString()), DAY_MINUTES))
-                        : DAY_MINUTES;
+                        ? Math.max(0, Math.min(toMinutes(new Date(s.ended_at).toISOString()), DAY_MINUTES))
+                        : nowMinutes();
                       if (endM <= startM) return null;
                       const left = ((startM - axis.start) / axisLen) * 100;
                       const width = ((endM - startM) / axisLen) * 100;
