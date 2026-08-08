@@ -42,9 +42,34 @@ function extractText(message: any): string {
   );
 }
 
+const STORAGE_PROVIDER = "hyprtrace_ai_provider";
+const STORAGE_MODEL = "hyprtrace_ai_model";
+
+function loadStored(key: string): string {
+  try {
+    return localStorage.getItem(key) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function saveStored(key: string, value: string) {
+  try {
+    if (value) {
+      localStorage.setItem(key, value);
+    } else {
+      localStorage.removeItem(key);
+    }
+  } catch {
+    // storage unavailable (private mode etc.) — silently skip
+  }
+}
+
 export default function AIChat() {
-  const [selectedProvider, setSelectedProvider] = useState("ollama");
-  const [selectedModel, setSelectedModel] = useState("");
+  const [selectedProvider, setSelectedProvider] = useState(
+    () => loadStored(STORAGE_PROVIDER) || "ollama",
+  );
+  const [selectedModel, setSelectedModel] = useState(() => loadStored(STORAGE_MODEL));
   const [providers, setProviders] = useState<Record<string, string[]>>({});
   const [includeData, setIncludeData] = useState(true);
   const [historyLoaded, setHistoryLoaded] = useState(false);
@@ -116,9 +141,24 @@ export default function AIChat() {
       .aiModels()
       .then((res: AiModelsResponse) => {
         setProviders(res.providers);
-        setSelectedProvider(res.default);
-        const first = res.providers[res.default]?.[0];
-        if (first) setSelectedModel(first);
+
+        // Prefer the user's previously stored provider if it still exists,
+        // otherwise fall back to the server default.
+        const storedProvider = loadStored(STORAGE_PROVIDER);
+        const provider = res.providers[storedProvider]
+          ? storedProvider
+          : res.default;
+        setSelectedProvider(provider);
+        saveStored(STORAGE_PROVIDER, provider);
+
+        // Prefer the stored model if it's still available for this provider.
+        const storedModel = loadStored(STORAGE_MODEL);
+        const models = res.providers[provider] ?? [];
+        const model = storedModel && models.includes(storedModel)
+          ? storedModel
+          : (models[0] ?? "");
+        setSelectedModel(model);
+        saveStored(STORAGE_MODEL, model);
       })
       .catch(() => {});
 
@@ -223,8 +263,15 @@ export default function AIChat() {
 
   const handleProviderChange = (p: string) => {
     setSelectedProvider(p);
+    saveStored(STORAGE_PROVIDER, p);
     const first = providers[p]?.[0];
     setSelectedModel(first ?? "");
+    saveStored(STORAGE_MODEL, first ?? "");
+  };
+
+  const handleModelChange = (m: string) => {
+    setSelectedModel(m);
+    saveStored(STORAGE_MODEL, m);
   };
 
   const lastAssistantText =
@@ -426,7 +473,7 @@ export default function AIChat() {
         onProviderChange={handleProviderChange}
         providers={providers}
         selectedModel={selectedModel}
-        onModelChange={setSelectedModel}
+        onModelChange={handleModelChange}
       />
     </div>
   );
