@@ -9,38 +9,41 @@
 #     "format": "{}"
 #   }
 #
-# Requires: curl, python3 (or jq).
+# Requires: curl, python3.
 
 API="${HYPRTRACE_API:-http://127.0.0.1:9420/api/status}"
 
 data=$(curl -s --max-time 3 "$API" 2>/dev/null)
-if [ -z "$data" ] || [ "$data" = "null" ]; then
+
+if [ -z "$data" ]; then
     printf '{"text":"⚙ —","tooltip":"HyprTrace unreachable"}\n'
     exit 0
 fi
 
-# Extract values. Prefer jq if available, else python3.
-if command -v jq >/dev/null 2>&1; then
-    app=$(echo "$data" | jq -r '.current_app')
-    mins=$(echo "$data" | jq -r '.current_session_min')
-    pct=$(echo "$data" | jq -r '.today_pct_goal | floor')
-    score=$(echo "$data" | jq -r '.efficiency_score // 0')
-else
-    app=$(echo "$data" | python3 -c "import sys,json;print(json.load(sys.stdin)['current_app'])")
-    mins=$(echo "$data" | python3 -c "import sys,json;print(json.load(sys.stdin)['current_session_min'])")
-    pct=$(echo "$data" | python3 -c "import sys,json;print(int(json.load(sys.stdin)['today_pct_goal']))")
-    score=$(echo "$data" | python3 -c "import sys,json;print(json.load(sys.stdin).get('efficiency_score') or 0)")
-fi
+# Parse the API response and emit valid JSON (json.dumps escapes newlines/quotes).
+printf '%s' "$data" | python3 -c '
+import sys, json
 
-# Human-readable session duration.
-if [ "$mins" -ge 60 ]; then
-    dur="$((mins / 60))h $((mins % 60))m"
-else
-    dur="${mins}m"
-fi
+try:
+    d = json.load(sys.stdin)
+    if d is None:
+        raise ValueError("null response")
+    app  = d.get("current_app") or "?"
+    mins = int(float(d.get("current_session_min") or 0))
+    pct  = int(float(d.get("today_pct_goal") or 0))
+    score = int(float(d.get("efficiency_score") or 0))
+except Exception:
+    print(json.dumps({"text": "⚙ —", "tooltip": "HyprTrace: bad response"},
+                     ensure_ascii=False))
+    sys.exit(0)
 
-tooltip="Current: $app ($dur)
-Today: $pct% of goal · Efficiency $score/100"
+if mins >= 60:
+    dur = "%dh %dm" % (mins // 60, mins % 60)
+else:
+    dur = "%dm" % mins
 
-# Waybar supports click actions via signal/actions; keep it simple.
-printf '{"text":"%s","tooltip":"%s"}\n' "🧭 ${app} ${dur} · ${pct}%" "$tooltip"
+text = "🧭 %s %s · %d%%" % (app, dur, pct)
+tooltip = "Current: %s (%s)\nToday: %d%% of goal · Efficiency %d/100" % (app, dur, pct, score)
+
+print(json.dumps({"text": text, "tooltip": tooltip}, ensure_ascii=False))
+'
