@@ -138,22 +138,29 @@ export default function Timeline() {
 
             {/* Chart area: dynamic active-time axis */}
             <div className="flex-1 min-w-[480px]">
-              {/* Hour labels in normal flow (not clipped) */}
-              <div className="relative h-6 mb-1">
-                {hourTicks.map((h) => {
-                  const hh = h % 24;
-                  const left = (((h * 60 - axis.start) / axisLen) * 100);
-                  return (
-                    <div
-                      key={`l${h}`}
-                      className="absolute -translate-x-1/2 text-[10px] text-gray-600 whitespace-nowrap"
-                      style={{ left: `${left}%` }}
-                    >
-                      {hh}:00
-                    </div>
-                  );
-                })}
-              </div>
+              {groups.length === 0 ? (
+                <div className="h-40 flex flex-col items-center justify-center rounded-lg border border-dashed border-gray-800 text-gray-500">
+                  <span className="text-sm">No activity recorded this day</span>
+                  <span className="text-xs mt-1">The timeline will appear here once sessions exist</span>
+                </div>
+              ) : (
+                <>
+                  {/* Hour labels in normal flow (not clipped) */}
+                  <div className="relative h-6 mb-1">
+                    {hourTicks.map((h) => {
+                      const hh = h % 24;
+                      const left = (((h * 60 - axis.start) / axisLen) * 100);
+                      return (
+                        <div
+                          key={`l${h}`}
+                          className="absolute -translate-x-1/2 text-[10px] text-gray-600 whitespace-nowrap"
+                          style={{ left: `${left}%` }}
+                        >
+                          {hh}:00
+                        </div>
+                      );
+                    })}
+                  </div>
 
               {/* Time blocks, one row per app class */}
               <div className="relative">
@@ -212,6 +219,8 @@ export default function Timeline() {
                   </div>
                 ))}
               </div>
+                </>
+              )}
             </div>
           </div>
         </div>
