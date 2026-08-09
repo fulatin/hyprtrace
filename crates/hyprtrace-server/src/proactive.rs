@@ -1,9 +1,6 @@
-use crate::ai::AiManager;
-use crate::db::Database;
 use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Mutex;
 
 /// Periodically analyzes recent usage data with the configured AI provider and
 /// sends a desktop notification when the AI flags something notable (e.g.

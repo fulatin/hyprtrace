@@ -237,6 +237,33 @@ fn today() -> String {
     chrono::Utc::now().format("%Y-%m-%d").to_string()
 }
 
+/// Ensure HYPRLAND_INSTANCE_SIGNATURE is set so hyprland-rs can find the IPC
+/// socket. Running under a systemd user service, the variable isn't inherited
+/// from the graphical session, so discover the instance via `hyprctl instances`.
+fn ensure_hyprland_env() -> anyhow::Result<()> {
+    if std::env::var("HYPRLAND_INSTANCE_SIGNATURE").is_ok() {
+        return Ok(());
+    }
+    let output = std::process::Command::new("hyprctl")
+        .arg("instances")
+        .output()
+        .map_err(|e| anyhow::anyhow!("Failed to run hyprctl: {}", e))?;
+    if !output.status.success() {
+        anyhow::bail!("hyprctl instances failed (Is Hyprland running?)");
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let signature = stdout
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("instance "))
+        .map(|s| s.split(':').next().unwrap_or(s).trim().to_string())
+        .ok_or_else(|| anyhow::anyhow!("No Hyprland instance found"))?;
+    // Safety: setting the env var is process-wide but idempotent and harmless.
+    unsafe {
+        std::env::set_var("HYPRLAND_INSTANCE_SIGNATURE", &signature);
+    }
+    Ok(())
+}
+
 fn arg_str<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
     args.get(key).and_then(|v| v.as_str()).filter(|s| !s.is_empty())
 }
@@ -386,6 +413,12 @@ pub async fn execute_tool(
 
 fn execute_hyprland_tool(name: &str, key: Option<&str>) -> anyhow::Result<Value> {
     use hyprland::prelude::*;
+
+    // hyprland-rs resolves the IPC socket from the HYPRLAND_INSTANCE_SIGNATURE
+    // env var. When running as a systemd user service that variable isn't
+    // inherited from the graphical session, so resolve the running instance
+    // via `hyprctl instances` and set it before making any hyprland call.
+    ensure_hyprland_env()?;
 
     match name {
         "active_window" => {
