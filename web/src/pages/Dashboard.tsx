@@ -123,8 +123,9 @@ export default function Dashboard() {
         : Promise.resolve({ goals: [], progress: [] as GoalProgress[] }),
 
       api.predict(14).catch(() => null),
+      api.projectStats(selectedDate, selectedDate).catch(() => []),
 
-    ]).then(([s, t, d, e, g, p]) => {
+    ]).then(([s, t, d, e, g, p, ps]) => {
 
       if (cancelled) return;
 
@@ -139,6 +140,7 @@ export default function Dashboard() {
       setGoalProgress(g.progress ?? []);
 
       setPrediction(p);
+      setProjectStats(ps);
 
       setLoading(false);
 

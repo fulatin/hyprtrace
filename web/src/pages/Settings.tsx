@@ -706,8 +706,6 @@ export default function Settings() {
 
         <div className="border-t border-gray-800 pt-4">
           <h3 className="text-sm font-medium text-gray-400 mb-3 flex items-center gap-2">
-        <div className="border-t border-gray-800 pt-4">
-          <h3 className="text-sm font-medium text-gray-400 mb-3 flex items-center gap-2">
             <FolderKanban size={14} />
             Projects
           </h3>
