@@ -390,18 +390,35 @@ impl Database {
         let top_apps = self.app_ranking(date, date, 5)?;
 
         let total_idle_ms: i64 = {
-            let span_ms: i64 = self
-                .conn
+            // Idle time = gaps between consecutive sessions where the previous
+            // session ended because of an idle/away timeout. Small gaps caused
+            // by normal app switches (activity_state = active/focused) are NOT
+            // idle. This also avoids the old `span - active` formula, which
+            // accumulated every tiny switch gap and could drift with clock
+            // corrections or overlapping sessions.
+            self.conn
                 .query_row(
-                    "SELECT COALESCE(
-                        CAST((julianday(MAX(ended_at)) - julianday(MIN(started_at))) * 86400000 AS INTEGER),
-                        0
-                    ) FROM sessions WHERE date(started_at) = ?1",
+                    "WITH ordered AS (
+                        SELECT started_at,
+                               ended_at,
+                               activity_state,
+                               LAG(ended_at) OVER (ORDER BY started_at) AS prev_end,
+                               LAG(activity_state) OVER (ORDER BY started_at) AS prev_state
+                        FROM sessions
+                        WHERE ended_at IS NOT NULL
+                    )
+                    SELECT COALESCE(SUM(
+                        CAST((julianday(started_at) - julianday(prev_end)) * 86400000 AS INTEGER)
+                    ), 0)
+                    FROM ordered
+                    WHERE date(started_at) = ?1
+                      AND prev_end IS NOT NULL
+                      AND started_at > prev_end
+                      AND prev_state IN ('idle', 'away')",
                     params![date],
                     |row| row.get(0),
                 )
-                .unwrap_or(0);
-            std::cmp::max(0, span_ms - total_active_ms)
+                .unwrap_or(0)
         };
 
         Ok(TodaySummary {
@@ -1917,5 +1934,49 @@ mod tests {
         assert!((stats[0].percentage - 60.0).abs() < 0.001);
         assert!((stats[1].percentage - 20.0).abs() < 0.001);
         assert!((stats[2].percentage - 20.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn today_summary_idle_counts_only_gaps_after_idle_sessions() {
+        let db = test_db();
+
+        // Three consecutive sessions on the same day.
+        // Gap after an active session (1 min) is NOT idle.
+        // Gap after an idle-ended session (10 min) IS idle.
+        db.conn
+            .execute(
+                "INSERT INTO sessions (class, title, started_at, ended_at, duration_ms, activity_state, focused_ms)
+                 VALUES ('code', 'a', '2026-08-16T09:00:00+00:00', '2026-08-16T09:05:00+00:00', 300000, 'active', 0)",
+                [],
+            )
+            .unwrap();
+        db.conn
+            .execute(
+                "INSERT INTO sessions (class, title, started_at, ended_at, duration_ms, activity_state, focused_ms)
+                 VALUES ('code', 'b', '2026-08-16T09:06:00+00:00', '2026-08-16T09:10:00+00:00', 240000, 'idle', 0)",
+                [],
+            )
+            .unwrap();
+        db.conn
+            .execute(
+                "INSERT INTO sessions (class, title, started_at, ended_at, duration_ms, activity_state, focused_ms)
+                 VALUES ('code', 'c', '2026-08-16T09:20:00+00:00', '2026-08-16T09:30:00+00:00', 600000, 'active', 0)",
+                [],
+            )
+            .unwrap();
+
+        // daily_summary drives total_active_ms and app_ranking.
+        db.conn
+            .execute(
+                "INSERT INTO daily_summary (date, class, total_ms, session_count, focused_ms, focused_session_count)
+                 VALUES ('2026-08-16', 'code', 1140000, 3, 0, 0)",
+                [],
+            )
+            .unwrap();
+
+        let summary = db.today_summary("2026-08-16").unwrap();
+        assert_eq!(summary.total_active_ms, 1140000);
+        // Only the 10-minute gap after the idle-ended session counts.
+        assert_eq!(summary.total_idle_ms, 600000);
     }
 }

@@ -350,7 +350,6 @@ impl Database {
     pub fn end_session(&self, session_id: i64) -> anyhow::Result<()> {
         let now = chrono::Utc::now();
         let now_str = now.to_rfc3339();
-        let date_str = now.format("%Y-%m-%d").to_string();
 
         let started_at: String = self.conn.query_row(
             "SELECT started_at FROM sessions WHERE id = ?1",
@@ -379,6 +378,13 @@ impl Database {
         } else {
             started
         };
+
+        // Bucket the session on the day it STARTED (UTC), matching the
+        // server's date(started_at) queries and rebuild paths. Using the end
+        // date here made cross-midnight sessions land on the wrong day and
+        // corrupted the idle-time calculation (span on start date vs active
+        // time on end date).
+        let session_date = started.format("%Y-%m-%d").to_string();
 
         let focused_ms = std::cmp::max(0, duration_ms - self.focused_threshold_ms);
 
@@ -422,7 +428,7 @@ impl Database {
                session_count = session_count + 1,
                focused_ms = focused_ms + ?4,
                focused_session_count = focused_session_count + ?5",
-             params![date_str, class, duration_ms, focused_ms, is_focused_session],
+             params![session_date, class, duration_ms, focused_ms, is_focused_session],
         )?;
 
         // Maintain hourly_summary incrementally so the server's fast path stays fresh.
@@ -435,7 +441,7 @@ impl Database {
                total_ms = total_ms + ?4,
                session_count = session_count + 1,
                focused_ms = focused_ms + ?5",
-            params![date_str, local_hour, class, duration_ms, focused_ms],
+            params![session_date, local_hour, class, duration_ms, focused_ms],
         ) {
             log::warn!("Failed to upsert hourly_summary: {}", e);
         }
@@ -1071,6 +1077,55 @@ mod tests {
             )
             .unwrap();
         assert!(resource_rows >= 1);
+
+        drop(db);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn end_session_buckets_by_start_date() {
+        let dir = std::env::temp_dir().join(format!("hyprtrace-test7-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.db");
+
+        let db = Database::open(&path, 20 * 60).unwrap();
+        db.migrate().unwrap();
+
+        // Simulate a session started just before midnight (UTC) and ended
+        // after midnight. It must be bucketed on the START date so the
+        // server's date(started_at) queries and rebuild paths agree.
+        let started_at = "2026-08-15T23:50:00+00:00";
+        db.conn
+            .execute(
+                "INSERT INTO sessions (class, title, workspace, started_at, activity_state, focused_ms)
+                 VALUES ('kitty', 'late', '1', ?1, 'active', 0)",
+                params![started_at],
+            )
+            .unwrap();
+        let id = db.conn.last_insert_rowid();
+
+        db.end_session(id).unwrap();
+
+        let (daily_date, daily_total): (String, i64) = db
+            .conn
+            .query_row(
+                "SELECT date, total_ms FROM daily_summary WHERE class = 'kitty'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(daily_date, "2026-08-15");
+        assert!(daily_total >= 0);
+
+        let hourly_date: String = db
+            .conn
+            .query_row(
+                "SELECT date FROM hourly_summary WHERE class = 'kitty'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(hourly_date, "2026-08-15");
 
         drop(db);
         std::fs::remove_dir_all(&dir).ok();
