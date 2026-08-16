@@ -696,6 +696,24 @@ impl Database {
         Ok(out)
     }
 
+    /// Compact weekly totals for the scheduled report notification:
+    /// `(total_ms across all classes, top class by total_ms)`.
+    pub fn weekly_totals(&self, from: &str, to: &str) -> anyhow::Result<(i64, String)> {
+        let total_ms: i64 = self.conn.query_row(
+            "SELECT COALESCE(SUM(total_ms), 0) FROM daily_summary WHERE date BETWEEN ?1 AND ?2",
+            params![from, to],
+            |r| r.get(0),
+        )?;
+        let top_class: String = self.conn.query_row(
+            "SELECT COALESCE((SELECT class FROM daily_summary
+                 WHERE date BETWEEN ?1 AND ?2
+                 GROUP BY class ORDER BY SUM(total_ms) DESC LIMIT 1), '')",
+            params![from, to],
+            |r| r.get(0),
+        )?;
+        Ok((total_ms, top_class))
+    }
+
     /// Predict today's remaining and tomorrow's usage via linear regression over
     /// the past `window` days of daily active time.
     pub fn predict(&self, window: i64) -> anyhow::Result<TrendPrediction> {

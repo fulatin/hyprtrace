@@ -76,6 +76,14 @@ pub struct ServerConfig {
     pub port: u16,
     #[serde(default)]
     pub retention_days: u32,
+    #[serde(default)]
+    pub weekly_report_enabled: bool,
+    #[serde(default = "default_weekly_report_day")]
+    pub weekly_report_day: u32,
+    #[serde(default = "default_weekly_report_hour")]
+    pub weekly_report_hour: u32,
+    #[serde(default = "default_weekly_report_minute")]
+    pub weekly_report_minute: u32
 }
 
 fn default_host() -> String {
@@ -86,12 +94,28 @@ fn default_port() -> u16 {
     9420
 }
 
+fn default_weekly_report_day() -> u32 {
+    1
+}
+
+fn default_weekly_report_hour() -> u32 {
+    9
+}
+
+fn default_weekly_report_minute() -> u32 {
+    0
+}
+
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
             host: default_host(),
             port: default_port(),
             retention_days: 0,
+            weekly_report_enabled: false,
+            weekly_report_day: default_weekly_report_day(),
+            weekly_report_hour: default_weekly_report_hour(),
+            weekly_report_minute: default_weekly_report_minute()
         }
     }
 }

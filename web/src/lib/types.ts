@@ -179,6 +179,10 @@ export interface ConfigResponse {
   ollama_model: string;
   default_provider: string;
   retention_days: number;
+  weekly_report_enabled: boolean;
+  weekly_report_day: number;
+  weekly_report_hour: number;
+  weekly_report_minute: number
 }
 
 export interface ConfigUpdateRequest {
@@ -189,6 +193,10 @@ export interface ConfigUpdateRequest {
   ollama_model?: string;
   default_provider?: string;
   retention_days?: number;
+  weekly_report_enabled?: boolean;
+  weekly_report_day?: number;
+  weekly_report_hour?: number;
+  weekly_report_minute?: number
 }
 
 export interface ActivityEvent {
