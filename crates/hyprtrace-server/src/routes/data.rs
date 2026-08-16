@@ -187,10 +187,44 @@ pub async fn sessions(
     }
 }
 
+pub async fn delete_sessions(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<DeleteSessionsQuery>,
+) -> Result<Json<serde_json::Value>, Json<serde_json::Value>> {
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let from = query.from.unwrap_or_else(|| today.clone());
+    let to = query.to.unwrap_or(today);
+
+    if from > to {
+        return Err(Json(serde_json::json!({
+            "error": "from must not be after to"
+        })));
+    }
+
+    let db = state.db.lock().await;
+    match db.delete_sessions_between(&from, &to, query.class.as_deref()) {
+        Ok(deleted) => Ok(Json(serde_json::json!({
+            "deleted": deleted,
+            "rebuilt_summaries": true,
+        }))),
+        Err(e) => {
+            log::error!("Failed to delete sessions: {}", e);
+            Err(Json(serde_json::json!({"error": "Internal server error"})))
+        }
+    }
+}
+
 #[derive(Deserialize)]
 pub struct DateRangeQuery {
     pub from: Option<String>,
     pub to: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct DeleteSessionsQuery {
+    pub from: Option<String>,
+    pub to: Option<String>,
+    pub class: Option<String>,
 }
 
 pub async fn app_classes(

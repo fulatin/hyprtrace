@@ -74,6 +74,8 @@ pub struct ServerConfig {
     pub host: String,
     #[serde(default = "default_port")]
     pub port: u16,
+    #[serde(default)]
+    pub retention_days: u32,
 }
 
 fn default_host() -> String {
@@ -89,6 +91,7 @@ impl Default for ServerConfig {
         Self {
             host: default_host(),
             port: default_port(),
+            retention_days: 0,
         }
     }
 }

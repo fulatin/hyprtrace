@@ -21,6 +21,7 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/apps", axum::routing::get(data::app_ranking))
         .route("/timeline", axum::routing::get(data::timeline))
         .route("/sessions", axum::routing::get(data::sessions))
+        .route("/sessions", axum::routing::delete(data::delete_sessions))
         .route("/app/:class/trend", axum::routing::get(data::app_trend))
         .route("/apps/classes", axum::routing::get(data::app_classes))
         .route("/apps/metadata", axum::routing::get(data::apps_metadata))

@@ -1070,6 +1070,81 @@ impl Database {
         Ok(())
     }
 
+    /// Delete child rows first (FK integrity), then the matching finished
+    /// sessions, then rebuild both summary tables from the remaining sessions.
+    fn delete_matching_sessions(
+        &self,
+        where_clause: &str,
+        params: &[Box<dyn rusqlite::types::ToSql>],
+    ) -> anyhow::Result<usize> {
+        let params_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params.iter().map(|b| b.as_ref()).collect();
+
+        let delete_children = |table: &str| -> anyhow::Result<()> {
+            self.conn.execute(
+                &format!(
+                    "DELETE FROM {table} WHERE session_id IN (
+                        SELECT id FROM sessions WHERE {where_clause}
+                    )"
+                ),
+                params_refs.as_slice(),
+            )?;
+            Ok(())
+        };
+        // Children reference sessions(id) via FOREIGN KEY, so delete them first.
+        delete_children("app_resources")?;
+        delete_children("activity_events")?;
+
+        let deleted = self.conn.execute(
+            &format!("DELETE FROM sessions WHERE {where_clause}"),
+            params_refs.as_slice(),
+        )?;
+
+        self.rebuild_daily_summary()?;
+        self.rebuild_hourly_summary()?;
+
+        Ok(deleted)
+    }
+
+    /// Delete finished sessions whose `started_at` falls within the inclusive
+    /// `[from, to]` date range, optionally restricted to a case-insensitive
+    /// `class` match. Returns the number of deleted sessions.
+    pub fn delete_sessions_between(
+        &self,
+        from: &str,
+        to: &str,
+        class: Option<&str>,
+    ) -> anyhow::Result<usize> {
+        let (where_clause, params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
+            match class {
+                Some(c) => (
+                    "date(started_at) BETWEEN ?1 AND ?2
+                     AND lower(class) = lower(?3)
+                     AND ended_at IS NOT NULL"
+                        .to_string(),
+                    vec![
+                        Box::new(from.to_string()),
+                        Box::new(to.to_string()),
+                        Box::new(c.to_string()),
+                    ],
+                ),
+                None => (
+                    "date(started_at) BETWEEN ?1 AND ?2 AND ended_at IS NOT NULL".to_string(),
+                    vec![Box::new(from.to_string()), Box::new(to.to_string())],
+                ),
+            };
+        self.delete_matching_sessions(&where_clause, &params)
+    }
+
+    /// Delete finished sessions whose `started_at` is strictly before
+    /// `cutoff_date` (no class filter). Returns the number of deleted sessions.
+    pub fn delete_sessions_before(&self, cutoff_date: &str) -> anyhow::Result<usize> {
+        let where_clause = "date(started_at) < ?1 AND ended_at IS NOT NULL".to_string();
+        let params: Vec<Box<dyn rusqlite::types::ToSql>> =
+            vec![Box::new(cutoff_date.to_string())];
+        self.delete_matching_sessions(&where_clause, &params)
+    }
+
     pub fn rebuild_daily_summary(&self) -> anyhow::Result<()> {
         self.conn.execute("DELETE FROM daily_summary", [])?;
         let threshold = self.focused_threshold_ms;
@@ -1168,6 +1243,7 @@ fn like_match(pattern: &str, text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusqlite::params;
 
     #[test]
     fn report_and_ranking_smoke() {
@@ -1263,5 +1339,201 @@ mod tests {
 
         drop(db);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Open a throwaway in-memory DB and create the tables the delete paths
+    /// touch (mirroring the daemon's schema subset we care about here).
+    fn test_db() -> Database {
+        let db = Database {
+            conn: Connection::open_in_memory().unwrap(),
+            focused_threshold_ms: 20 * 60 * 1000,
+        };
+        db.conn
+            .execute_batch(
+                "CREATE TABLE sessions (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    class       TEXT NOT NULL,
+                    title       TEXT NOT NULL DEFAULT '',
+                    workspace   TEXT,
+                    started_at  TEXT NOT NULL,
+                    ended_at    TEXT,
+                    duration_ms INTEGER DEFAULT 0,
+                    activity_state TEXT,
+                    focused_ms  INTEGER
+                );
+                CREATE TABLE app_resources (
+                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id INTEGER,
+                    class      TEXT NOT NULL,
+                    sampled_at TEXT NOT NULL,
+                    cpu_pct    REAL,
+                    mem_kb     INTEGER,
+                    FOREIGN KEY (session_id) REFERENCES sessions(id)
+                );
+                CREATE TABLE activity_events (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id  INTEGER,
+                    state       TEXT NOT NULL,
+                    started_at  TEXT NOT NULL,
+                    ended_at    TEXT,
+                    duration_ms INTEGER DEFAULT 0,
+                    FOREIGN KEY (session_id) REFERENCES sessions(id)
+                );
+                CREATE TABLE daily_summary (
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    date          TEXT NOT NULL,
+                    class         TEXT NOT NULL,
+                    total_ms      INTEGER NOT NULL DEFAULT 0,
+                    session_count INTEGER NOT NULL DEFAULT 0,
+                    focused_ms    INTEGER NOT NULL DEFAULT 0,
+                    focused_session_count INTEGER NOT NULL DEFAULT 0,
+                    UNIQUE(date, class)
+                );
+                CREATE TABLE hourly_summary (
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    date          TEXT NOT NULL,
+                    hour          INTEGER NOT NULL,
+                    class         TEXT NOT NULL,
+                    total_ms      INTEGER NOT NULL DEFAULT 0,
+                    session_count INTEGER NOT NULL DEFAULT 0,
+                    focused_ms    INTEGER NOT NULL DEFAULT 0,
+                    UNIQUE(date, hour, class)
+                );
+                PRAGMA foreign_keys = ON;",
+            )
+            .unwrap();
+        db
+    }
+
+    fn insert_session(
+        db: &Database,
+        class: &str,
+        started_at: &str,
+        ended_at: Option<&str>,
+    ) -> i64 {
+        db.conn
+            .execute(
+                "INSERT INTO sessions (class, title, started_at, ended_at, duration_ms)
+                 VALUES (?1, '', ?2, ?3, 1000)",
+                params![class, started_at, ended_at],
+            )
+            .unwrap();
+        db.conn.last_insert_rowid()
+    }
+
+    #[test]
+    fn delete_sessions_between_removes_children_and_sessions() {
+        let db = test_db();
+        let a = insert_session(&db, "kitty", "2025-01-10T09:00:00Z", Some("2025-01-10T09:10:00Z"));
+        let b = insert_session(&db, "firefox", "2025-01-11T09:00:00Z", Some("2025-01-11T09:10:00Z"));
+        // Open session (ended_at IS NULL): must be left alone.
+        insert_session(&db, "kitty", "2025-01-10T10:00:00Z", None);
+
+        for sid in [a, b] {
+            db.conn
+                .execute(
+                    "INSERT INTO app_resources (session_id, class, sampled_at)
+                     VALUES (?1, 'kitty', '2025-01-10T09:00:00Z')",
+                    params![sid],
+                )
+                .unwrap();
+            db.conn
+                .execute(
+                    "INSERT INTO activity_events (session_id, state, started_at)
+                     VALUES (?1, 'active', '2025-01-10T09:00:00Z')",
+                    params![sid],
+                )
+                .unwrap();
+        }
+        // Seed a daily_summary row that should be wiped by the rebuild.
+        db.conn
+            .execute(
+                "INSERT INTO daily_summary (date, class, total_ms, session_count)
+                 VALUES ('2025-01-10', 'kitty', 12345, 99)",
+                [],
+            )
+            .unwrap();
+
+        let deleted = db.delete_sessions_between("2025-01-10", "2025-01-11", None).unwrap();
+        assert_eq!(deleted, 2);
+
+        let sessions: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM sessions", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(sessions, 1, "open session must remain");
+
+        let resources: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM app_resources", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(resources, 0);
+
+        let events: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM activity_events", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(events, 0);
+
+        // daily_summary was rebuilt from the remaining session only.
+        let total: i64 = db
+            .conn
+            .query_row("SELECT COALESCE(SUM(total_ms), 0) FROM daily_summary", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(total, 0, "no finished sessions => empty rebuild");
+    }
+
+    #[test]
+    fn delete_sessions_between_class_filter_is_case_insensitive() {
+        let db = test_db();
+        insert_session(&db, "Kitty", "2025-01-10T09:00:00Z", Some("2025-01-10T09:10:00Z"));
+        insert_session(&db, "firefox", "2025-01-10T09:00:00Z", Some("2025-01-10T09:10:00Z"));
+
+        let deleted = db
+            .delete_sessions_between("2025-01-10", "2025-01-10", Some("KITTY"))
+            .unwrap();
+        assert_eq!(deleted, 1);
+
+        let remaining: String = db
+            .conn
+            .query_row("SELECT class FROM sessions", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(remaining, "firefox");
+    }
+
+    #[test]
+    fn delete_sessions_before_removes_strictly_older_sessions() {
+        let db = test_db();
+        let old = insert_session(&db, "kitty", "2025-01-09T23:59:00Z", Some("2025-01-09T23:59:59Z"));
+        insert_session(&db, "firefox", "2025-01-10T00:00:00Z", Some("2025-01-10T00:10:00Z"));
+        // Boundary: session on the cutoff date must survive.
+        insert_session(&db, "kitty", "2025-01-10T09:00:00Z", Some("2025-01-10T09:10:00Z"));
+
+        db.conn
+            .execute(
+                "INSERT INTO app_resources (session_id, class, sampled_at)
+                 VALUES (?1, 'kitty', '2025-01-09T23:59:00Z')",
+                params![old],
+            )
+            .unwrap();
+
+        let deleted = db.delete_sessions_before("2025-01-10").unwrap();
+        assert_eq!(deleted, 1);
+
+        let classes: Vec<String> = db
+            .conn
+            .prepare("SELECT class FROM sessions ORDER BY id")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(classes, vec!["firefox".to_string(), "kitty".to_string()]);
+
+        let resources: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM app_resources", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(resources, 0);
     }
 }

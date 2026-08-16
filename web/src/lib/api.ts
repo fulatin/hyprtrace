@@ -96,6 +96,12 @@ export const api = {
       body: JSON.stringify(req),
     }),
 
+  deleteSessions: (from: string, to: string, cls?: string) =>
+    fetchJSON<{ deleted: number; rebuilt_summaries: boolean }>(
+      `/api/sessions?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}${cls ? `&class=${encodeURIComponent(cls)}` : ''}`,
+      { method: 'DELETE' }
+    ),
+
   activityEvents: (from: string, to: string, limit = 100) =>
     fetchJSON<ActivityEvent[]>(
       `/api/activity/events?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&limit=${limit}`
