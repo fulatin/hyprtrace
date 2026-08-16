@@ -1,6 +1,7 @@
-use crate::models::{AppMetadata, CategoryRule, PaginatedResponse, Session};
+use crate::models::{AppMetadata, CategoryRule, PaginatedResponse, Project, ProjectRule, ProjectStat, Session};
 use crate::routes::AppState;
 use axum::extract::{Path, Query, State};
+use axum::http::StatusCode;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -105,6 +106,101 @@ pub async fn put_categories(
         Ok(()) => Ok(Json(serde_json::json!({"status": "ok"}))),
         Err(e) => {
             log::error!("Failed to save categories: {}", e);
+            Err(Json(serde_json::json!({"error": "Internal server error"})))
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub struct ProjectsResponse {
+    pub projects: Vec<Project>,
+    pub rules: Vec<ProjectRule>,
+}
+
+#[derive(Deserialize)]
+pub struct ProjectsUpdate {
+    pub projects: Vec<Project>,
+    pub rules: Vec<ProjectRule>,
+}
+
+pub async fn get_projects(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<ProjectsResponse>, Json<serde_json::Value>> {
+    let db = state.db.lock().await;
+    match (db.projects(), db.project_rules()) {
+        (Ok(projects), Ok(rules)) => Ok(Json(ProjectsResponse { projects, rules })),
+        (Err(e), _) | (_, Err(e)) => {
+            log::error!("Failed to load projects: {}", e);
+            Err(Json(serde_json::json!({"error": "Internal server error"})))
+        }
+    }
+}
+
+pub async fn put_projects(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ProjectsUpdate>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    // Reject duplicate project names before touching the database so the
+    // caller gets a clear 400 instead of a generic 500 from the UNIQUE index.
+    let mut seen = std::collections::HashSet::new();
+    for p in &req.projects {
+        let name = p.name.trim();
+        if name.is_empty() {
+            continue;
+        }
+        if !seen.insert(name.to_string()) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": format!("Duplicate project name: {}", name)})),
+            ));
+        }
+    }
+
+    let db = state.db.lock().await;
+    match db.set_projects(&req.projects, &req.rules) {
+        Ok(()) => match (db.projects(), db.project_rules()) {
+            (Ok(projects), Ok(rules)) => Ok(Json(serde_json::json!({
+                "status": "ok",
+                "projects": projects,
+                "rules": rules,
+            }))),
+            (Err(e), _) | (_, Err(e)) => {
+                log::error!("Failed to reload projects after save: {}", e);
+                Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": "Internal server error"})),
+                ))
+            }
+        },
+        Err(e) => {
+            log::error!("Failed to save projects: {}", e);
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Internal server error"})),
+            ))
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct ProjectStatsQuery {
+    pub from: Option<String>,
+    pub to: Option<String>,
+}
+
+pub async fn project_stats(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<ProjectStatsQuery>,
+) -> Result<Json<Vec<ProjectStat>>, Json<serde_json::Value>> {
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let from = query.from.unwrap_or_else(|| today.clone());
+    let to = query.to.unwrap_or(today);
+
+    let db = state.db.lock().await;
+    match db.project_stats(&from, &to) {
+        Ok(stats) => Ok(Json(stats)),
+        Err(e) => {
+            log::error!("Failed to get project stats: {}", e);
             Err(Json(serde_json::json!({"error": "Internal server error"})))
         }
     }

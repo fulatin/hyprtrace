@@ -30,6 +30,34 @@ export interface CategoriesResponse {
   categories: string[];
 }
 
+export interface Project {
+  id?: number | null;
+  name: string;
+  color: string;
+  sort_order: number;
+}
+
+export interface ProjectRule {
+  id?: number | null;
+  project_id: number;
+  pattern: string;
+  priority: number;
+}
+
+export interface ProjectStat {
+  project_id: number | null;
+  name: string;
+  color: string;
+  total_ms: number;
+  session_count: number;
+  percentage: number;
+}
+
+export interface ProjectsResponse {
+  projects: Project[];
+  rules: ProjectRule[];
+}
+
 export interface AppResource {
   class: string;
   avg_cpu_pct: number;

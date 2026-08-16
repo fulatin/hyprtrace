@@ -177,3 +177,29 @@ pub struct WorkspaceRecommendation {
     pub total_ms: i64,
     pub confidence: String,
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Project {
+    pub id: Option<i64>,
+    pub name: String,
+    pub color: String,
+    pub sort_order: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ProjectRule {
+    pub id: Option<i64>,
+    pub project_id: i64,
+    pub pattern: String,
+    pub priority: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProjectStat {
+    pub project_id: Option<i64>,
+    pub name: String,
+    pub color: String,
+    pub total_ms: i64,
+    pub session_count: i64,
+    pub percentage: f64,
+}

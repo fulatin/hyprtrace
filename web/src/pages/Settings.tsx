@@ -1,7 +1,27 @@
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
-import { Wifi, WifiOff, Download, Save, Key, Globe, Cpu, BarChart3, Tags, Plus, Trash2, Target, FileText } from 'lucide-react';
-import type { AiModelsResponse, CategoryRule, ConfigResponse, Goal, Session } from '../lib/types';
+import { Wifi, WifiOff, Download, Save, Key, Globe, Cpu, BarChart3, Tags, Plus, Trash2, Target, FileText, FolderKanban } from 'lucide-react';
+import type { AiModelsResponse, CategoryRule, ConfigResponse, Goal, Project, ProjectRule, Session } from '../lib/types';
+
+// Extract a human-readable message from an API error thrown by fetchJSON,
+// which formats failures as "API Error: <status> <body>".
+function extractApiError(e: unknown): string {
+  if (e instanceof Error) {
+    const idx = e.message.indexOf('{');
+    if (idx >= 0) {
+      try {
+        const parsed = JSON.parse(e.message.slice(idx));
+        if (parsed && typeof parsed.error === 'string') {
+          return parsed.error;
+        }
+      } catch {
+        /* fall through */
+      }
+    }
+    return e.message;
+  }
+  return 'Unknown error';
+}
 
 export default function Settings() {
   const [status, setStatus] = useState<'online' | 'offline' | 'checking'>('checking');
@@ -37,6 +57,11 @@ export default function Settings() {
   const [deleting, setDeleting] = useState(false);
   const [deleteMsg, setDeleteMsg] = useState('');
 
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [projectRules, setProjectRules] = useState<ProjectRule[]>([]);
+  const [savingProjects, setSavingProjects] = useState(false);
+  const [projectMsg, setProjectMsg] = useState('');
+
   useEffect(() => {
     api.health()
       .then((res) => {
@@ -69,6 +94,13 @@ export default function Settings() {
 
     api.goals()
       .then((res) => setGoals(res.goals))
+      .catch(() => {});
+
+    api.projects()
+      .then((res) => {
+        setProjects(res.projects);
+        setProjectRules(res.rules);
+      })
       .catch(() => {});
   }, []);
 
@@ -221,6 +253,104 @@ export default function Settings() {
       setGoalMsg('Save failed');
     } finally {
       setSavingGoals(false);
+    }
+  };
+
+  const handleAddProject = () => {
+    setProjects([...projects, { id: undefined, name: '', color: '#22d3ee', sort_order: projects.length }]);
+  };
+
+  const handleUpdateProject = (idx: number, field: 'name' | 'color', value: string) => {
+    setProjects(projects.map((p, i) => (i === idx ? { ...p, [field]: value } : p)));
+  };
+
+  const handleDeleteProject = (idx: number) => {
+    const target = projects[idx];
+    const remaining = projects.filter((_, i) => i !== idx);
+    setProjects(remaining);
+    // Drop rules that reference the removed project (by real id or temp id).
+    const removedIds = new Set<number>();
+    if (target?.id != null) removedIds.add(target.id);
+    removedIds.add(-(idx + 1));
+    setProjectRules(projectRules.filter((r) => !removedIds.has(r.project_id)));
+  };
+
+  const handleAddProjectRule = () => {
+    const first = projects[0];
+    if (!first) return;
+    // Use a negative temp id for unsaved projects: -1 → projects[0], -2 → projects[1], ...
+    setProjectRules([
+      ...projectRules,
+      { id: undefined, project_id: first.id ?? -1, pattern: '', priority: 0 },
+    ]);
+  };
+
+  const handleUpdateProjectRule = (idx: number, field: 'project_id' | 'pattern' | 'priority', value: string) => {
+    setProjectRules(projectRules.map((r, i) =>
+      i === idx
+        ? { ...r, [field]: field === 'project_id' || field === 'priority' ? Number(value) : value }
+        : r
+    ));
+  };
+
+  const handleDeleteProjectRule = (idx: number) => {
+    setProjectRules(projectRules.filter((_, i) => i !== idx));
+  };
+
+  // Stable select value for a project: real id when saved, negative temp id otherwise.
+  const projectSelectValue = (p: Project, i: number): number => p.id ?? -(i + 1);
+
+  const handleSaveProjects = async () => {
+    setSavingProjects(true);
+    setProjectMsg('');
+    try {
+      const projs = projects
+        .map((p, i) => ({ ...p, sort_order: i }))
+        .filter((p) => p.name.trim());
+      const rules = projectRules.filter((r) => r.pattern.trim());
+
+      const usesTempIds = rules.some((r) => r.project_id < 0);
+      let saved: { status: string; projects: Project[]; rules: ProjectRule[] };
+
+      if (usesTempIds) {
+        // Persist the projects first to obtain their real ids.
+        const first = await api.putProjects(projs, []);
+        const nameToId = new Map<string, number>();
+        first.projects.forEach((p) => {
+          if (p.id != null) nameToId.set(p.name, p.id);
+        });
+
+        // Resolve every rule's project to the newly-saved id. Negative temp
+        // ids are an index into `projects` (-1 → projects[0], ...); existing
+        // ids are looked up by name because a full replace renumbers rows.
+        const finalRules = rules.map((r) => {
+          let ref: Project | undefined;
+          if (r.project_id < 0) {
+            const idx = -r.project_id - 1;
+            ref = idx >= 0 && idx < projects.length ? projects[idx] : undefined;
+          } else {
+            ref = projects.find((p) => p.id === r.project_id);
+          }
+          // Prefer the freshly-saved id (by name); fall back to any id we
+          // already have, else leave the rule's id as-is for the server to drop.
+          const realId = ref ? nameToId.get(ref.name) ?? ref.id : undefined;
+          return { ...r, project_id: realId ?? r.project_id };
+        });
+
+        // Save again with the persisted projects (carrying real ids) so the
+        // remapped rules resolve against the projects that actually exist.
+        saved = await api.putProjects(first.projects, finalRules);
+      } else {
+        saved = await api.putProjects(projs, rules);
+      }
+
+      setProjects(saved.projects);
+      setProjectRules(saved.rules);
+      setProjectMsg('Saved');
+    } catch (e) {
+      setProjectMsg('Save failed: ' + extractApiError(e));
+    } finally {
+      setSavingProjects(false);
     }
   };
 
@@ -537,6 +667,115 @@ export default function Settings() {
             {goalMsg && (
               <span className={`text-xs ${goalMsg === 'Saved' ? 'text-emerald-400' : 'text-red-400'}`}>
                 {goalMsg}
+              </span>
+            )}
+          </div>
+        </div>
+
+        <div className="border-t border-gray-800 pt-4">
+          <h3 className="text-sm font-medium text-gray-400 mb-3 flex items-center gap-2">
+            <FolderKanban size={14} />
+            Projects
+          </h3>
+          <p className="text-xs text-gray-500 mb-3">Attribute app usage to user-defined projects (e.g. 课设, Open Source). Rules use SQL LIKE patterns (% matches anything); higher priority wins.</p>
+
+          <div className="space-y-2 mb-4">
+            {projects.map((project, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <input
+                  type="color"
+                  value={project.color || '#22d3ee'}
+                  onChange={(e) => handleUpdateProject(i, 'color', e.target.value)}
+                  className="w-9 h-8 bg-gray-800 border border-gray-700 rounded-lg p-0.5"
+                  title="Project color"
+                />
+                <input
+                  type="text"
+                  value={project.name}
+                  onChange={(e) => handleUpdateProject(i, 'name', e.target.value)}
+                  placeholder="课设"
+                  className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-2 py-1 text-xs text-gray-200 placeholder-gray-500 focus:ring-cyan-500"
+                />
+                <button
+                  onClick={() => handleDeleteProject(i)}
+                  className="p-1 text-gray-500 hover:text-red-400 transition-colors"
+                  title="Delete project"
+                >
+                  <Trash2 size={12} />
+                </button>
+              </div>
+            ))}
+            {projects.length === 0 && (
+              <p className="text-xs text-gray-600">No projects yet — add one to group your app time.</p>
+            )}
+          </div>
+
+          <div className="space-y-2 mb-4">
+            {projectRules.map((rule, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <select
+                  value={rule.project_id}
+                  onChange={(e) => handleUpdateProjectRule(i, 'project_id', e.target.value)}
+                  className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1 text-xs text-gray-200 focus:ring-cyan-500"
+                >
+                  {projects.map((p, pi) => (
+                    <option key={p.id ?? `new-${pi}`} value={projectSelectValue(p, pi)}>
+                      {p.name || '(unnamed)'}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  type="text"
+                  value={rule.pattern}
+                  onChange={(e) => handleUpdateProjectRule(i, 'pattern', e.target.value)}
+                  placeholder="code% (app class pattern)"
+                  className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-2 py-1 text-xs text-gray-200 placeholder-gray-500 focus:ring-cyan-500"
+                />
+                <input
+                  type="number"
+                  value={rule.priority}
+                  onChange={(e) => handleUpdateProjectRule(i, 'priority', e.target.value)}
+                  min={0}
+                  className="w-16 bg-gray-800 border border-gray-700 rounded-lg px-2 py-1 text-xs text-gray-200"
+                  title="Priority"
+                />
+                <button
+                  onClick={() => handleDeleteProjectRule(i)}
+                  className="p-1 text-gray-500 hover:text-red-400 transition-colors"
+                  title="Delete rule"
+                >
+                  <Trash2 size={12} />
+                </button>
+              </div>
+            ))}
+          </div>
+
+          <div className="flex items-center gap-3">
+            <button
+              onClick={handleAddProject}
+              className="flex items-center gap-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-1 text-xs text-gray-300 hover:bg-gray-700 transition-colors"
+            >
+              <Plus size={12} />
+              Add Project
+            </button>
+            <button
+              onClick={handleAddProjectRule}
+              className="flex items-center gap-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-1 text-xs text-gray-300 hover:bg-gray-700 transition-colors"
+            >
+              <Plus size={12} />
+              Add Rule
+            </button>
+            <button
+              onClick={handleSaveProjects}
+              disabled={savingProjects}
+              className="flex items-center gap-2 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white rounded-lg px-4 py-2 text-sm transition-colors"
+            >
+              <Save size={14} />
+              {savingProjects ? 'Saving...' : 'Save Projects'}
+            </button>
+            {projectMsg && (
+              <span className={`text-xs ${projectMsg === 'Saved' ? 'text-emerald-400' : 'text-red-400'}`}>
+                {projectMsg}
               </span>
             )}
           </div>
