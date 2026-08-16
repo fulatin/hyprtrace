@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 /// Metadata resolved for a single application from a `.desktop` entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -98,6 +99,14 @@ impl AppMetadataResolver {
         }
         self.entries.get(&key).cloned()
     }
+}
+
+/// Process-wide, lazily-initialized resolver so the `.desktop` directories are
+/// scanned once instead of on every request. The first `global()` call performs
+/// the filesystem I/O; subsequent calls return the cached instance.
+pub fn global() -> &'static AppMetadataResolver {
+    static RESOLVER: OnceLock<AppMetadataResolver> = OnceLock::new();
+    RESOLVER.get_or_init(AppMetadataResolver::scan)
 }
 
 /// Directories to scan, in order. Missing directories are ignored by the

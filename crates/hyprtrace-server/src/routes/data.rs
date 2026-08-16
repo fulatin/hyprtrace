@@ -224,7 +224,7 @@ pub struct AppsMetadataResponse {
 pub async fn apps_metadata(
     Query(query): Query<AppsMetadataQuery>,
 ) -> Json<AppsMetadataResponse> {
-    let resolver = crate::desktop::AppMetadataResolver::scan();
+    let resolver = crate::desktop::global();
 
     let classes_param = query.classes.unwrap_or_default();
     let classes = classes_param
