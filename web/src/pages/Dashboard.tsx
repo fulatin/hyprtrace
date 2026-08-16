@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { format } from 'date-fns';
-import { Clock, AppWindow, Hash, Moon, BrainCircuit, BellRing, Copy, Gauge, Target, TrendingUp } from 'lucide-react';
+import { Clock, AppWindow, Hash, Moon, BrainCircuit, BellRing, Copy, Gauge, Target, TrendingUp, FolderKanban } from 'lucide-react';
 import { api } from '../lib/api';
-import type { TodaySummary, HourlyBucket, DisruptionEvent, EfficiencyScore, GoalProgress, TrendPrediction } from '../lib/types';
+import type { TodaySummary, HourlyBucket, DisruptionEvent, EfficiencyScore, GoalProgress, TrendPrediction, ProjectStat } from '../lib/types';
 import StatCard from '../components/StatCard';
 import AppUsagePie from '../components/AppUsagePie';
 import HourlyHeatmap from '../components/HourlyHeatmap';
@@ -23,6 +23,7 @@ export default function Dashboard() {
   const [efficiency, setEfficiency] = useState<EfficiencyScore | null>(null);
   const [goalProgress, setGoalProgress] = useState<GoalProgress[]>([]);
   const [prediction, setPrediction] = useState<TrendPrediction | null>(null);
+  const [projectStats, setProjectStats] = useState<ProjectStat[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -34,13 +35,15 @@ export default function Dashboard() {
       api.efficiency(today).catch(() => null),
       api.goals().catch(() => ({ goals: [], progress: [] })),
       api.predict(14).catch(() => null),
-    ]).then(([s, t, d, e, g, p]) => {
+      api.projectStats(today, today).catch(() => []),
+    ]).then(([s, t, d, e, g, p, ps]) => {
       setSummary(s);
       setTimeline(t);
       setDisruptions(d);
       setEfficiency(e);
       setGoalProgress(g.progress ?? []);
       setPrediction(p);
+      setProjectStats(ps);
       setLoading(false);
     });
   }, [today]);
@@ -132,6 +135,36 @@ export default function Dashboard() {
       <div className="grid grid-cols-2 gap-4 animate-fadeInUp" style={{ animationDelay: "200ms" }}>
         <AppUsagePie data={summary?.top_apps ?? []} />
         <HourlyHeatmap data={timeline} />
+      </div>
+
+      <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 animate-fadeInUp" style={{ animationDelay: "250ms" }}>
+        <h3 className="text-sm font-medium text-gray-400 flex items-center gap-2 mb-3">
+          <FolderKanban size={14} className="text-cyan-400" />
+          Projects
+        </h3>
+        {projectStats.length === 0 ? (
+          <p className="text-xs text-gray-600">No projects configured — add them in Settings to track time by project.</p>
+        ) : (
+          <div className="space-y-2">
+            {projectStats.slice(0, 5).map((p) => (
+              <div key={p.project_id ?? 'uncategorized'} className="flex items-center gap-3">
+                <span
+                  className="w-2.5 h-2.5 rounded-full shrink-0"
+                  style={{ backgroundColor: p.color || '#6b7280' }}
+                />
+                <span className="w-32 text-sm text-gray-200 truncate">{p.name}</span>
+                <div className="flex-1 h-2 bg-gray-800 rounded-full overflow-hidden">
+                  <div
+                    className="h-full rounded-full"
+                    style={{ width: `${Math.min(p.percentage, 100)}%`, backgroundColor: p.color || '#6b7280' }}
+                  />
+                </div>
+                <span className="w-20 text-right text-sm text-gray-300">{formatDuration(p.total_ms)}</span>
+                <span className="w-14 text-right text-xs text-gray-500">{Math.round(p.percentage)}%</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {disruptions.length > 0 && (

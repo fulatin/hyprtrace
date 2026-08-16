@@ -13,6 +13,10 @@ import type {
   ActivityEvent,
   CategoryRule,
   CategoriesResponse,
+  Project,
+  ProjectRule,
+  ProjectStat,
+  ProjectsResponse,
   AppResource,
   DisruptionEvent,
   EfficiencyScore,
@@ -108,6 +112,21 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ rules }),
     }),
+
+  projects: () =>
+    fetchJSON<ProjectsResponse>('/api/projects'),
+
+  putProjects: (projects: Project[], rules: ProjectRule[]) =>
+    fetchJSON<{ status: string }>('/api/projects', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projects, rules }),
+    }),
+
+  projectStats: (from: string, to: string) =>
+    fetchJSON<ProjectStat[]>(
+      `/api/projects/stats?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
+    ),
 
   resources: (from: string, to: string, limit = 10) =>
     fetchJSON<AppResource[]>(

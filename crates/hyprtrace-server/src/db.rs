@@ -1,7 +1,7 @@
 use crate::models::{
     ActivityEvent, AiMessage, AppRank, AppResource, CategoryRule, CurrentStatus, DailyTrend,
-    DisruptionEvent, EfficiencyScore, Goal, GoalProgress, HourlyBucket, Session, TodaySummary,
-    TrendPrediction, WorkspaceRecommendation,
+    DisruptionEvent, EfficiencyScore, Goal, GoalProgress, HourlyBucket, Project, ProjectRule,
+    ProjectStat, Session, TodaySummary, TrendPrediction, WorkspaceRecommendation,
 };
 use anyhow::Context;
 use chrono::Timelike;
@@ -96,6 +96,211 @@ impl Database {
             stmt.execute(params![pattern, category])?;
         }
         Ok(())
+    }
+
+    /// Create the projects + project_rules tables (if missing).
+    pub fn ensure_projects(&self) -> anyhow::Result<()> {
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS projects (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                name       TEXT NOT NULL UNIQUE,
+                color      TEXT NOT NULL DEFAULT '#22d3ee',
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE TABLE IF NOT EXISTS project_rules (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                pattern    TEXT NOT NULL,
+                priority   INTEGER NOT NULL DEFAULT 0
+            );",
+        )?;
+        Ok(())
+    }
+
+    /// All projects, ordered by sort_order.
+    pub fn projects(&self) -> anyhow::Result<Vec<Project>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, color, sort_order FROM projects ORDER BY sort_order ASC, id ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(Project {
+                id: Some(row.get(0)?),
+                name: row.get(1)?,
+                color: row.get(2)?,
+                sort_order: row.get(3)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// All project rules, ordered by project then priority.
+    pub fn project_rules(&self) -> anyhow::Result<Vec<ProjectRule>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, project_id, pattern, priority FROM project_rules
+             ORDER BY priority DESC, id ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(ProjectRule {
+                id: Some(row.get(0)?),
+                project_id: row.get(1)?,
+                pattern: row.get(2)?,
+                priority: row.get(3)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Replace all projects and their rules atomically. Rules referencing a
+    /// project that no longer exists are removed first so foreign keys hold.
+    pub fn set_projects(&self, projects: &[Project], rules: &[ProjectRule]) -> anyhow::Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+
+        // Rebuild projects, tracking old→new id so rules can be reattached.
+        tx.execute("DELETE FROM projects", [])?;
+        let mut id_map: std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO projects (name, color, sort_order) VALUES (?1, ?2, ?3)",)?;
+            for (idx, p) in projects.iter().enumerate() {
+                if p.name.trim().is_empty() {
+                    continue;
+                }
+                let old_id = p.id;
+                stmt.execute(params![
+                    p.name.trim(),
+                    if p.color.trim().is_empty() { "#22d3ee".to_string() } else { p.color.trim().to_string() },
+                    idx as i64,
+                ])?;
+                let new_id = tx.last_insert_rowid();
+                if let Some(oid) = old_id {
+                    id_map.insert(oid, new_id);
+                }
+            }
+        }
+
+        // Reinsert rules, mapping any old project ids to their new ids.
+        {
+            let mut rule_stmt = tx.prepare(
+                "INSERT INTO project_rules (project_id, pattern, priority) VALUES (?1, ?2, ?3)",)?;
+            for r in rules {
+                let project_id = id_map.get(&r.project_id).copied().unwrap_or(r.project_id);
+                // Skip rules whose project no longer exists.
+                let exists: i64 = tx.query_row(
+                    "SELECT COUNT(*) FROM projects WHERE id = ?1",
+                    params![project_id],
+                    |row| row.get(0),
+                )?;
+                if exists == 0 || r.pattern.trim().is_empty() {
+                    continue;
+                }
+                rule_stmt.execute(params![project_id, r.pattern.trim(), r.priority])?;
+            }
+        }
+
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Find the project matching an app class (SQLite LIKE semantics,
+    /// case-insensitive), highest priority rule first.
+    pub fn project_for_class(&self, class: &str) -> Option<Project> {
+        let rules = self.project_rules().ok()?;
+        for rule in rules {
+            if like_match(&rule.pattern, class) {
+                let project = self.conn.query_row(
+                    "SELECT id, name, color, sort_order FROM projects WHERE id = ?1",
+                    params![rule.project_id],
+                    |row| {
+                        Ok(Project {
+                            id: Some(row.get(0)?),
+                            name: row.get(1)?,
+                            color: row.get(2)?,
+                            sort_order: row.get(3)?,
+                        })
+                    },
+                );
+                if let Ok(p) = project {
+                    return Some(p);
+                }
+            }
+        }
+        None
+    }
+
+    /// Aggregate session time by matched project for a date range, including an
+    /// "未分类" (uncategorized) bucket for unmatched sessions.
+    pub fn project_stats(&self, from: &str, to: &str) -> anyhow::Result<Vec<ProjectStat>> {
+        let projects = self.projects()?;
+
+        let mut stmt = self.conn.prepare(
+            "SELECT class, SUM(duration_ms), COUNT(*)
+             FROM sessions
+             WHERE ended_at IS NOT NULL AND duration_ms > 0
+               AND date(started_at) BETWEEN ?1 AND ?2
+             GROUP BY class",
+        )?;
+        let rows = stmt.query_map(params![from, to], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })?;
+
+        // Bucket by project id (None = unmatched).
+        let mut buckets: std::collections::HashMap<Option<i64>, (i64, i64)> =
+            std::collections::HashMap::new();
+        for r in rows {
+            let (class, total_ms, session_count) = r?;
+            let pid = self.project_for_class(&class).map(|p| p.id.unwrap_or(-1));
+            let key = pid.filter(|&id| id > 0);
+            let entry = buckets.entry(key).or_insert((0, 0));
+            entry.0 += total_ms;
+            entry.1 += session_count;
+        }
+
+        let grand_total: i64 = buckets.values().map(|(ms, _)| *ms).sum();
+
+        let mut out = Vec::new();
+        for p in &projects {
+            let pid = p.id.expect("projects loaded from db always have ids");
+            let (total_ms, session_count) = buckets.get(&Some(pid)).copied().unwrap_or((0, 0));
+            let percentage = if grand_total > 0 {
+                (total_ms as f64 / grand_total as f64) * 100.0
+            } else {
+                0.0
+            };
+            out.push(ProjectStat {
+                project_id: Some(pid),
+                name: p.name.clone(),
+                color: p.color.clone(),
+                total_ms,
+                session_count,
+                percentage,
+            });
+        }
+
+        // Unmatched bucket.
+        let (unmatched_ms, unmatched_count) = buckets.get(&None).copied().unwrap_or((0, 0));
+        if unmatched_ms > 0 {
+            out.push(ProjectStat {
+                project_id: None,
+                name: "未分类".to_string(),
+                color: "#6b7280".to_string(),
+                total_ms: unmatched_ms,
+                session_count: unmatched_count,
+                percentage: if grand_total > 0 {
+                    (unmatched_ms as f64 / grand_total as f64) * 100.0
+                } else {
+                    0.0
+                },
+            });
+        }
+
+        // Sort by total time descending so the busiest buckets lead.
+        out.sort_by(|a, b| b.total_ms.cmp(&a.total_ms));
+        Ok(out)
     }
 
     /// All category rules, highest priority first.
@@ -1163,4 +1368,168 @@ fn like_match(pattern: &str, text: &str) -> bool {
         pi += 1;
     }
     pi == p.len()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_db() -> Database {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "PRAGMA foreign_keys=ON;
+             CREATE TABLE IF NOT EXISTS projects (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                name       TEXT NOT NULL UNIQUE,
+                color      TEXT NOT NULL DEFAULT '#22d3ee',
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+             );
+             CREATE TABLE IF NOT EXISTS project_rules (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                pattern    TEXT NOT NULL,
+                priority   INTEGER NOT NULL DEFAULT 0
+             );
+             CREATE TABLE IF NOT EXISTS sessions (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                class        TEXT NOT NULL,
+                title        TEXT NOT NULL DEFAULT '',
+                workspace    TEXT,
+                started_at   TEXT NOT NULL,
+                ended_at     TEXT,
+                duration_ms  INTEGER,
+                activity_state TEXT,
+                focused_ms   INTEGER
+             );",
+        )
+        .unwrap();
+        Database {
+            conn,
+            focused_threshold_ms: 30_000,
+        }
+    }
+
+    fn tracked_session(conn: &Connection, class: &str, ms: i64) {
+        conn.execute(
+            "INSERT INTO sessions (class, title, started_at, ended_at, duration_ms)
+             VALUES (?1, '', '2025-01-01T00:00:00Z', '2025-01-01T01:00:00Z', ?2)",
+            params![class, ms],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn projects_and_rules_roundtrip_and_match() {
+        let db = test_db();
+        db.ensure_projects().unwrap();
+
+        let projects = vec![
+            Project { id: None, name: "课设".to_string(), color: "#22d3ee".to_string(), sort_order: 0 },
+            Project { id: None, name: "Open Source".to_string(), color: "#a855f7".to_string(), sort_order: 1 },
+        ];
+        let rules = vec![
+            ProjectRule { id: None, project_id: 1, pattern: "code%".to_string(), priority: 0 },
+            ProjectRule { id: None, project_id: 2, pattern: "firefox".to_string(), priority: 0 },
+        ];
+        db.set_projects(&projects, &rules).unwrap();
+
+        let projs = db.projects().unwrap();
+        assert_eq!(projs.len(), 2);
+
+        // Classify by highest priority, case-insensitive SQLite LIKE semantics.
+        assert_eq!(db.project_for_class("Code").unwrap().name, "课设");
+        assert_eq!(db.project_for_class("firefox").unwrap().name, "Open Source");
+        assert!(db.project_for_class("unknown").is_none());
+    }
+
+    #[test]
+    fn set_projects_replaces_all() {
+        let db = test_db();
+        db.ensure_projects().unwrap();
+
+        let p1 = Project { id: None, name: "课设".to_string(), color: "#22d3ee".to_string(), sort_order: 0 };
+        let p2 = Project { id: None, name: "Open Source".to_string(), color: "#a855f7".to_string(), sort_order: 1 };
+        db.set_projects(
+            &[p1.clone(), p2.clone()],
+            &[
+                ProjectRule { id: None, project_id: 1, pattern: "code%".to_string(), priority: 0 },
+                ProjectRule { id: None, project_id: 2, pattern: "firefox".to_string(), priority: 0 },
+            ],
+        )
+        .unwrap();
+        assert_eq!(db.projects().unwrap().len(), 2);
+        assert_eq!(db.project_rules().unwrap().len(), 2);
+
+        // Replace with a single project and only one rule; the other must be gone.
+        // Reuse the ids as the caller would (a PUT round-trips persisted ids).
+        let existing = db.projects().unwrap();
+        let p1_with_id = Project { id: existing[0].id, name: existing[0].name.clone(), color: existing[0].color.clone(), sort_order: 0 };
+        let p1_id = existing[0].id.unwrap();
+        let p2_id = existing[1].id.unwrap();
+        db.set_projects(
+            &[p1_with_id],
+            &[
+                ProjectRule { id: None, project_id: p1_id, pattern: "kitty".to_string(), priority: 0 },
+                // This rule references a removed project: it must be dropped.
+                ProjectRule { id: None, project_id: p2_id, pattern: "firefox".to_string(), priority: 0 },
+            ],
+        )
+        .unwrap();
+        let projs = db.projects().unwrap();
+        assert_eq!(projs.len(), 1);
+        assert_eq!(projs[0].name, "课设");
+        let rules = db.project_rules().unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].pattern, "kitty");
+        assert!(db.project_for_class("kitty").is_some());
+        assert!(db.project_for_class("firefox").is_none());
+    }
+
+    #[test]
+    fn project_stats_buckets_and_percentages() {
+        let db = test_db();
+        db.ensure_projects().unwrap();
+
+        let p1 = Project { id: None, name: "课设".to_string(), color: "#22d3ee".to_string(), sort_order: 0 };
+        let p2 = Project { id: None, name: "Open Source".to_string(), color: "#a855f7".to_string(), sort_order: 1 };
+        db.set_projects(
+            &[p1.clone(), p2.clone()],
+            &[
+                ProjectRule { id: None, project_id: 1, pattern: "code%".to_string(), priority: 0 },
+                ProjectRule { id: None, project_id: 2, pattern: "firefox".to_string(), priority: 0 },
+            ],
+        )
+        .unwrap();
+
+        // 3000ms → 课设, 1000ms → Open Source, 1000ms → unmatched.
+        tracked_session(&db.conn, "Code", 3000);
+        tracked_session(&db.conn, "firefox", 1000);
+        tracked_session(&db.conn, "steam", 1000);
+        // A session that is still running must be ignored.
+        db.conn
+            .execute(
+                "INSERT INTO sessions (class, title, started_at, ended_at, duration_ms)
+                 VALUES ('code', '', '2025-01-01T02:00:00Z', NULL, NULL)",
+                [],
+            )
+            .unwrap();
+
+        let stats = db.project_stats("2025-01-01", "2025-01-01").unwrap();
+        // Sorted by total_ms desc.
+        assert_eq!(stats.len(), 3);
+        assert_eq!(stats[0].name, "课设");
+        assert_eq!(stats[0].total_ms, 3000);
+        assert_eq!(stats[0].session_count, 1);
+        assert_eq!(stats[1].name, "Open Source");
+        assert_eq!(stats[1].total_ms, 1000);
+        assert_eq!(stats[2].name, "未分类");
+        assert_eq!(stats[2].project_id, None);
+        assert_eq!(stats[2].total_ms, 1000);
+
+        // Grand total 5000ms → 60% / 20% / 20%.
+        assert!((stats[0].percentage - 60.0).abs() < 0.001);
+        assert!((stats[1].percentage - 20.0).abs() < 0.001);
+        assert!((stats[2].percentage - 20.0).abs() < 0.001);
+    }
 }
