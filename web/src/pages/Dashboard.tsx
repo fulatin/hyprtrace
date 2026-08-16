@@ -92,6 +92,8 @@ export default function Dashboard() {
 
     setLoading(true);
 
+    setCompare(EMPTY_COMPARE);
+
     Promise.all([
 
       api.summary(selectedDate).catch(() => null),
@@ -131,20 +133,12 @@ export default function Dashboard() {
     });
 
     // Previous-day comparison (errors ignored -> "—").
-    api.summary(prevDateString).catch(() => null).then((s) => {
-
+    Promise.all([
+      api.summary(prevDateString).catch(() => null),
+      api.efficiency(prevDateString).catch(() => null),
+    ]).then(([s, e]) => {
       if (cancelled) return;
-
-      setCompare((prev) => ({ ...prev, summary: s }));
-
-    });
-
-    api.efficiency(prevDateString).catch(() => null).then((e) => {
-
-      if (cancelled) return;
-
-      setCompare((prev) => ({ ...prev, efficiency: e }));
-
+      setCompare({ summary: s, efficiency: e });
     });
 
     return () => {
