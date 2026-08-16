@@ -202,6 +202,10 @@ npm run dev        # 开发服务器 (localhost:5173)
 npm run build      # 生产构建
 ```
 
+## CI
+
+GitHub Actions 在每次 push / pull request 时运行 `cargo check`、`cargo test` 与 `npm run build`。
+
 ## 技术栈
 
 | 组件 | 技术 |

@@ -1001,4 +1001,78 @@ mod tests {
         drop(db);
         std::fs::remove_dir_all(&dir).ok();
     }
+
+    #[test]
+    fn end_session_updates_summaries_and_resources() {
+        let dir = std::env::temp_dir().join(format!("hyprtrace-test6-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.db");
+
+        let db = Database::open(&path, 1).unwrap();
+        db.migrate().unwrap();
+
+        let id = db.start_session("code", "main.rs", "1", None).unwrap();
+        db.save_resource_sample(id, "code", 12.5, 2048).unwrap();
+        db.update_session_state(id, "focused").unwrap();
+        db.end_session(id).unwrap();
+
+        // Session duration/focus are never negative.
+        let (duration_ms, focused_ms): (i64, i64) = db
+            .conn
+            .query_row(
+                "SELECT duration_ms, focused_ms FROM sessions WHERE id = ?1",
+                params![id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert!(duration_ms >= 0);
+        assert!(focused_ms >= 0);
+
+        // Daily and hourly summaries are updated incrementally.
+        let daily: (i64, i64) = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*), COALESCE(SUM(session_count), 0) FROM daily_summary",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(daily, (1, 1));
+
+        let hourly: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM hourly_summary", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(hourly, 1);
+
+        // All activity events are closed once the session ends.
+        let open_events: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM activity_events WHERE ended_at IS NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(open_events, 0);
+        let total_events: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM activity_events", [], |r| r.get(0))
+            .unwrap();
+        assert!(total_events >= 1);
+
+        // The resource sample was persisted against the session.
+        let resource_rows: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM app_resources WHERE session_id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(resource_rows >= 1);
+
+        drop(db);
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }
