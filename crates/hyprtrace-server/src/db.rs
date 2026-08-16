@@ -1164,3 +1164,104 @@ fn like_match(pattern: &str, text: &str) -> bool {
     }
     pi == p.len()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn report_and_ranking_smoke() {
+        let dir = std::env::temp_dir().join(format!("hyprtrace-server-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.db");
+
+        // Server Database::open does not create the schema; build only the
+        // minimal tables this test needs (no daemon migration here).
+        let db = Database::open(&path, 1).unwrap();
+        db.conn
+            .execute_batch(
+                "CREATE TABLE sessions (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    class       TEXT NOT NULL,
+                    title       TEXT NOT NULL DEFAULT '',
+                    workspace   TEXT,
+                    started_at  TEXT NOT NULL,
+                    ended_at    TEXT,
+                    duration_ms INTEGER DEFAULT 0,
+                    activity_state TEXT DEFAULT 'active',
+                    focused_ms  INTEGER DEFAULT 0
+                );
+
+                CREATE TABLE daily_summary (
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    date          TEXT NOT NULL,
+                    class         TEXT NOT NULL,
+                    total_ms      INTEGER NOT NULL DEFAULT 0,
+                    session_count INTEGER NOT NULL DEFAULT 0,
+                    focused_ms    INTEGER NOT NULL DEFAULT 0,
+                    focused_session_count INTEGER NOT NULL DEFAULT 0,
+                    UNIQUE(date, class)
+                );
+
+                CREATE TABLE hourly_summary (
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    date          TEXT NOT NULL,
+                    hour          INTEGER NOT NULL,
+                    class         TEXT NOT NULL,
+                    total_ms      INTEGER NOT NULL DEFAULT 0,
+                    session_count INTEGER NOT NULL DEFAULT 0,
+                    focused_ms    INTEGER NOT NULL DEFAULT 0,
+                    UNIQUE(date, hour, class)
+                );
+
+                CREATE TABLE disruptions (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    kind        TEXT NOT NULL,
+                    app         TEXT,
+                    summary     TEXT,
+                    occurred_at TEXT NOT NULL
+                );
+
+                CREATE TABLE app_categories (
+                    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+                    pattern  TEXT NOT NULL UNIQUE,
+                    category TEXT NOT NULL,
+                    priority INTEGER NOT NULL DEFAULT 0
+                );",
+            )
+            .unwrap();
+
+        // Two ended sessions for the same class on the same day.
+        let from = "2026-01-15";
+        let to = "2026-01-15";
+        for i in 0..2 {
+            db.conn
+                .execute(
+                    "INSERT INTO sessions (class, title, started_at, ended_at, duration_ms, focused_ms)
+                     VALUES ('code', ?1, ?2, ?2, 60000, 30000)",
+                    params![format!("main{}.rs", i), "2026-01-15T09:30:00+00:00"],
+                )
+                .unwrap();
+        }
+
+        // One matching daily_summary row drives app_ranking and report.
+        db.conn
+            .execute(
+                "INSERT INTO daily_summary (date, class, total_ms, session_count, focused_ms, focused_session_count)
+                 VALUES ('2026-01-15', 'code', 120000, 2, 60000, 2)",
+                [],
+            )
+            .unwrap();
+
+        let ranking = db.app_ranking(from, to, 10).unwrap();
+        assert!(!ranking.is_empty());
+        assert_eq!(ranking[0].class, "code");
+        assert_eq!(ranking[0].total_ms, 120000);
+
+        let report = db.report(from, to).unwrap();
+        assert!(report.contains("code"));
+
+        drop(db);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}
