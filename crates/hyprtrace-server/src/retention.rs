@@ -6,7 +6,12 @@ use std::time::Duration;
 /// (disabled when the value is 0).
 pub fn spawn_retention_cleanup(state: Arc<crate::routes::AppState>) {
     tokio::spawn(async move {
+        let initial_delay = Duration::from_secs(5 * 60);
         let interval = Duration::from_secs(6 * 60 * 60);
+
+        // Give the server time to boot and serve requests before the first
+        // (potentially expensive) cleanup pass kicks in.
+        tokio::time::sleep(initial_delay).await;
 
         loop {
             cleanup_once(&state).await;
@@ -31,6 +36,8 @@ async fn cleanup_once(state: &Arc<crate::routes::AppState>) {
     let cutoff = (chrono::Utc::now() - chrono::Duration::days(retention_days as i64))
         .format("%Y-%m-%d")
         .to_string();
+
+    log::info!("Retention cleanup starting: deleting sessions before {}", cutoff);
 
     let deleted = {
         let db = state.db.lock().await;
