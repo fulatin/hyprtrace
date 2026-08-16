@@ -1,11 +1,18 @@
 use anyhow::Context;
 use chrono::Timelike;
 use rusqlite::{params, Connection};
+use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Mutex;
+use std::time::Instant;
 
 pub struct Database {
     conn: Connection,
     focused_threshold_ms: i64,
+    /// Monotonic start instants for sessions started by this daemon process.
+    /// Wall-clock time can jump (dual-boot with Windows, NTP corrections), but
+    /// `Instant` is monotonic and keeps durations accurate (and never negative).
+    monotonic_starts: Mutex<HashMap<i64, Instant>>,
 }
 
 #[derive(Debug, Clone)]
@@ -35,6 +42,7 @@ impl Database {
         Ok(Self {
             conn,
             focused_threshold_ms: (focused_threshold_seconds * 1000) as i64,
+            monotonic_starts: Mutex::new(HashMap::new()),
         })
     }
 
@@ -76,6 +84,105 @@ impl Database {
         self.migrate_v3()?;
         self.migrate_v4()?;
         self.migrate_v5()?;
+        self.migrate_v6()?;
+        Ok(())
+    }
+
+    /// Repair sessions/events that were recorded with a negative duration when
+    /// the wall clock jumped backwards (e.g. dual-boot with Windows leaving the
+    /// RTC in local time), and rebuild the summary tables from the repaired
+    /// sessions so no negative totals remain.
+    fn migrate_v6(&self) -> anyhow::Result<()> {
+        // SQLite MAX(duration_ms, 0) handles NULL as NULL, so clamp only the
+        // negative rows explicitly.
+        let sessions_repaired = self.conn.execute(
+            "UPDATE sessions SET duration_ms = 0, focused_ms = MAX(COALESCE(focused_ms, 0), 0)
+             WHERE duration_ms < 0",
+            [],
+        )?;
+        let events_repaired = self.conn.execute(
+            "UPDATE activity_events SET duration_ms = 0 WHERE duration_ms < 0",
+            [],
+        )?;
+        if sessions_repaired > 0 || events_repaired > 0 {
+            log::warn!(
+                "Clamped {} negative session duration(s) and {} negative activity_event duration(s) to 0",
+                sessions_repaired,
+                events_repaired
+            );
+        }
+
+        // Rebuild only when something was actually wrong; otherwise keep the
+        // incremental summaries untouched (and avoid a full table rebuild on
+        // every daemon start).
+        let negative_summary_rows: i64 = self.conn.query_row(
+            "SELECT (SELECT COUNT(*) FROM daily_summary WHERE total_ms < 0 OR focused_ms < 0)
+                  + (SELECT COUNT(*) FROM hourly_summary WHERE total_ms < 0 OR focused_ms < 0)",
+            [],
+            |row| row.get(0),
+        )?;
+
+        if sessions_repaired > 0 || events_repaired > 0 || negative_summary_rows > 0 {
+            self.rebuild_summaries_from_sessions()?;
+        }
+        Ok(())
+    }
+
+    /// Recompute daily_summary and hourly_summary from the `sessions` table.
+    /// Used by migrate_v6 to clean up summaries polluted by negative durations.
+    fn rebuild_summaries_from_sessions(&self) -> anyhow::Result<()> {
+        self.conn.execute("DELETE FROM daily_summary", [])?;
+        self.conn.execute(
+            "INSERT INTO daily_summary (date, class, total_ms, session_count, focused_ms, focused_session_count)
+             SELECT date(started_at),
+                    class,
+                    SUM(duration_ms),
+                    COUNT(*),
+                    SUM(COALESCE(focused_ms, 0)),
+                    SUM(CASE WHEN COALESCE(focused_ms, 0) > 0 THEN 1 ELSE 0 END)
+             FROM sessions
+             WHERE ended_at IS NOT NULL AND duration_ms >= 0
+             GROUP BY date(started_at), class",
+            [],
+        )?;
+
+        self.conn.execute("DELETE FROM hourly_summary", [])?;
+
+        let mut stmt = self.conn.prepare(
+            "SELECT started_at, class, duration_ms, COALESCE(focused_ms, 0)
+             FROM sessions
+             WHERE ended_at IS NOT NULL AND duration_ms >= 0",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+            ))
+        })?;
+
+        let mut agg: HashMap<(String, u8, String), (i64, i64, i64)> = HashMap::new();
+        for r in rows {
+            let (started_at, class, duration_ms, focused_ms) = r?;
+            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&started_at) {
+                let date = started_at[..10].to_string();
+                let hour = dt.with_timezone(&chrono::Local).hour() as u8;
+                let entry = agg.entry((date, hour, class)).or_insert((0, 0, 0));
+                entry.0 += duration_ms;
+                entry.1 += 1;
+                entry.2 += focused_ms;
+            }
+        }
+
+        for ((date, hour, class), (total_ms, session_count, focused_ms)) in agg {
+            self.conn.execute(
+                "INSERT INTO hourly_summary (date, hour, class, total_ms, session_count, focused_ms)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![date, hour as i64, class, total_ms, session_count, focused_ms],
+            )?;
+        }
+
         Ok(())
     }
 
@@ -209,8 +316,35 @@ impl Database {
             params![class, title, workspace, now, pid],
         )?;
         let id = self.conn.last_insert_rowid();
+        if let Ok(mut starts) = self.monotonic_starts.lock() {
+            starts.insert(id, Instant::now());
+        }
         self.save_activity_event(id, "active")?;
         Ok(id)
+    }
+
+    /// Elapsed milliseconds since `session_id` was started.
+    ///
+    /// Uses the monotonic `Instant` recorded by `start_session` so clock jumps
+    /// (e.g. dual-boot Windows/Linux RTC skew) cannot produce negative values.
+    /// Falls back to wall-clock parsing for sessions started by a previous
+    /// daemon process (rare), still clamped to >= 0.
+    pub fn session_elapsed_ms(&self, session_id: i64) -> anyhow::Result<i64> {
+        if let Ok(starts) = self.monotonic_starts.lock() {
+            if let Some(started) = starts.get(&session_id) {
+                let ms = i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX);
+                return Ok(ms.max(0));
+            }
+        }
+
+        let started_at: String = self.conn.query_row(
+            "SELECT started_at FROM sessions WHERE id = ?1",
+            params![session_id],
+            |row| row.get(0),
+        )?;
+        let started =
+            chrono::DateTime::parse_from_rfc3339(&started_at)?.with_timezone(&chrono::Utc);
+        Ok((chrono::Utc::now() - started).num_milliseconds().max(0))
     }
 
     pub fn end_session(&self, session_id: i64) -> anyhow::Result<()> {
@@ -226,14 +360,42 @@ impl Database {
 
         let started: chrono::DateTime<chrono::Utc> =
             chrono::DateTime::parse_from_rfc3339(&started_at)?.with_timezone(&chrono::Utc);
-        let duration_ms = (now - started).num_milliseconds();
+        // Prefer the process-monotonic elapsed time: when the wall clock jumps
+        // backwards the RFC3339 timestamps would yield a negative duration.
+        let duration_ms = self.session_elapsed_ms(session_id).unwrap_or_else(|_| {
+            // Fallback (should never be hit for an in-memory session): clamp a
+            // wall-clock-negative duration to zero instead of storing negatives.
+            (now - started).num_milliseconds().max(0)
+        });
+
+        // If the wall clock jumped while the session was running (NTP step,
+        // dual-boot RTC skew), the recorded started_at no longer lines up with
+        // the monotonic duration. Rewrite it from `now - duration` so the
+        // stored timestamps stay ordered and the timeline remains usable.
+        let wall_delta_ms = (now - started).num_milliseconds();
+        let clock_jumped = (wall_delta_ms - duration_ms).abs() > 1000;
+        let started = if clock_jumped {
+            now - chrono::Duration::milliseconds(duration_ms)
+        } else {
+            started
+        };
 
         let focused_ms = std::cmp::max(0, duration_ms - self.focused_threshold_ms);
 
-        self.conn.execute(
-            "UPDATE sessions SET ended_at = ?1, duration_ms = ?2, focused_ms = ?3 WHERE id = ?4",
-            params![now_str, duration_ms, focused_ms, session_id],
-        )?;
+        if clock_jumped {
+            self.conn.execute(
+                "UPDATE sessions SET ended_at = ?1, duration_ms = ?2, focused_ms = ?3, started_at = ?4 WHERE id = ?5",
+                params![now_str, duration_ms, focused_ms, started.to_rfc3339(), session_id],
+            )?;
+        } else {
+            self.conn.execute(
+                "UPDATE sessions SET ended_at = ?1, duration_ms = ?2, focused_ms = ?3 WHERE id = ?4",
+                params![now_str, duration_ms, focused_ms, session_id],
+            )?;
+        }
+        if let Ok(mut starts) = self.monotonic_starts.lock() {
+            starts.remove(&session_id);
+        }
 
         let class: String = self.conn.query_row(
             "SELECT class FROM sessions WHERE id = ?1",
@@ -246,7 +408,11 @@ impl Database {
             params![session_id],
             |row| row.get(0),
         )?;
-        let is_focused_session = if activity_state == "focused" { 1i64 } else { 0i64 };
+        let is_focused_session = if activity_state == "focused" {
+            1i64
+        } else {
+            0i64
+        };
 
         self.conn.execute(
             "INSERT INTO daily_summary (date, class, total_ms, session_count, focused_ms, focused_session_count)
@@ -279,11 +445,7 @@ impl Database {
         Ok(())
     }
 
-    pub fn update_session_state(
-        &self,
-        session_id: i64,
-        state: &str,
-    ) -> anyhow::Result<()> {
+    pub fn update_session_state(&self, session_id: i64, state: &str) -> anyhow::Result<()> {
         let prev_state: String = self.conn.query_row(
             "SELECT activity_state FROM sessions WHERE id = ?1",
             params![session_id],
@@ -329,7 +491,7 @@ impl Database {
         if let Some(ref sa) = started_at {
             if let Ok(sa_dt) = chrono::DateTime::parse_from_rfc3339(sa) {
                 let sa_utc = sa_dt.with_timezone(&chrono::Utc);
-                let dur = (now - sa_utc).num_milliseconds();
+                let dur = (now - sa_utc).num_milliseconds().max(0);
                 let _ = self.conn.execute(
                     "UPDATE activity_events SET ended_at = ?1, duration_ms = ?2
                      WHERE session_id = ?3 AND ended_at IS NULL",
@@ -340,14 +502,7 @@ impl Database {
     }
 
     pub fn update_ongoing_focused_ms(&self, session_id: i64) -> anyhow::Result<()> {
-        let started_at: String = self.conn.query_row(
-            "SELECT started_at FROM sessions WHERE id = ?1",
-            params![session_id],
-            |row| row.get(0),
-        )?;
-        let started =
-            chrono::DateTime::parse_from_rfc3339(&started_at)?.with_timezone(&chrono::Utc);
-        let duration_ms = (chrono::Utc::now() - started).num_milliseconds();
+        let duration_ms = self.session_elapsed_ms(session_id)?;
         let focused_ms = std::cmp::max(0, duration_ms - self.focused_threshold_ms);
 
         self.conn.execute(
@@ -382,16 +537,6 @@ impl Database {
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e.into()),
         }
-    }
-
-    pub fn get_session_started_at(&self, session_id: i64) -> anyhow::Result<String> {
-        self.conn
-            .query_row(
-                "SELECT started_at FROM sessions WHERE id = ?1",
-                params![session_id],
-                |row| row.get(0),
-            )
-            .map_err(Into::into)
     }
 
     /// Current open session's (id, class, pid), for resource sampling.
@@ -505,20 +650,15 @@ impl Database {
 
     /// Duration (ms) the current focused session has been running.
     pub fn current_focused_duration_ms(&self) -> i64 {
-        let result: rusqlite::Result<(String, String)> = self.conn.query_row(
-            "SELECT started_at, activity_state FROM sessions
+        let result: rusqlite::Result<(i64, String)> = self.conn.query_row(
+            "SELECT id, activity_state FROM sessions
              WHERE ended_at IS NULL ORDER BY started_at DESC LIMIT 1",
             [],
             |row| Ok((row.get(0)?, row.get(1)?)),
         );
         match result {
-            Ok((started_at, state)) if state == "focused" => {
-                if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&started_at) {
-                    let dur = chrono::Utc::now().signed_duration_since(dt.with_timezone(&chrono::Utc));
-                    dur.num_milliseconds().max(0)
-                } else {
-                    0
-                }
+            Ok((session_id, state)) if state == "focused" => {
+                self.session_elapsed_ms(session_id).unwrap_or(0).max(0)
             }
             _ => 0,
         }
@@ -554,7 +694,13 @@ impl Database {
              WHERE session_id IN (SELECT id FROM sessions WHERE ended_at IS NULL)",
             [],
         )?;
-        let count = self.conn.execute("DELETE FROM sessions WHERE ended_at IS NULL", [])?;
+        let count = self
+            .conn
+            .execute("DELETE FROM sessions WHERE ended_at IS NULL", [])?;
+        // All open sessions are gone; drop their monotonic start markers too.
+        if let Ok(mut starts) = self.monotonic_starts.lock() {
+            starts.clear();
+        }
         Ok(count)
     }
 }
@@ -663,6 +809,141 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM activity_events", [], |r| r.get(0))
             .unwrap();
         assert_eq!(events_left, 1); // events of deleted orphans are gone too
+
+        drop(db);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn migrate_v6_repairs_negative_durations() {
+        let dir = std::env::temp_dir().join(format!("hyprtrace-test4-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.db");
+
+        let db = Database::open(&path, 20 * 60).unwrap();
+        db.migrate().unwrap();
+
+        // Simulate a session whose duration was recorded before the clock-jump
+        // fix, plus a polluted daily_summary and activity_event.
+        db.conn
+            .execute(
+                "INSERT INTO sessions (class, title, workspace, started_at, ended_at, duration_ms, activity_state, focused_ms)
+                 VALUES ('kitty', 'yay', '~', '2026-08-15T15:55:04.800+00:00', '2026-08-15T07:56:28.878+00:00', -28715922, 'active', 0)",
+                [],
+            )
+            .unwrap();
+        let sid = db.conn.last_insert_rowid();
+        db.conn
+            .execute(
+                "INSERT INTO activity_events (session_id, state, started_at, ended_at, duration_ms)
+                 VALUES (?1, 'active', '2026-08-15T15:55:04.801+00:00', '2026-08-15T07:54:59.690+00:00', -28805111)",
+                params![sid],
+            )
+            .unwrap();
+        db.conn
+            .execute(
+                "INSERT INTO daily_summary (date, class, total_ms, session_count, focused_ms, focused_session_count)
+                 VALUES ('2026-08-15', 'kitty', -28715922, 1, 0, 0)",
+                [],
+            )
+            .unwrap();
+        db.conn
+            .execute(
+                "INSERT INTO hourly_summary (date, hour, class, total_ms, session_count, focused_ms)
+                 VALUES ('2026-08-15', 23, 'kitty', -28715922, 1, 0)",
+                [],
+            )
+            .unwrap();
+
+        db.migrate_v6().unwrap();
+
+        let (dur, focused): (i64, i64) = db
+            .conn
+            .query_row(
+                "SELECT duration_ms, focused_ms FROM sessions WHERE id = ?1",
+                params![sid],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(dur, 0);
+        assert_eq!(focused, 0);
+
+        let ev_dur: i64 = db
+            .conn
+            .query_row(
+                "SELECT duration_ms FROM activity_events WHERE session_id = ?1",
+                params![sid],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(ev_dur, 0);
+
+        let daily: (i64, i64) = db
+            .conn
+            .query_row(
+                "SELECT total_ms, session_count FROM daily_summary WHERE date = '2026-08-15' AND class = 'kitty'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(daily, (0, 1));
+
+        let hourly: (i64, i64) = db
+            .conn
+            .query_row(
+                "SELECT total_ms, session_count FROM hourly_summary WHERE date = '2026-08-15' AND hour = 23 AND class = 'kitty'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(hourly, (0, 1));
+
+        drop(db);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn end_session_clamps_clock_going_backwards() {
+        let dir = std::env::temp_dir().join(format!("hyprtrace-test5-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.db");
+
+        let db = Database::open(&path, 20 * 60).unwrap();
+        db.migrate().unwrap();
+
+        // Session whose started_at is in the future: the wall clock was set
+        // backwards while it was running. end_session must not store a negative
+        // duration, and it should rewrite started_at so start <= end.
+        let future = (chrono::Utc::now() + chrono::Duration::minutes(60)).to_rfc3339();
+        db.conn
+            .execute(
+                "INSERT INTO sessions (class, title, workspace, started_at, activity_state, focused_ms)
+                 VALUES ('kitty', 'yay', '~', ?1, 'active', 0)",
+                params![future],
+            )
+            .unwrap();
+        let sid = db.conn.last_insert_rowid();
+
+        db.end_session(sid).unwrap();
+
+        let (started_at, ended_at, duration_ms): (String, String, i64) = db
+            .conn
+            .query_row(
+                "SELECT started_at, ended_at, duration_ms FROM sessions WHERE id = ?1",
+                params![sid],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert!(duration_ms >= 0);
+        let started = chrono::DateTime::parse_from_rfc3339(&started_at).unwrap();
+        let ended = chrono::DateTime::parse_from_rfc3339(&ended_at).unwrap();
+        assert!(ended >= started);
+
+        let daily_negative: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM daily_summary WHERE total_ms < 0", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(daily_negative, 0);
 
         drop(db);
         std::fs::remove_dir_all(&dir).ok();

@@ -128,12 +128,9 @@ fn tick(
 
     let session_duration = {
         let guard = db.lock().map_err(|e| anyhow::anyhow!("DB lock: {}", e))?;
-        let started_at = guard.get_session_started_at(session_id)?;
-
-        let started = chrono::DateTime::parse_from_rfc3339(&started_at)
-            .map_err(|e| anyhow::anyhow!("Parse {}: {}", started_at, e))?
-            .with_timezone(&chrono::Utc);
-        (chrono::Utc::now() - started).num_seconds() as u64
+        // Monotonic elapsed time: immune to wall-clock jumps (dual-boot RTC
+        // skew) and never negative.
+        (guard.session_elapsed_ms(session_id)? / 1000) as u64
     };
 
     if state != "focused" && session_duration >= focused_threshold_seconds {
