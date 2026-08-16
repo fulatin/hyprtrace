@@ -14,6 +14,7 @@ pub struct ConfigResponse {
     pub ollama_url: String,
     pub ollama_model: String,
     pub default_provider: String,
+    pub retention_days: u32,
 }
 
 #[derive(Deserialize)]
@@ -24,6 +25,7 @@ pub struct ConfigUpdateRequest {
     pub ollama_url: Option<String>,
     pub ollama_model: Option<String>,
     pub default_provider: Option<String>,
+    pub retention_days: Option<u32>,
 }
 
 pub async fn get_config(
@@ -39,6 +41,7 @@ pub async fn get_config(
         ollama_url: config.ai.ollama.base_url.clone(),
         ollama_model: config.ai.ollama.default_model.clone(),
         default_provider: config.ai.default_provider.clone(),
+        retention_days: config.server.retention_days,
     })
 }
 
@@ -67,6 +70,9 @@ pub async fn update_config(
     }
     if let Some(v) = req.default_provider {
         config.ai.default_provider = v;
+    }
+    if let Some(v) = req.retention_days {
+        config.server.retention_days = v;
     }
 
     let config_path = Config::config_path().map_err(|e| {

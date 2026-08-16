@@ -150,6 +150,7 @@ export interface ConfigResponse {
   ollama_url: string;
   ollama_model: string;
   default_provider: string;
+  retention_days: number;
 }
 
 export interface ConfigUpdateRequest {
@@ -159,6 +160,7 @@ export interface ConfigUpdateRequest {
   ollama_url?: string;
   ollama_model?: string;
   default_provider?: string;
+  retention_days?: number;
 }
 
 export interface ActivityEvent {

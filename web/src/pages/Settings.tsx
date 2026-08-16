@@ -28,6 +28,15 @@ export default function Settings() {
   const [savingGoals, setSavingGoals] = useState(false);
   const [goalMsg, setGoalMsg] = useState('');
 
+  const [retentionDays, setRetentionDays] = useState(0);
+  const days7Ago = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+  const today = new Date().toISOString().slice(0, 10);
+  const [deleteFrom, setDeleteFrom] = useState(days7Ago);
+  const [deleteTo, setDeleteTo] = useState(today);
+  const [deleteClass, setDeleteClass] = useState('');
+  const [deleting, setDeleting] = useState(false);
+  const [deleteMsg, setDeleteMsg] = useState('');
+
   useEffect(() => {
     api.health()
       .then((res) => {
@@ -47,6 +56,7 @@ export default function Settings() {
         setOpenaiModel(c.openai_model);
         setOllamaUrl(c.ollama_url);
         setOllamaModel(c.ollama_model);
+        setRetentionDays(c.retention_days ?? 0);
       })
       .catch(() => {});
 
@@ -72,15 +82,40 @@ export default function Settings() {
         openai_model: openaiModel,
         ollama_url: ollamaUrl,
         ollama_model: ollamaModel,
+        retention_days: retentionDays,
       });
       setSaveMsg('Saved');
       setOpenaiKey('');
       const fresh = await api.getConfig();
       setConfig(fresh);
+      setRetentionDays(fresh.retention_days ?? 0);
     } catch (e) {
       setSaveMsg('Save failed: ' + (e instanceof Error ? e.message : 'Unknown error'));
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleDeleteSessions = async () => {
+    if (!deleteFrom || !deleteTo) {
+      setDeleteMsg('Please provide both dates');
+      return;
+    }
+    if (!window.confirm(
+      `Delete usage data${deleteClass.trim() ? ` for app "${deleteClass.trim()}"` : ''} from ${deleteFrom} to ${deleteTo}? This cannot be undone.`
+    )) {
+      return;
+    }
+    setDeleting(true);
+    setDeleteMsg('');
+    try {
+      const cls = deleteClass.trim() ? deleteClass.trim() : undefined;
+      const res = await api.deleteSessions(deleteFrom, deleteTo, cls);
+      setDeleteMsg(`${res.deleted} session(s) deleted`);
+    } catch (e) {
+      setDeleteMsg('Delete failed: ' + (e instanceof Error ? e.message : 'Unknown error'));
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -530,6 +565,76 @@ export default function Settings() {
               <FileText size={14} />
               Download Weekly Report (MD)
             </button>
+          </div>
+        </div>
+
+        <div className="border-t border-gray-800 pt-4">
+          <h3 className="text-sm font-medium text-gray-400 mb-3 flex items-center gap-2">
+            <Trash2 size={14} />
+            Data Privacy
+          </h3>
+
+          <div className="space-y-4">
+            <div>
+              <p className="text-xs font-medium text-gray-300 mb-2">Delete usage data</p>
+              <div className="flex items-center gap-2 flex-wrap">
+                <label className="text-xs text-gray-400">From</label>
+                <input
+                  type="date"
+                  value={deleteFrom}
+                  onChange={(e) => setDeleteFrom(e.target.value)}
+                  className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1 text-xs text-gray-200 focus:ring-red-500 focus:border-red-500"
+                />
+                <label className="text-xs text-gray-400">To</label>
+                <input
+                  type="date"
+                  value={deleteTo}
+                  onChange={(e) => setDeleteTo(e.target.value)}
+                  className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1 text-xs text-gray-200 focus:ring-red-500 focus:border-red-500"
+                />
+              </div>
+              <div className="mt-2 flex items-center gap-2">
+                <label className="text-xs text-gray-400">App class (optional)</label>
+                <input
+                  type="text"
+                  value={deleteClass}
+                  onChange={(e) => setDeleteClass(e.target.value)}
+                  placeholder="kitty"
+                  className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1 text-xs text-gray-200 placeholder-gray-500 focus:ring-red-500 focus:border-red-500"
+                />
+              </div>
+              <div className="mt-3 flex items-center gap-3">
+                <button
+                  onClick={handleDeleteSessions}
+                  disabled={deleting}
+                  className="flex items-center gap-2 bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white rounded-lg px-4 py-2 text-sm transition-colors"
+                >
+                  <Trash2 size={14} />
+                  {deleting ? 'Deleting...' : 'Delete'}
+                </button>
+                {deleteMsg && (
+                  <span className={`text-xs ${deleteMsg === 'Delete failed' || deleteMsg.startsWith('Delete failed') || deleteMsg === 'Please provide both dates' ? 'text-red-400' : 'text-emerald-400'}`}>
+                    {deleteMsg}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <div className="border-t border-gray-800 pt-4">
+              <p className="text-xs font-medium text-gray-300 mb-2">Retention</p>
+              <div className="flex items-center gap-2">
+                <label className="text-xs text-gray-400">Retention days</label>
+                <input
+                  type="number"
+                  min={0}
+                  value={retentionDays}
+                  onChange={(e) => setRetentionDays(Math.max(0, Number(e.target.value)))}
+                  className="w-24 bg-gray-800 border border-gray-700 rounded-lg px-2 py-1 text-xs text-gray-200 focus:ring-cyan-500 focus:border-cyan-500"
+                />
+                <span className="text-xs text-gray-500">0 = keep forever</span>
+              </div>
+              <p className="text-xs text-gray-500 mt-1">Sessions older than this many days are deleted automatically (saved with the config above).</p>
+            </div>
           </div>
         </div>
       </div>
