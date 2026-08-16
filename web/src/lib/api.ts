@@ -117,7 +117,7 @@ export const api = {
     fetchJSON<ProjectsResponse>('/api/projects'),
 
   putProjects: (projects: Project[], rules: ProjectRule[]) =>
-    fetchJSON<{ status: string }>('/api/projects', {
+    fetchJSON<{ status: string; projects: Project[]; rules: ProjectRule[] }>('/api/projects', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ projects, rules }),

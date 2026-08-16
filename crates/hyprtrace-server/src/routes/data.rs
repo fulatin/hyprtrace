@@ -1,6 +1,7 @@
 use crate::models::{CategoryRule, PaginatedResponse, Project, ProjectRule, ProjectStat, Session};
 use crate::routes::AppState;
 use axum::extract::{Path, Query, State};
+use axum::http::StatusCode;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -137,13 +138,45 @@ pub async fn get_projects(
 pub async fn put_projects(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ProjectsUpdate>,
-) -> Result<Json<serde_json::Value>, Json<serde_json::Value>> {
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    // Reject duplicate project names before touching the database so the
+    // caller gets a clear 400 instead of a generic 500 from the UNIQUE index.
+    let mut seen = std::collections::HashSet::new();
+    for p in &req.projects {
+        let name = p.name.trim();
+        if name.is_empty() {
+            continue;
+        }
+        if !seen.insert(name.to_string()) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": format!("Duplicate project name: {}", name)})),
+            ));
+        }
+    }
+
     let db = state.db.lock().await;
     match db.set_projects(&req.projects, &req.rules) {
-        Ok(()) => Ok(Json(serde_json::json!({"status": "ok"}))),
+        Ok(()) => match (db.projects(), db.project_rules()) {
+            (Ok(projects), Ok(rules)) => Ok(Json(serde_json::json!({
+                "status": "ok",
+                "projects": projects,
+                "rules": rules,
+            }))),
+            (Err(e), _) | (_, Err(e)) => {
+                log::error!("Failed to reload projects after save: {}", e);
+                Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": "Internal server error"})),
+                ))
+            }
+        },
         Err(e) => {
             log::error!("Failed to save projects: {}", e);
-            Err(Json(serde_json::json!({"error": "Internal server error"})))
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Internal server error"})),
+            ))
         }
     }
 }

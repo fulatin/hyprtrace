@@ -3,6 +3,26 @@ import { api } from '../lib/api';
 import { Wifi, WifiOff, Download, Save, Key, Globe, Cpu, BarChart3, Tags, Plus, Trash2, Target, FileText, FolderKanban } from 'lucide-react';
 import type { AiModelsResponse, CategoryRule, ConfigResponse, Goal, Project, ProjectRule, Session } from '../lib/types';
 
+// Extract a human-readable message from an API error thrown by fetchJSON,
+// which formats failures as "API Error: <status> <body>".
+function extractApiError(e: unknown): string {
+  if (e instanceof Error) {
+    const idx = e.message.indexOf('{');
+    if (idx >= 0) {
+      try {
+        const parsed = JSON.parse(e.message.slice(idx));
+        if (parsed && typeof parsed.error === 'string') {
+          return parsed.error;
+        }
+      } catch {
+        /* fall through */
+      }
+    }
+    return e.message;
+  }
+  return 'Unknown error';
+}
+
 export default function Settings() {
   const [status, setStatus] = useState<'online' | 'offline' | 'checking'>('checking');
   const [version, setVersion] = useState('');
@@ -213,29 +233,37 @@ export default function Settings() {
     const target = projects[idx];
     const remaining = projects.filter((_, i) => i !== idx);
     setProjects(remaining);
-    // Drop rules that reference the removed project.
-    if (target?.id != null) {
-      setProjectRules(projectRules.filter((r) => r.project_id !== target.id));
-    }
+    // Drop rules that reference the removed project (by real id or temp id).
+    const removedIds = new Set<number>();
+    if (target?.id != null) removedIds.add(target.id);
+    removedIds.add(-(idx + 1));
+    setProjectRules(projectRules.filter((r) => !removedIds.has(r.project_id)));
   };
 
   const handleAddProjectRule = () => {
     const first = projects[0];
+    if (!first) return;
+    // Use a negative temp id for unsaved projects: -1 → projects[0], -2 → projects[1], ...
     setProjectRules([
       ...projectRules,
-      { id: undefined, project_id: first?.id ?? 1, pattern: '', priority: 0 },
+      { id: undefined, project_id: first.id ?? -1, pattern: '', priority: 0 },
     ]);
   };
 
   const handleUpdateProjectRule = (idx: number, field: 'project_id' | 'pattern' | 'priority', value: string) => {
     setProjectRules(projectRules.map((r, i) =>
-      i === idx ? { ...r, [field]: field === 'priority' ? Number(value) : value } : r
+      i === idx
+        ? { ...r, [field]: field === 'project_id' || field === 'priority' ? Number(value) : value }
+        : r
     ));
   };
 
   const handleDeleteProjectRule = (idx: number) => {
     setProjectRules(projectRules.filter((_, i) => i !== idx));
   };
+
+  // Stable select value for a project: real id when saved, negative temp id otherwise.
+  const projectSelectValue = (p: Project, i: number): number => p.id ?? -(i + 1);
 
   const handleSaveProjects = async () => {
     setSavingProjects(true);
@@ -245,13 +273,47 @@ export default function Settings() {
         .map((p, i) => ({ ...p, sort_order: i }))
         .filter((p) => p.name.trim());
       const rules = projectRules.filter((r) => r.pattern.trim());
-      await api.putProjects(projs, rules);
-      const fresh = await api.projects();
-      setProjects(fresh.projects);
-      setProjectRules(fresh.rules);
+
+      const usesTempIds = rules.some((r) => r.project_id < 0);
+      let saved: { status: string; projects: Project[]; rules: ProjectRule[] };
+
+      if (usesTempIds) {
+        // Persist the projects first to obtain their real ids.
+        const first = await api.putProjects(projs, []);
+        const nameToId = new Map<string, number>();
+        first.projects.forEach((p) => {
+          if (p.id != null) nameToId.set(p.name, p.id);
+        });
+
+        // Resolve every rule's project to the newly-saved id. Negative temp
+        // ids are an index into `projects` (-1 → projects[0], ...); existing
+        // ids are looked up by name because a full replace renumbers rows.
+        const finalRules = rules.map((r) => {
+          let ref: Project | undefined;
+          if (r.project_id < 0) {
+            const idx = -r.project_id - 1;
+            ref = idx >= 0 && idx < projects.length ? projects[idx] : undefined;
+          } else {
+            ref = projects.find((p) => p.id === r.project_id);
+          }
+          // Prefer the freshly-saved id (by name); fall back to any id we
+          // already have, else leave the rule's id as-is for the server to drop.
+          const realId = ref ? nameToId.get(ref.name) ?? ref.id : undefined;
+          return { ...r, project_id: realId ?? r.project_id };
+        });
+
+        // Save again with the persisted projects (carrying real ids) so the
+        // remapped rules resolve against the projects that actually exist.
+        saved = await api.putProjects(first.projects, finalRules);
+      } else {
+        saved = await api.putProjects(projs, rules);
+      }
+
+      setProjects(saved.projects);
+      setProjectRules(saved.rules);
       setProjectMsg('Saved');
     } catch (e) {
-      setProjectMsg('Save failed');
+      setProjectMsg('Save failed: ' + extractApiError(e));
     } finally {
       setSavingProjects(false);
     }
@@ -621,8 +683,8 @@ export default function Settings() {
                   onChange={(e) => handleUpdateProjectRule(i, 'project_id', e.target.value)}
                   className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1 text-xs text-gray-200 focus:ring-cyan-500"
                 >
-                  {projects.map((p) => (
-                    <option key={p.id ?? `new-${p.name}`} value={p.id ?? 1}>
+                  {projects.map((p, pi) => (
+                    <option key={p.id ?? `new-${pi}`} value={projectSelectValue(p, pi)}>
                       {p.name || '(unnamed)'}
                     </option>
                   ))}
