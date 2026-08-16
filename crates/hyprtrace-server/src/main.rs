@@ -1,6 +1,7 @@
 mod ai;
 mod config;
 mod db;
+mod desktop;
 mod models;
 mod proactive;
 mod routes;

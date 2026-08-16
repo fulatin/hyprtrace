@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { format } from 'date-fns';
 import { Clock, AppWindow, Hash, Moon, BrainCircuit, BellRing, Copy, Gauge, Target, TrendingUp } from 'lucide-react';
 import { api } from '../lib/api';
-import type { TodaySummary, HourlyBucket, DisruptionEvent, EfficiencyScore, GoalProgress, TrendPrediction } from '../lib/types';
+import type { TodaySummary, HourlyBucket, DisruptionEvent, EfficiencyScore, GoalProgress, TrendPrediction, AppMetadata } from '../lib/types';
 import StatCard from '../components/StatCard';
 import AppUsagePie from '../components/AppUsagePie';
 import HourlyHeatmap from '../components/HourlyHeatmap';
@@ -23,6 +23,7 @@ export default function Dashboard() {
   const [efficiency, setEfficiency] = useState<EfficiencyScore | null>(null);
   const [goalProgress, setGoalProgress] = useState<GoalProgress[]>([]);
   const [prediction, setPrediction] = useState<TrendPrediction | null>(null);
+  const [appMetadata, setAppMetadata] = useState<Record<string, AppMetadata>>({});
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -44,6 +45,16 @@ export default function Dashboard() {
       setLoading(false);
     });
   }, [today]);
+
+  // Resolve friendly names/icons for the apps in today's summary once.
+  useEffect(() => {
+    const classes = summary?.top_apps.map((a) => a.class) ?? [];
+    if (classes.length === 0) {
+      setAppMetadata({});
+      return;
+    }
+    api.appsMetadata(classes).then((res) => setAppMetadata(res.entries)).catch(() => setAppMetadata({}));
+  }, [summary]);
 
   if (loading) {
     return (
@@ -130,7 +141,7 @@ export default function Dashboard() {
       )}
 
       <div className="grid grid-cols-2 gap-4 animate-fadeInUp" style={{ animationDelay: "200ms" }}>
-        <AppUsagePie data={summary?.top_apps ?? []} />
+        <AppUsagePie data={summary?.top_apps ?? []} metadata={appMetadata} />
         <HourlyHeatmap data={timeline} />
       </div>
 

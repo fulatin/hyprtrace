@@ -169,3 +169,13 @@ export interface ActivityEvent {
   ended_at: string | null;
   duration_ms: number | null;
 }
+
+export interface AppMetadata {
+  desktop_id: string;
+  display_name: string;
+  icon: string;
+}
+
+export interface AppsMetadataResponse {
+  entries: Record<string, AppMetadata>;
+}

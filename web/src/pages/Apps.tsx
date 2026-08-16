@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react';
 import { format, subDays } from 'date-fns';
 import { Activity, MemoryStick } from 'lucide-react';
 import { api } from '../lib/api';
-import type { AppRank, AppResource, DailyTrend } from '../lib/types';
+import type { AppRank, AppResource, DailyTrend, AppMetadata } from '../lib/types';
 import AppRankingBar from '../components/AppRankingBar';
+import AppName from '../components/AppName';
 import AppTrendChart from '../components/AppTrendChart';
 
 type Range = 'today' | 'week' | 'month';
@@ -15,6 +16,7 @@ export default function Apps() {
   const [selectedApp, setSelectedApp] = useState<string | null>(null);
   const [trend, setTrend] = useState<DailyTrend[]>([]);
   const [resources, setResources] = useState<AppResource[]>([]);
+  const [appMetadata, setAppMetadata] = useState<Record<string, AppMetadata>>({});
 
   const getDateRange = () => {
     const today = format(new Date(), 'yyyy-MM-dd');
@@ -37,6 +39,16 @@ export default function Apps() {
     });
     api.resources(from, to, 5).then(setResources).catch(() => setResources([]));
   }, [range]);
+
+  // Resolve friendly names/icons for the displayed app classes once.
+  useEffect(() => {
+    const classes = data.map((a) => a.class);
+    if (classes.length === 0) {
+      setAppMetadata({});
+      return;
+    }
+    api.appsMetadata(classes).then((res) => setAppMetadata(res.entries)).catch(() => setAppMetadata({}));
+  }, [data]);
 
   useEffect(() => {
     if (!selectedApp) {
@@ -78,7 +90,7 @@ export default function Apps() {
           </div>
           {selectedApp && (
             <div>
-              <h3 className="text-sm font-medium text-gray-400 mb-2">{selectedApp} - {range === 'today' ? 'Hourly' : range === 'week' ? '7-Day' : '30-Day'} Trend</h3>
+              <h3 className="text-sm font-medium text-gray-400 mb-2">{appMetadata[selectedApp]?.display_name || selectedApp} - {range === 'today' ? 'Hourly' : range === 'week' ? '7-Day' : '30-Day'} Trend</h3>
               <AppTrendChart data={trend} range={range} />
             </div>
           )}
@@ -127,7 +139,7 @@ export default function Apps() {
               >
                 <div className="flex items-center gap-3">
                   <span className="text-xs text-gray-400 w-6">{i + 1}</span>
-                  <span className="text-sm font-medium">{app.class}</span>
+                  <span className="text-sm font-medium"><AppName cls={app.class} metadata={appMetadata[app.class] ?? null} /></span>
                 </div>
                 <div className="flex items-center gap-4">
                   <span className="text-xs text-gray-400">{app.percentage.toFixed(1)}%</span>

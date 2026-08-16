@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { format, subDays } from 'date-fns';
 import { api } from '../lib/api';
-import type { Session, PaginatedResponse } from '../lib/types';
+import type { Session, PaginatedResponse, AppMetadata } from '../lib/types';
+import AppName from '../components/AppName';
 
 function formatDuration(ms: number | null): string {
   if (ms === null || ms === 0) return '-';
@@ -34,10 +35,25 @@ export default function Sessions() {
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('');
   const [classes, setClasses] = useState<string[]>([]);
+  const [appMetadata, setAppMetadata] = useState<Record<string, AppMetadata>>({});
 
   useEffect(() => {
     api.appClasses(weekAgo, today).then(setClasses).catch(() => {});
   }, []);
+
+  // Resolve friendly names/icons for the app classes present in this page's
+  // sessions once.
+  useEffect(() => {
+    const classSet = new Set<string>();
+    data?.data.forEach((s) => classSet.add(s.class));
+    classes.forEach((c) => classSet.add(c));
+    const unique = Array.from(classSet);
+    if (unique.length === 0) {
+      setAppMetadata({});
+      return;
+    }
+    api.appsMetadata(unique).then((res) => setAppMetadata(res.entries)).catch(() => setAppMetadata({}));
+  }, [data, classes]);
 
   useEffect(() => {
     setPage(1);
@@ -102,7 +118,7 @@ export default function Sessions() {
                       className="inline-block w-2 h-2 rounded-full mr-2"
                       style={{ backgroundColor: getColor(s.class) }}
                     />
-                    {s.class}
+                    <AppName cls={s.class} metadata={appMetadata[s.class] ?? null} />
                   </td>
                   <td className="px-4 py-2.5 text-gray-400 truncate max-w-[160px]">{s.title || '-'}</td>
                   <td className="px-4 py-2.5 text-gray-400">{formatTime(s.started_at)}</td>

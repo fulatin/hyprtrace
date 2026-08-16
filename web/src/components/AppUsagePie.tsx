@@ -1,5 +1,5 @@
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, Legend } from 'recharts';
-import type { AppRank } from '../lib/types';
+import type { AppRank, AppMetadata } from '../lib/types';
 
 const COLORS = [
   '#22d3ee', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444',
@@ -8,9 +8,10 @@ const COLORS = [
 
 interface AppUsagePieProps {
   data: AppRank[];
+  metadata?: Record<string, AppMetadata>;
 }
 
-export default function AppUsagePie({ data }: AppUsagePieProps) {
+export default function AppUsagePie({ data, metadata }: AppUsagePieProps) {
   if (data.length === 0) {
     return (
       <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 flex items-center justify-center h-64 text-gray-400">
@@ -19,8 +20,11 @@ export default function AppUsagePie({ data }: AppUsagePieProps) {
     );
   }
 
+  const displayName = (cls: string) =>
+    metadata?.[cls]?.display_name || cls;
+
   const chartData = data.map((app) => ({
-    name: app.class,
+    name: displayName(app.class),
     value: app.total_ms,
   }));
 
@@ -36,6 +40,7 @@ export default function AppUsagePie({ data }: AppUsagePieProps) {
             innerRadius={60}
             outerRadius={100}
             paddingAngle={2}
+            nameKey="name"
             dataKey="value"
           >
             {chartData.map((_entry, index) => (
