@@ -4,6 +4,7 @@ mod db;
 mod models;
 mod proactive;
 mod routes;
+mod weekly_report;
 
 use std::sync::Arc;
 
@@ -26,6 +27,7 @@ async fn main() -> anyhow::Result<()> {
     });
 
     proactive::spawn_proactive_monitor(state.clone(), cfg.ai.proactive_interval_minutes);
+    weekly_report::spawn_weekly_report_scheduler(state.clone());
 
     let web_dir = {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());

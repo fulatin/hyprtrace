@@ -14,6 +14,10 @@ pub struct ConfigResponse {
     pub ollama_url: String,
     pub ollama_model: String,
     pub default_provider: String,
+    pub weekly_report_enabled: bool,
+    pub weekly_report_day: u32,
+    pub weekly_report_hour: u32,
+    pub weekly_report_minute: u32,
 }
 
 #[derive(Deserialize)]
@@ -24,6 +28,10 @@ pub struct ConfigUpdateRequest {
     pub ollama_url: Option<String>,
     pub ollama_model: Option<String>,
     pub default_provider: Option<String>,
+    pub weekly_report_enabled: Option<bool>,
+    pub weekly_report_day: Option<u32>,
+    pub weekly_report_hour: Option<u32>,
+    pub weekly_report_minute: Option<u32>,
 }
 
 pub async fn get_config(
@@ -39,6 +47,10 @@ pub async fn get_config(
         ollama_url: config.ai.ollama.base_url.clone(),
         ollama_model: config.ai.ollama.default_model.clone(),
         default_provider: config.ai.default_provider.clone(),
+        weekly_report_enabled: config.server.weekly_report_enabled,
+        weekly_report_day: config.server.weekly_report_day,
+        weekly_report_hour: config.server.weekly_report_hour,
+        weekly_report_minute: config.server.weekly_report_minute,
     })
 }
 
@@ -67,6 +79,18 @@ pub async fn update_config(
     }
     if let Some(v) = req.default_provider {
         config.ai.default_provider = v;
+    }
+    if let Some(v) = req.weekly_report_enabled {
+        config.server.weekly_report_enabled = v;
+    }
+    if let Some(v) = req.weekly_report_day {
+        config.server.weekly_report_day = v;
+    }
+    if let Some(v) = req.weekly_report_hour {
+        config.server.weekly_report_hour = v;
+    }
+    if let Some(v) = req.weekly_report_minute {
+        config.server.weekly_report_minute = v;
     }
 
     let config_path = Config::config_path().map_err(|e| {

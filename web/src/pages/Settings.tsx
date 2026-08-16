@@ -28,6 +28,13 @@ export default function Settings() {
   const [savingGoals, setSavingGoals] = useState(false);
   const [goalMsg, setGoalMsg] = useState('');
 
+  const [weeklyEnabled, setWeeklyEnabled] = useState(false);
+  const [weeklyDay, setWeeklyDay] = useState(1);
+  const [weeklyHour, setWeeklyHour] = useState(9);
+  const [weeklyMinute, setWeeklyMinute] = useState(0);
+  const [savingWeekly, setSavingWeekly] = useState(false);
+  const [weeklyMsg, setWeeklyMsg] = useState('');
+
   useEffect(() => {
     api.health()
       .then((res) => {
@@ -47,6 +54,10 @@ export default function Settings() {
         setOpenaiModel(c.openai_model);
         setOllamaUrl(c.ollama_url);
         setOllamaModel(c.ollama_model);
+        setWeeklyEnabled(c.weekly_report_enabled);
+        setWeeklyDay(c.weekly_report_day);
+        setWeeklyHour(c.weekly_report_hour);
+        setWeeklyMinute(c.weekly_report_minute);
       })
       .catch(() => {});
 
@@ -186,6 +197,27 @@ export default function Settings() {
       setGoalMsg('Save failed');
     } finally {
       setSavingGoals(false);
+    }
+  };
+
+  const handleSaveWeekly = async () => {
+    setSavingWeekly(true);
+    setWeeklyMsg('');
+    try {
+      // Only send the weekly report fields so unsaved AI edits are not clobbered.
+      await api.updateConfig({
+        weekly_report_enabled: weeklyEnabled,
+        weekly_report_day: weeklyDay,
+        weekly_report_hour: weeklyHour,
+        weekly_report_minute: weeklyMinute,
+      });
+      setWeeklyMsg('Saved');
+      const fresh = await api.getConfig();
+      setConfig(fresh);
+    } catch (e) {
+      setWeeklyMsg('Save failed: ' + (e instanceof Error ? e.message : 'Unknown error'));
+    } finally {
+      setSavingWeekly(false);
     }
   };
 
@@ -504,6 +536,82 @@ export default function Settings() {
                 {goalMsg}
               </span>
             )}
+          </div>
+        </div>
+
+        <div className="border-t border-gray-800 pt-4">
+          <h3 className="text-sm font-medium text-gray-400 mb-3 flex items-center gap-2">
+            <FileText size={14} />
+            Weekly Report
+          </h3>
+          <p className="text-xs text-gray-500 mb-3">Generate a Markdown report of the last 7 days on a chosen weekday and send a desktop notification.</p>
+          <div className="space-y-3">
+            <label className="flex items-center gap-2 text-sm text-gray-300">
+              <input
+                type="checkbox"
+                checked={weeklyEnabled}
+                onChange={(e) => setWeeklyEnabled(e.target.checked)}
+                className="accent-cyan-500"
+              />
+              Enable weekly report
+            </label>
+
+            <div className="grid grid-cols-3 gap-3">
+              <div>
+                <label className="text-xs text-gray-400 mb-1 block">Day</label>
+                <select
+                  value={weeklyDay}
+                  onChange={(e) => setWeeklyDay(Number(e.target.value))}
+                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-200 focus:ring-cyan-500 focus:border-cyan-500"
+                >
+                  <option value={1}>Monday</option>
+                  <option value={2}>Tuesday</option>
+                  <option value={3}>Wednesday</option>
+                  <option value={4}>Thursday</option>
+                  <option value={5}>Friday</option>
+                  <option value={6}>Saturday</option>
+                  <option value={7}>Sunday</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-gray-400 mb-1 block">Hour (0-23)</label>
+                <input
+                  type="number"
+                  min={0}
+                  max={23}
+                  value={weeklyHour}
+                  onChange={(e) => setWeeklyHour(Math.max(0, Math.min(23, Number(e.target.value))))}
+                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-200 focus:ring-cyan-500 focus:border-cyan-500"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-gray-400 mb-1 block">Minute (0-59)</label>
+                <input
+                  type="number"
+                  min={0}
+                  max={59}
+                  value={weeklyMinute}
+                  onChange={(e) => setWeeklyMinute(Math.max(0, Math.min(59, Number(e.target.value))))}
+                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-200 focus:ring-cyan-500 focus:border-cyan-500"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <button
+                onClick={handleSaveWeekly}
+                disabled={savingWeekly}
+                className="flex items-center gap-2 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white rounded-lg px-4 py-2 text-sm transition-colors"
+              >
+                <Save size={14} />
+                {savingWeekly ? 'Saving...' : 'Save weekly report settings'}
+              </button>
+              {weeklyMsg && (
+                <span className={`text-xs ${weeklyMsg === 'Saved' ? 'text-emerald-400' : 'text-red-400'}`}>
+                  {weeklyMsg}
+                </span>
+              )}
+            </div>
           </div>
         </div>
 

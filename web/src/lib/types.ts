@@ -150,6 +150,10 @@ export interface ConfigResponse {
   ollama_url: string;
   ollama_model: string;
   default_provider: string;
+  weekly_report_enabled: boolean;
+  weekly_report_day: number;
+  weekly_report_hour: number;
+  weekly_report_minute: number;
 }
 
 export interface ConfigUpdateRequest {
@@ -159,6 +163,10 @@ export interface ConfigUpdateRequest {
   ollama_url?: string;
   ollama_model?: string;
   default_provider?: string;
+  weekly_report_enabled?: boolean;
+  weekly_report_day?: number;
+  weekly_report_hour?: number;
+  weekly_report_minute?: number;
 }
 
 export interface ActivityEvent {
