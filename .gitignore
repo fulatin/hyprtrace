@@ -25,3 +25,4 @@ Thumbs.db
 # Igored by user
 *.docx
 *.zip
+.wt/
