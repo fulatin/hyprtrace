@@ -19,6 +19,7 @@ import type {
   Goal,
   GoalsResponse,
   TrendPrediction,
+  AppsMetadataResponse,
 } from './types';
 
 async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
@@ -52,6 +53,10 @@ export const api = {
 
   appClasses: (from: string, to: string) =>
     fetchJSON<string[]>(`/api/apps/classes?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
+  appsMetadata: (classes: string[]) =>
+    fetchJSON<AppsMetadataResponse>(
+      `/api/apps/metadata?classes=${encodeURIComponent(classes.join(','))}`
+    ),
 
   appTrend: (cls: string, from: string, to: string, granularity?: string) =>
     fetchJSON<DailyTrend[]>(

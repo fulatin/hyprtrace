@@ -1,5 +1,13 @@
 use serde::{Deserialize, Serialize};
 
+/// Metadata for a single application, resolved from a `.desktop` file.
+#[derive(Debug, Serialize, Clone)]
+pub struct AppMetadata {
+    pub desktop_id: String,
+    pub display_name: String,
+    pub icon: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct TodaySummary {
     pub date: String,

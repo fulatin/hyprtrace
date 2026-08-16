@@ -1,8 +1,9 @@
-use crate::models::{CategoryRule, PaginatedResponse, Session};
+use crate::models::{AppMetadata, CategoryRule, PaginatedResponse, Session};
 use crate::routes::AppState;
 use axum::extract::{Path, Query, State};
 use axum::Json;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 #[derive(Deserialize)]
@@ -208,6 +209,43 @@ pub async fn app_classes(
             Err(Json(serde_json::json!({"error": "Internal server error"})))
         }
     }
+}
+
+#[derive(Deserialize)]
+pub struct AppsMetadataQuery {
+    pub classes: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct AppsMetadataResponse {
+    pub entries: HashMap<String, AppMetadata>,
+}
+
+pub async fn apps_metadata(
+    Query(query): Query<AppsMetadataQuery>,
+) -> Json<AppsMetadataResponse> {
+    let resolver = crate::desktop::global();
+
+    let classes_param = query.classes.unwrap_or_default();
+    let classes = classes_param
+        .split(',')
+        .map(str::trim)
+        .filter(|c| !c.is_empty());
+
+    let mut entries = HashMap::new();
+    for class in classes {
+        if let Some(meta) = resolver.lookup(class) {
+            // Preserve the raw class as the map key so the client can look
+            // metadata up directly.
+            entries.entry(class.to_string()).or_insert(AppMetadata {
+                desktop_id: meta.desktop_id,
+                display_name: meta.display_name,
+                icon: meta.icon,
+            });
+        }
+    }
+
+    Json(AppsMetadataResponse { entries })
 }
 
 pub async fn rebuild_summary(
