@@ -13,7 +13,7 @@ interface TimelineChartProps {
 export default function TimelineChart({ data }: TimelineChartProps) {
   if (data.length === 0) {
     return (
-      <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 flex items-center justify-center h-64 text-gray-400">
+      <div className="bg-gray-900 border border-gray-800 rounded-lg p-6 flex items-center justify-center h-64 text-gray-400">
         No data available
       </div>
     );
@@ -26,7 +26,7 @@ export default function TimelineChart({ data }: TimelineChartProps) {
   }));
 
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+    <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
       <ResponsiveContainer width="100%" height={350}>
         <BarChart data={chartData}>
           <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />

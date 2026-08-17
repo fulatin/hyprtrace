@@ -14,7 +14,7 @@ interface AppUsagePieProps {
 export default function AppUsagePie({ data, metadata }: AppUsagePieProps) {
   if (data.length === 0) {
     return (
-      <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 flex items-center justify-center h-64 text-gray-400">
+      <div className="bg-gray-900 border border-gray-800 rounded-lg p-6 flex items-center justify-center h-64 text-gray-400">
         No data available
       </div>
     );
@@ -29,7 +29,7 @@ export default function AppUsagePie({ data, metadata }: AppUsagePieProps) {
   }));
 
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+    <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
       <h3 className="text-sm font-medium text-gray-400 mb-4">App Usage Distribution</h3>
       <ResponsiveContainer width="100%" height={250}>
         <PieChart>

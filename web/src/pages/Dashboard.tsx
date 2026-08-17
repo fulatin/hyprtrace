@@ -186,7 +186,7 @@ export default function Dashboard() {
 
           {[1, 2, 3, 4, 5].map((i) => (
 
-            <div key={i} className="bg-gray-900 border border-gray-800 rounded-xl p-4 h-24 animate-pulse" style={{ animationDelay: `${i * 80}ms` }} />
+            <div key={i} className="bg-gray-900 border border-gray-800 rounded-lg p-4 h-24 animate-pulse" style={{ animationDelay: `${i * 80}ms` }} />
 
           ))}
 
@@ -214,7 +214,7 @@ export default function Dashboard() {
 
             onClick={() => setSelectedDate(format(subDays(new Date(selectedDate + 'T00:00:00'), 1), 'yyyy-MM-dd'))}
 
-            className="flex items-center gap-1 bg-gray-800 border border-gray-700 rounded-lg px-2.5 py-1.5 text-sm text-gray-200 hover:bg-gray-700 focus:ring-cyan-500 focus:border-cyan-500"
+            className="flex items-center gap-1 bg-gray-800 border border-gray-700 rounded-md px-2.5 py-1.5 text-sm text-gray-200 hover:bg-gray-700 focus:ring-cyan-500 focus:border-cyan-500"
 
             title="Previous day"
 
@@ -234,7 +234,7 @@ export default function Dashboard() {
 
             onChange={(e) => setSelectedDate(e.target.value)}
 
-            className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-200 focus:ring-cyan-500 focus:border-cyan-500"
+            className="bg-gray-800 border border-gray-700 rounded-md px-3 py-1.5 text-sm text-gray-200 focus:ring-cyan-500 focus:border-cyan-500"
 
           />
 
@@ -246,7 +246,7 @@ export default function Dashboard() {
 
             disabled={isNextDisabled}
 
-            className="flex items-center gap-1 bg-gray-800 border border-gray-700 rounded-lg px-2.5 py-1.5 text-sm text-gray-200 hover:bg-gray-700 focus:ring-cyan-500 focus:border-cyan-500 disabled:opacity-40 disabled:cursor-not-allowed"
+            className="flex items-center gap-1 bg-gray-800 border border-gray-700 rounded-md px-2.5 py-1.5 text-sm text-gray-200 hover:bg-gray-700 focus:ring-cyan-500 focus:border-cyan-500 disabled:opacity-40 disabled:cursor-not-allowed"
 
             title="Next day"
 
@@ -290,7 +290,7 @@ export default function Dashboard() {
 
       </div>
 
-      <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 animate-fadeInUp" style={{ animationDelay: "120ms" }}>
+      <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 animate-fadeInUp" style={{ animationDelay: "120ms" }}>
 
         <div className="flex flex-wrap items-center gap-2">
 
@@ -342,7 +342,7 @@ export default function Dashboard() {
 
           {goalProgress.map((p) => (
 
-            <div key={p.goal.id ?? p.goal.name} className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+            <div key={p.goal.id ?? p.goal.name} className="bg-gray-900 border border-gray-800 rounded-lg p-4">
 
               <div className="flex items-center justify-between mb-2">
 
@@ -386,7 +386,7 @@ export default function Dashboard() {
 
       {prediction && isToday && (
 
-        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 animate-fadeInUp" style={{ animationDelay: "180ms" }}>
+        <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 animate-fadeInUp" style={{ animationDelay: "180ms" }}>
 
           <h3 className="text-sm font-medium text-gray-400 flex items-center gap-2 mb-2">
 
@@ -438,7 +438,7 @@ export default function Dashboard() {
 
       </div>
 
-      <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 animate-fadeInUp" style={{ animationDelay: "250ms" }}>
+      <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 animate-fadeInUp" style={{ animationDelay: "250ms" }}>
         <h3 className="text-sm font-medium text-gray-400 flex items-center gap-2 mb-3">
           <FolderKanban size={14} className="text-cyan-400" />
           Projects
@@ -470,7 +470,7 @@ export default function Dashboard() {
 
       {disruptions.length > 0 && (
 
-        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 animate-fadeInUp" style={{ animationDelay: "300ms" }}>
+        <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 animate-fadeInUp" style={{ animationDelay: "300ms" }}>
 
           <h3 className="text-sm font-medium text-gray-400 flex items-center gap-2 mb-3">
 

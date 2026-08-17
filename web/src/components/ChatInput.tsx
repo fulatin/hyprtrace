@@ -140,7 +140,7 @@ export default function ChatInput({
           onChange={(e) => setMessage(e.target.value)}
           placeholder="Ask about your usage data or live system state..."
           disabled={disabled}
-          className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-sm text-gray-200 placeholder-gray-500 focus:ring-cyan-500 focus:border-cyan-500 disabled:opacity-50"
+          className="flex-1 bg-gray-800 border border-gray-700 rounded-md px-4 py-2 text-sm text-gray-200 placeholder-gray-500 focus:ring-cyan-500 focus:border-cyan-500 disabled:opacity-50"
         />
         {speechSupported && (
           <button
@@ -148,7 +148,7 @@ export default function ChatInput({
             onClick={toggleListening}
             disabled={disabled}
             title={listening ? 'Stop listening' : 'Voice input'}
-            className={`rounded-lg px-3 py-2 text-sm transition-colors border ${
+            className={`rounded-md px-3 py-2 text-sm transition-colors border ${
               listening
                 ? 'bg-red-600/20 border-red-500/40 text-red-400 animate-pulse'
                 : 'bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700'
@@ -160,7 +160,7 @@ export default function ChatInput({
         <button
           type="submit"
           disabled={disabled || !message.trim()}
-          className="bg-cyan-600 hover:bg-cyan-500 disabled:bg-gray-700 disabled:opacity-50 text-white rounded-lg px-4 py-2 text-sm transition-colors"
+          className="bg-cyan-600 hover:bg-cyan-500 disabled:bg-gray-700 disabled:opacity-50 text-white rounded-md px-4 py-2 text-sm transition-colors"
         >
           <Send size={16} />
         </button>

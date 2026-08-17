@@ -20,7 +20,7 @@ function formatDuration(ms: number): string {
 export default function AppRankingBar({ data }: AppRankingBarProps) {
   if (data.length === 0) {
     return (
-      <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 flex items-center justify-center h-48 text-gray-400">
+      <div className="bg-gray-900 border border-gray-800 rounded-lg p-6 flex items-center justify-center h-48 text-gray-400">
         No data available
       </div>
     );
@@ -34,7 +34,7 @@ export default function AppRankingBar({ data }: AppRankingBarProps) {
   }));
 
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+    <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
       <ResponsiveContainer width="100%" height={data.length * 40 + 40}>
         <BarChart data={chartData} layout="vertical" margin={{ left: 80, right: 40 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" horizontal={false} />

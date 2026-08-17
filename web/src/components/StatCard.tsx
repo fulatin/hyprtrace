@@ -9,7 +9,7 @@ interface StatCardProps {
 
 export default function StatCard({ icon, label, value, subtext }: StatCardProps) {
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 flex flex-col gap-2 stat-card-hover cursor-default">
+    <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 flex flex-col gap-2 stat-card-hover cursor-default">
       <div className="flex items-center gap-2 text-gray-400 text-sm">
         {icon}
         <span>{label}</span>

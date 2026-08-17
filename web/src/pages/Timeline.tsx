@@ -110,14 +110,14 @@ export default function Timeline() {
           type="date"
           value={date}
           onChange={(e) => setDate(e.target.value)}
-          className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-200 focus:ring-cyan-500 focus:border-cyan-500"
+          className="bg-gray-800 border border-gray-700 rounded-md px-3 py-1.5 text-sm text-gray-200 focus:ring-cyan-500 focus:border-cyan-500"
         />
       </div>
 
       {loading ? (
-        <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 animate-pulse h-64" />
+        <div className="bg-gray-900 border border-gray-800 rounded-lg p-6 animate-pulse h-64" />
       ) : (
-        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 overflow-x-auto">
+        <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 overflow-x-auto">
           <div className="flex">
             {/* Row labels */}
             <div className="shrink-0 w-40 pr-3">
@@ -139,7 +139,7 @@ export default function Timeline() {
             {/* Chart area: dynamic active-time axis */}
             <div className="flex-1 min-w-[480px]">
               {groups.length === 0 ? (
-                <div className="h-40 flex flex-col items-center justify-center rounded-lg border border-dashed border-gray-800 text-gray-500">
+                <div className="h-40 flex flex-col items-center justify-center rounded-md border border-dashed border-gray-800 text-gray-500">
                   <span className="text-sm">No activity recorded this day</span>
                   <span className="text-xs mt-1">The timeline will appear here once sessions exist</span>
                 </div>

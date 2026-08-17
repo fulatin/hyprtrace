@@ -69,7 +69,7 @@ export default function Apps() {
             <button
               key={r}
               onClick={() => { setRange(r); setSelectedApp(null); }}
-              className={`px-3 py-1 rounded-lg text-sm transition-colors ${
+              className={`px-3 py-1 rounded-md text-sm transition-colors ${
                 range === r
                   ? 'bg-cyan-600 text-white'
                   : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
@@ -82,7 +82,7 @@ export default function Apps() {
       </div>
 
       {loading ? (
-        <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 animate-pulse h-64" />
+        <div className="bg-gray-900 border border-gray-800 rounded-lg p-6 animate-pulse h-64" />
       ) : (
         <>
           <div onClick={() => setSelectedApp(null)}>
@@ -97,7 +97,7 @@ export default function Apps() {
 
           {resources.length > 0 && (
             <div className="grid grid-cols-2 gap-4">
-              <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+              <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
                 <h3 className="text-xs font-medium text-gray-400 flex items-center gap-2 mb-3">
                   <Activity size={12} className="text-emerald-400" />
                   Avg CPU Usage
@@ -111,7 +111,7 @@ export default function Apps() {
                   ))}
                 </div>
               </div>
-              <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+              <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
                 <h3 className="text-xs font-medium text-gray-400 flex items-center gap-2 mb-3">
                   <MemoryStick size={12} className="text-purple-400" />
                   Peak Memory
@@ -133,7 +133,7 @@ export default function Apps() {
               <div
                 key={app.class}
                 onClick={() => setSelectedApp(app.class)}
-                className={`flex items-center justify-between p-3 rounded-lg cursor-pointer transition-colors ${
+                className={`flex items-center justify-between p-3 rounded-md cursor-pointer transition-colors ${
                   selectedApp === app.class ? 'bg-gray-800 border border-cyan-500/30' : 'bg-gray-900 border border-gray-800 hover:bg-gray-800'
                 }`}
               >

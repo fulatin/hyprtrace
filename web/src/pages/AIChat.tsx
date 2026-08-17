@@ -292,7 +292,7 @@ export default function AIChat() {
           <button
             onClick={handleWeeklyReport}
             disabled={reportLoading}
-            className="flex items-center gap-1.5 bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-700 transition-colors disabled:opacity-50"
+            className="flex items-center gap-1.5 bg-gray-800 border border-gray-700 rounded-md px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-700 transition-colors disabled:opacity-50"
           >
             <Sparkles size={12} className="text-cyan-400" />
             {reportLoading ? 'Generating...' : 'Weekly Report'}
@@ -300,7 +300,7 @@ export default function AIChat() {
           <select
             value={dateRange}
             onChange={(e) => setDateRange(e.target.value)}
-            className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:ring-cyan-500"
+            className="bg-gray-800 border border-gray-700 rounded-md px-3 py-1.5 text-xs text-gray-300 focus:ring-cyan-500"
           >
             <option value="today">Today</option>
             <option value="week">This Week</option>
@@ -309,7 +309,7 @@ export default function AIChat() {
           {messages.length > 0 && (
             <button
               onClick={handleClearContext}
-              className="flex items-center gap-1.5 bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-xs text-gray-400 hover:text-red-400 hover:border-red-800 transition-colors"
+              className="flex items-center gap-1.5 bg-gray-800 border border-gray-700 rounded-md px-3 py-1.5 text-xs text-gray-400 hover:text-red-400 hover:border-red-800 transition-colors"
             >
               <Trash2 size={12} />
               Clear
@@ -318,7 +318,7 @@ export default function AIChat() {
         </div>
       </div>
 
-      <div className="flex-1 overflow-auto bg-gray-900 border border-gray-800 rounded-t-xl p-4 space-y-4">
+      <div className="flex-1 overflow-auto bg-gray-900 border border-gray-800 rounded-t-lg p-4 space-y-4">
         {!historyLoaded ? (
           <div className="text-center py-12">
             <Loader2
@@ -346,7 +346,7 @@ export default function AIChat() {
                 <button
                   key={q}
                   onClick={() => handleSend(q)}
-                  className="bg-gray-800 border border-gray-700 rounded-xl px-4 py-2.5 text-sm text-gray-300 
+                  className="bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-sm text-gray-300 
                     hover:bg-gray-700 hover:border-cyan-500/30 hover:text-cyan-100 
                     transition-all duration-200"
                   style={{ animationDelay: `${i * 80}ms` }}
@@ -374,8 +374,8 @@ export default function AIChat() {
               <div
                 className={
                   message.role === "user"
-                    ? "max-w-[80%] rounded-2xl px-4 py-3 text-sm bg-cyan-600/20 text-cyan-100 border border-cyan-500/30"
-                    : "max-w-[80%] rounded-2xl px-4 py-3 text-sm bg-gray-800 text-gray-200 border border-gray-700"
+                    ? "max-w-[80%] rounded-lg px-4 py-3 text-sm bg-cyan-600/20 text-cyan-100 border border-cyan-500/30"
+                    : "max-w-[80%] rounded-lg px-4 py-3 text-sm bg-gray-800 text-gray-200 border border-gray-700"
                 }
               >
                 {message.role === "user" ? (
@@ -422,7 +422,7 @@ export default function AIChat() {
 
         {isLoading && (
           <div className="flex justify-start">
-            <div className="bg-gray-800/50 border border-gray-700/50 rounded-2xl px-4 py-3 flex items-center gap-2 text-sm text-gray-400">
+            <div className="bg-gray-800/50 border border-gray-700/50 rounded-lg px-4 py-3 flex items-center gap-2 text-sm text-gray-400">
               <Loader2 size={14} className="animate-spin" />
               <button
                 onClick={stop}
@@ -436,7 +436,7 @@ export default function AIChat() {
         )}
 
         {error && !isLoading && (
-          <div className="text-center text-red-400 text-xs mb-4 bg-red-900/20 border border-red-800/30 rounded-xl px-4 py-3">
+          <div className="text-center text-red-400 text-xs mb-4 bg-red-900/20 border border-red-800/30 rounded-lg px-4 py-3">
             {error.message}
           </div>
         )}
@@ -451,7 +451,7 @@ export default function AIChat() {
                 <button
                   key={q}
                   onClick={() => handleSend(q)}
-                  className="bg-gray-800/60 border border-gray-700/60 rounded-lg px-3 py-1.5 text-xs text-gray-400 
+                  className="bg-gray-800/60 border border-gray-700/60 rounded-md px-3 py-1.5 text-xs text-gray-400 
                     hover:bg-gray-700 hover:border-cyan-500/30 hover:text-cyan-100 
                     transition-all duration-200"
                 >

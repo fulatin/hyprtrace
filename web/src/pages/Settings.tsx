@@ -392,7 +392,7 @@ export default function Settings() {
     <div className="space-y-6 max-w-2xl">
       <h2 className="text-xl font-bold">Settings</h2>
 
-      <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 space-y-6">
+      <div className="bg-gray-900 border border-gray-800 rounded-lg p-6 space-y-6">
         <div>
           <h3 className="text-sm font-medium text-gray-400 mb-3">Server Status</h3>
           <div className="flex items-center gap-3">
@@ -420,7 +420,7 @@ export default function Settings() {
             <button
               onClick={handleRebuildHourly}
               disabled={rebuilding}
-              className="flex items-center gap-2 bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-700 transition-colors disabled:opacity-50"
+              className="flex items-center gap-2 bg-gray-800 border border-gray-700 rounded-md px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-700 transition-colors disabled:opacity-50"
             >
               <BarChart3 size={12} />
               {rebuilding ? 'Rebuilding...' : 'Rebuild Hourly Summary'}
@@ -456,7 +456,7 @@ export default function Settings() {
           <h3 className="text-sm font-medium text-gray-400 mb-4">API Configuration</h3>
 
           <div className="space-y-4">
-            <div className="border border-gray-700 rounded-lg p-4 space-y-3">
+            <div className="border border-gray-700 rounded-md p-4 space-y-3">
               <h4 className="text-xs font-medium text-cyan-400 flex items-center gap-2">
                 <Cpu size={14} /> OpenAI Compatible
               </h4>
@@ -473,7 +473,7 @@ export default function Settings() {
                   value={openaiUrl}
                   onChange={(e) => setOpenaiUrl(e.target.value)}
                   placeholder="https://api.openai.com/v1"
-                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-200 placeholder-gray-500 focus:ring-cyan-500 focus:border-cyan-500"
+                  className="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-1.5 text-sm text-gray-200 placeholder-gray-500 focus:ring-cyan-500 focus:border-cyan-500"
                 />
               </div>
 
@@ -486,7 +486,7 @@ export default function Settings() {
                   value={openaiKey}
                   onChange={(e) => setOpenaiKey(e.target.value)}
                   placeholder={config?.openai_configured ? '•••••••• (leave blank to keep current)' : 'sk-...'}
-                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-200 placeholder-gray-500 focus:ring-cyan-500 focus:border-cyan-500"
+                  className="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-1.5 text-sm text-gray-200 placeholder-gray-500 focus:ring-cyan-500 focus:border-cyan-500"
                 />
               </div>
 
@@ -500,7 +500,7 @@ export default function Settings() {
                   onChange={(e) => setOpenaiModel(e.target.value)}
                   placeholder="gpt-4o-mini"
                   list="openai-model-list"
-                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-200 placeholder-gray-500 focus:ring-cyan-500 focus:border-cyan-500"
+                  className="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-1.5 text-sm text-gray-200 placeholder-gray-500 focus:ring-cyan-500 focus:border-cyan-500"
                 />
                 <datalist id="openai-model-list">
                   {(aiInfo?.providers?.openai ?? []).map((m) => (
@@ -510,7 +510,7 @@ export default function Settings() {
               </div>
             </div>
 
-            <div className="border border-gray-700 rounded-lg p-4 space-y-3">
+            <div className="border border-gray-700 rounded-md p-4 space-y-3">
               <h4 className="text-xs font-medium text-purple-400 flex items-center gap-2">
                 <Cpu size={14} /> Ollama
               </h4>
@@ -524,7 +524,7 @@ export default function Settings() {
                   value={ollamaUrl}
                   onChange={(e) => setOllamaUrl(e.target.value)}
                   placeholder="http://localhost:11434"
-                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-200 placeholder-gray-500 focus:ring-cyan-500 focus:border-cyan-500"
+                  className="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-1.5 text-sm text-gray-200 placeholder-gray-500 focus:ring-cyan-500 focus:border-cyan-500"
                 />
               </div>
 
@@ -538,7 +538,7 @@ export default function Settings() {
                   onChange={(e) => setOllamaModel(e.target.value)}
                   placeholder="qwen2.5:7b"
                   list="ollama-model-list"
-                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-200 placeholder-gray-500 focus:ring-cyan-500 focus:border-cyan-500"
+                  className="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-1.5 text-sm text-gray-200 placeholder-gray-500 focus:ring-cyan-500 focus:border-cyan-500"
                 />
                 <datalist id="ollama-model-list">
                   {(aiInfo?.providers?.ollama ?? []).map((m) => (
@@ -552,7 +552,7 @@ export default function Settings() {
               <button
                 onClick={handleSaveConfig}
                 disabled={saving}
-                className="flex items-center gap-2 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white rounded-lg px-4 py-2 text-sm transition-colors"
+                className="flex items-center gap-2 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white rounded-md px-4 py-2 text-sm transition-colors"
               >
                 <Save size={14} />
                 {saving ? 'Saving...' : 'Save Config'}
@@ -580,12 +580,12 @@ export default function Settings() {
                   value={rule.pattern}
                   onChange={(e) => handleUpdateCategory(i, 'pattern', e.target.value)}
                   placeholder="kitty"
-                  className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-2 py-1 text-xs text-gray-200 placeholder-gray-500 focus:ring-cyan-500"
+                  className="flex-1 bg-gray-800 border border-gray-700 rounded-md px-2 py-1 text-xs text-gray-200 placeholder-gray-500 focus:ring-cyan-500"
                 />
                 <select
                   value={rule.category}
                   onChange={(e) => handleUpdateCategory(i, 'category', e.target.value)}
-                  className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1 text-xs text-gray-200 focus:ring-cyan-500"
+                  className="bg-gray-800 border border-gray-700 rounded-md px-2 py-1 text-xs text-gray-200 focus:ring-cyan-500"
                 >
                   {categoryNames.map((c) => (
                     <option key={c} value={c}>{c}</option>
@@ -603,7 +603,7 @@ export default function Settings() {
           <div className="flex items-center gap-3">
             <button
               onClick={handleAddCategory}
-              className="flex items-center gap-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-1 text-xs text-gray-300 hover:bg-gray-700 transition-colors"
+              className="flex items-center gap-1 bg-gray-800 border border-gray-700 rounded-md px-3 py-1 text-xs text-gray-300 hover:bg-gray-700 transition-colors"
             >
               <Plus size={12} />
               Add Rule
@@ -611,7 +611,7 @@ export default function Settings() {
             <button
               onClick={handleSaveCategories}
               disabled={savingCategories}
-              className="flex items-center gap-2 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white rounded-lg px-4 py-2 text-sm transition-colors"
+              className="flex items-center gap-2 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white rounded-md px-4 py-2 text-sm transition-colors"
             >
               <Save size={14} />
               {savingCategories ? 'Saving...' : 'Save Categories'}
@@ -638,12 +638,12 @@ export default function Settings() {
                   value={goal.name}
                   onChange={(e) => handleUpdateGoal(i, 'name', e.target.value)}
                   placeholder="Deep work"
-                  className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-2 py-1 text-xs text-gray-200 placeholder-gray-500 focus:ring-cyan-500"
+                  className="flex-1 bg-gray-800 border border-gray-700 rounded-md px-2 py-1 text-xs text-gray-200 placeholder-gray-500 focus:ring-cyan-500"
                 />
                 <select
                   value={goal.target_type}
                   onChange={(e) => handleUpdateGoal(i, 'target_type', e.target.value)}
-                  className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1 text-xs text-gray-200"
+                  className="bg-gray-800 border border-gray-700 rounded-md px-2 py-1 text-xs text-gray-200"
                 >
                   <option value="all">All apps</option>
                   <option value="class">Specific app</option>
@@ -654,7 +654,7 @@ export default function Settings() {
                     value={goal.target_key ?? ''}
                     onChange={(e) => handleUpdateGoal(i, 'target_key', e.target.value)}
                     placeholder="kitty"
-                    className="w-24 bg-gray-800 border border-gray-700 rounded-lg px-2 py-1 text-xs text-gray-200"
+                    className="w-24 bg-gray-800 border border-gray-700 rounded-md px-2 py-1 text-xs text-gray-200"
                   />
                 )}
                 <input
@@ -662,7 +662,7 @@ export default function Settings() {
                   value={Math.round((goal.daily_target_ms || 0) / 3600000)}
                   onChange={(e) => handleUpdateGoal(i, 'daily_target_ms', Number(e.target.value) * 3600000)}
                   min={1}
-                  className="w-16 bg-gray-800 border border-gray-700 rounded-lg px-2 py-1 text-xs text-gray-200"
+                  className="w-16 bg-gray-800 border border-gray-700 rounded-md px-2 py-1 text-xs text-gray-200"
                 />
                 <span className="text-xs text-gray-500">h</span>
                 <input
@@ -683,7 +683,7 @@ export default function Settings() {
           <div className="flex items-center gap-3">
             <button
               onClick={handleAddGoal}
-              className="flex items-center gap-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-1 text-xs text-gray-300 hover:bg-gray-700 transition-colors"
+              className="flex items-center gap-1 bg-gray-800 border border-gray-700 rounded-md px-3 py-1 text-xs text-gray-300 hover:bg-gray-700 transition-colors"
             >
               <Plus size={12} />
               Add Goal
@@ -691,7 +691,7 @@ export default function Settings() {
             <button
               onClick={handleSaveGoals}
               disabled={savingGoals}
-              className="flex items-center gap-2 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white rounded-lg px-4 py-2 text-sm transition-colors"
+              className="flex items-center gap-2 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white rounded-md px-4 py-2 text-sm transition-colors"
             >
               <Save size={14} />
               {savingGoals ? 'Saving...' : 'Save Goals'}
@@ -718,7 +718,7 @@ export default function Settings() {
                   type="color"
                   value={project.color || '#22d3ee'}
                   onChange={(e) => handleUpdateProject(i, 'color', e.target.value)}
-                  className="w-9 h-8 bg-gray-800 border border-gray-700 rounded-lg p-0.5"
+                  className="w-9 h-8 bg-gray-800 border border-gray-700 rounded-md p-0.5"
                   title="Project color"
                 />
                 <input
@@ -726,7 +726,7 @@ export default function Settings() {
                   value={project.name}
                   onChange={(e) => handleUpdateProject(i, 'name', e.target.value)}
                   placeholder="课设"
-                  className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-2 py-1 text-xs text-gray-200 placeholder-gray-500 focus:ring-cyan-500"
+                  className="flex-1 bg-gray-800 border border-gray-700 rounded-md px-2 py-1 text-xs text-gray-200 placeholder-gray-500 focus:ring-cyan-500"
                 />
                 <button
                   onClick={() => handleDeleteProject(i)}
@@ -748,7 +748,7 @@ export default function Settings() {
                 <select
                   value={rule.project_id}
                   onChange={(e) => handleUpdateProjectRule(i, 'project_id', e.target.value)}
-                  className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1 text-xs text-gray-200 focus:ring-cyan-500"
+                  className="bg-gray-800 border border-gray-700 rounded-md px-2 py-1 text-xs text-gray-200 focus:ring-cyan-500"
                 >
                   {projects.map((p, pi) => (
                     <option key={p.id ?? `new-${pi}`} value={projectSelectValue(p, pi)}>
@@ -761,14 +761,14 @@ export default function Settings() {
                   value={rule.pattern}
                   onChange={(e) => handleUpdateProjectRule(i, 'pattern', e.target.value)}
                   placeholder="code% (app class pattern)"
-                  className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-2 py-1 text-xs text-gray-200 placeholder-gray-500 focus:ring-cyan-500"
+                  className="flex-1 bg-gray-800 border border-gray-700 rounded-md px-2 py-1 text-xs text-gray-200 placeholder-gray-500 focus:ring-cyan-500"
                 />
                 <input
                   type="number"
                   value={rule.priority}
                   onChange={(e) => handleUpdateProjectRule(i, 'priority', e.target.value)}
                   min={0}
-                  className="w-16 bg-gray-800 border border-gray-700 rounded-lg px-2 py-1 text-xs text-gray-200"
+                  className="w-16 bg-gray-800 border border-gray-700 rounded-md px-2 py-1 text-xs text-gray-200"
                   title="Priority"
                 />
                 <button
@@ -785,14 +785,14 @@ export default function Settings() {
           <div className="flex items-center gap-3">
             <button
               onClick={handleAddProject}
-              className="flex items-center gap-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-1 text-xs text-gray-300 hover:bg-gray-700 transition-colors"
+              className="flex items-center gap-1 bg-gray-800 border border-gray-700 rounded-md px-3 py-1 text-xs text-gray-300 hover:bg-gray-700 transition-colors"
             >
               <Plus size={12} />
               Add Project
             </button>
             <button
               onClick={handleAddProjectRule}
-              className="flex items-center gap-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-1 text-xs text-gray-300 hover:bg-gray-700 transition-colors"
+              className="flex items-center gap-1 bg-gray-800 border border-gray-700 rounded-md px-3 py-1 text-xs text-gray-300 hover:bg-gray-700 transition-colors"
             >
               <Plus size={12} />
               Add Rule
@@ -800,7 +800,7 @@ export default function Settings() {
             <button
               onClick={handleSaveProjects}
               disabled={savingProjects}
-              className="flex items-center gap-2 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white rounded-lg px-4 py-2 text-sm transition-colors"
+              className="flex items-center gap-2 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white rounded-md px-4 py-2 text-sm transition-colors"
             >
               <Save size={14} />
               {savingProjects ? 'Saving...' : 'Save Projects'}
@@ -836,7 +836,7 @@ export default function Settings() {
                 <select
                   value={weeklyDay}
                   onChange={(e) => setWeeklyDay(Number(e.target.value))}
-                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-200 focus:ring-cyan-500 focus:border-cyan-500"
+                  className="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-1.5 text-sm text-gray-200 focus:ring-cyan-500 focus:border-cyan-500"
                 >
                   <option value={1}>Monday</option>
                   <option value={2}>Tuesday</option>
@@ -855,7 +855,7 @@ export default function Settings() {
                   max={23}
                   value={weeklyHour}
                   onChange={(e) => setWeeklyHour(Math.max(0, Math.min(23, Number(e.target.value))))}
-                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-200 focus:ring-cyan-500 focus:border-cyan-500"
+                  className="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-1.5 text-sm text-gray-200 focus:ring-cyan-500 focus:border-cyan-500"
                 />
               </div>
               <div>
@@ -866,7 +866,7 @@ export default function Settings() {
                   max={59}
                   value={weeklyMinute}
                   onChange={(e) => setWeeklyMinute(Math.max(0, Math.min(59, Number(e.target.value))))}
-                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-200 focus:ring-cyan-500 focus:border-cyan-500"
+                  className="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-1.5 text-sm text-gray-200 focus:ring-cyan-500 focus:border-cyan-500"
                 />
               </div>
             </div>
@@ -875,7 +875,7 @@ export default function Settings() {
               <button
                 onClick={handleSaveWeekly}
                 disabled={savingWeekly}
-                className="flex items-center gap-2 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white rounded-lg px-4 py-2 text-sm transition-colors"
+                className="flex items-center gap-2 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white rounded-md px-4 py-2 text-sm transition-colors"
               >
                 <Save size={14} />
                 {savingWeekly ? 'Saving...' : 'Save weekly report settings'}
@@ -897,7 +897,7 @@ export default function Settings() {
             <button
               onClick={handleExport}
               disabled={exporting}
-              className="flex items-center gap-2 bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-sm text-gray-300 hover:bg-gray-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              className="flex items-center gap-2 bg-gray-800 border border-gray-700 rounded-md px-4 py-2 text-sm text-gray-300 hover:bg-gray-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <Download size={14} />
               {exporting ? 'Exporting...' : 'Export Sessions (CSV)'}
@@ -909,7 +909,7 @@ export default function Settings() {
                 try { await api.report(weekAgo, today); }
                 catch (e) { alert('Report failed'); }
               }}
-              className="flex items-center gap-2 bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-sm text-gray-300 hover:bg-gray-700 transition-colors"
+              className="flex items-center gap-2 bg-gray-800 border border-gray-700 rounded-md px-4 py-2 text-sm text-gray-300 hover:bg-gray-700 transition-colors"
             >
               <FileText size={14} />
               Download Weekly Report (MD)
@@ -932,14 +932,14 @@ export default function Settings() {
                   type="date"
                   value={deleteFrom}
                   onChange={(e) => setDeleteFrom(e.target.value)}
-                  className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1 text-xs text-gray-200 focus:ring-red-500 focus:border-red-500"
+                  className="bg-gray-800 border border-gray-700 rounded-md px-2 py-1 text-xs text-gray-200 focus:ring-red-500 focus:border-red-500"
                 />
                 <label className="text-xs text-gray-400">To</label>
                 <input
                   type="date"
                   value={deleteTo}
                   onChange={(e) => setDeleteTo(e.target.value)}
-                  className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1 text-xs text-gray-200 focus:ring-red-500 focus:border-red-500"
+                  className="bg-gray-800 border border-gray-700 rounded-md px-2 py-1 text-xs text-gray-200 focus:ring-red-500 focus:border-red-500"
                 />
               </div>
               <div className="mt-2 flex items-center gap-2">
@@ -949,14 +949,14 @@ export default function Settings() {
                   value={deleteClass}
                   onChange={(e) => setDeleteClass(e.target.value)}
                   placeholder="kitty"
-                  className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1 text-xs text-gray-200 placeholder-gray-500 focus:ring-red-500 focus:border-red-500"
+                  className="bg-gray-800 border border-gray-700 rounded-md px-2 py-1 text-xs text-gray-200 placeholder-gray-500 focus:ring-red-500 focus:border-red-500"
                 />
               </div>
               <div className="mt-3 flex items-center gap-3">
                 <button
                   onClick={handleDeleteSessions}
                   disabled={deleting}
-                  className="flex items-center gap-2 bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white rounded-lg px-4 py-2 text-sm transition-colors"
+                  className="flex items-center gap-2 bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white rounded-md px-4 py-2 text-sm transition-colors"
                 >
                   <Trash2 size={14} />
                   {deleting ? 'Deleting...' : 'Delete'}
@@ -978,7 +978,7 @@ export default function Settings() {
                   min={0}
                   value={retentionDays}
                   onChange={(e) => setRetentionDays(Math.max(0, Number(e.target.value)))}
-                  className="w-24 bg-gray-800 border border-gray-700 rounded-lg px-2 py-1 text-xs text-gray-200 focus:ring-cyan-500 focus:border-cyan-500"
+                  className="w-24 bg-gray-800 border border-gray-700 rounded-md px-2 py-1 text-xs text-gray-200 focus:ring-cyan-500 focus:border-cyan-500"
                 />
                 <span className="text-xs text-gray-500">0 = keep forever</span>
               </div>

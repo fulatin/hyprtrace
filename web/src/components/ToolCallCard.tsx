@@ -22,7 +22,7 @@ export default function ToolCallCard({ part }: ToolCallCardProps) {
   const failed = state === 'output-error' || state === 'output-denied';
 
   return (
-    <div className="my-2 overflow-hidden rounded-lg border border-gray-700/80 bg-gray-800/50 text-xs animate-scaleIn">
+    <div className="my-2 overflow-hidden rounded-md border border-gray-700/80 bg-gray-800/50 text-xs animate-scaleIn">
       <button
         onClick={() => setOpen(!open)}
         className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-gray-800/80 transition-colors"

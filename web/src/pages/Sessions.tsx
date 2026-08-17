@@ -78,7 +78,7 @@ export default function Sessions() {
         <select
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-200 focus:ring-cyan-500"
+          className="bg-gray-800 border border-gray-700 rounded-md px-3 py-1.5 text-sm text-gray-200 focus:ring-cyan-500"
         >
           <option value="">All Apps</option>
           {classes.map((c) => (
@@ -88,9 +88,9 @@ export default function Sessions() {
       </div>
 
       {loading ? (
-        <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 animate-pulse h-64" />
+        <div className="bg-gray-900 border border-gray-800 rounded-lg p-6 animate-pulse h-64" />
       ) : (
-        <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+        <div className="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-gray-800">

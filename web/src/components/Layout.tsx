@@ -33,7 +33,7 @@ export default function Layout() {
               to={to}
               end={to === '/'}
               className={({ isActive }) =>
-                `flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors ${
+                `flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors ${
                   isActive
                     ? 'bg-gray-800 text-cyan-400'
                     : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'

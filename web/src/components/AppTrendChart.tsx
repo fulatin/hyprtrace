@@ -33,7 +33,7 @@ export default function AppTrendChart({ data, range }: AppTrendChartProps) {
   }));
 
   return (
-    <div className="mt-4 bg-gray-900 border border-gray-800 rounded-xl p-4">
+    <div className="mt-4 bg-gray-900 border border-gray-800 rounded-lg p-4">
       <div className="flex items-center gap-2 mb-2">
         <h4 className="text-sm font-medium text-gray-400">
           {range === 'today' ? 'Hourly Trend' : 'Daily Trend'}

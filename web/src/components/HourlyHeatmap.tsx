@@ -8,7 +8,7 @@ interface HourlyHeatmapProps {
 export default function HourlyHeatmap({ data }: HourlyHeatmapProps) {
   if (data.length === 0) {
     return (
-      <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 flex items-center justify-center h-48 text-gray-400">
+      <div className="bg-gray-900 border border-gray-800 rounded-lg p-6 flex items-center justify-center h-48 text-gray-400">
         No data available
       </div>
     );
@@ -21,7 +21,7 @@ export default function HourlyHeatmap({ data }: HourlyHeatmapProps) {
   }));
 
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+    <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
       <h3 className="text-sm font-medium text-gray-400 mb-4">24h Activity</h3>
       <ResponsiveContainer width="100%" height={200}>
         <BarChart data={chartData}>
