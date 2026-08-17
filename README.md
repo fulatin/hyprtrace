@@ -83,7 +83,7 @@ bash scripts/install.sh
 2. 构建前端并复制到 `~/.local/share/hyprtrace/web/`
 3. 安装并启动 systemd 用户服务
 
-> **可选：键盘/鼠标活动检测**（`enable_input_monitor = true`）需要读取 `/dev/input/event*`，用户需加入 `input` 组：`sudo usermod -aG input $USER`（然后重新登录）。未配置时守护进程会优雅降级并提示。
+> **可选：键盘/鼠标活动检测**（`enable_input_monitor = true`）需要读取 `/dev/input/event*`，用户需加入 `input` 组：`sudo usermod -aG input $USER`（然后重新登录）。启用并成功打开输入设备后，**idle 判定以“一段时间没有物理键鼠输入”为准**（`idle_timeout_seconds`）；loginctl 和 Hyprland 事件仅作为回退信号。未配置或权限不足时守护进程会优雅降级并提示。
 
 ### 卸载
 
@@ -139,7 +139,7 @@ cd web && npm run dev
 db_path = "~/.local/share/hyprtrace/hyprtrace.db"
 idle_timeout_seconds = 300
 focused_threshold_seconds = 1200        # 连续使用多久视为"聚焦"（默认 20 分钟）
-enable_input_monitor = true             # evdev 键盘/鼠标活动检测（需 input 组权限）
+enable_input_monitor = true             # evdev 键盘/鼠标活动检测（启用后 idle 以键鼠无输入为准，需 input 组权限）
 break_after_minutes = 90                # 连续聚焦多久提醒休息
 late_night_start_hour = 23              # 深夜提醒窗口起点（本地时区）
 late_night_end_hour = 6                 # 深夜提醒窗口终点

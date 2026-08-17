@@ -50,6 +50,7 @@ pub fn spawn_input_monitor(activity: ActivityState) {
             return;
         }
         log::info!("Input monitor started ({} device(s))", devices.len());
+        activity.mark_input_monitor_active();
 
         loop {
             for dev in &mut devices {
@@ -59,7 +60,7 @@ pub fn spawn_input_monitor(activity: ActivityState) {
                         // movement: value != 0 means real input, ignore
                         // sync/release noise.
                         if ev.value() != 0 {
-                            activity.mark_activity();
+                            activity.mark_input_activity();
                         }
                     }
                 }

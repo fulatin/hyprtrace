@@ -7,15 +7,24 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Clone)]
 pub struct ActivityState {
+    /// Last activity timestamp driven by Hyprland events (window switches,
+    /// workspace/monitor changes). Used as a fallback idle source.
     pub last_activity: Arc<Mutex<Instant>>,
+    /// Last timestamp of a physical keyboard/mouse event from the evdev input
+    /// monitor. This is the authoritative "no mouse movement and no key
+    /// presses" signal when the input monitor is running.
+    pub last_input: Arc<Mutex<Instant>>,
     pub is_idle: Arc<AtomicBool>,
+    input_monitor_active: Arc<AtomicBool>,
 }
 
 impl ActivityState {
     pub fn new() -> Self {
         Self {
             last_activity: Arc::new(Mutex::new(Instant::now())),
+            last_input: Arc::new(Mutex::new(Instant::now())),
             is_idle: Arc::new(AtomicBool::new(false)),
+            input_monitor_active: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -24,6 +33,22 @@ impl ActivityState {
             *guard = Instant::now();
         }
         self.is_idle.store(false, Ordering::Release);
+    }
+
+    /// Record a physical keyboard/mouse input event.
+    pub fn mark_input_activity(&self) {
+        if let Ok(mut guard) = self.last_input.lock() {
+            *guard = Instant::now();
+        }
+        self.mark_activity();
+    }
+
+    pub fn mark_input_monitor_active(&self) {
+        self.input_monitor_active.store(true, Ordering::Release);
+    }
+
+    pub fn is_input_monitor_active(&self) -> bool {
+        self.input_monitor_active.load(Ordering::Acquire)
     }
 }
 
@@ -152,9 +177,21 @@ fn tick(
 }
 
 fn get_idle_duration(activity: &ActivityState) -> Option<Duration> {
+    // When the evdev input monitor is running, idle means "no physical mouse
+    // movement and no keyboard events for >= idle_timeout". This is the most
+    // direct signal and is more reliable than loginctl on Hyprland sessions.
+    if activity.is_input_monitor_active() {
+        if let Ok(guard) = activity.last_input.lock() {
+            return Some(guard.elapsed());
+        }
+    }
+
+    // Fallback: loginctl session idle hint (works on many systemd setups).
     if let Some(dur) = query_loginctl_idle() {
         return Some(dur);
     }
+
+    // Last resort: Hyprland window/workspace events only.
     if let Ok(guard) = activity.last_activity.lock() {
         Some(guard.elapsed())
     } else {
@@ -221,4 +258,33 @@ fn resume_session(db: &Arc<Mutex<Database>>) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn input_monitor_active_uses_physical_input_time() {
+        let a = ActivityState::new();
+        a.mark_input_monitor_active();
+
+        // Physical keyboard/mouse last seen 10s ago, but a Hyprland event
+        // (e.g. a focus change) happened just now. The idle monitor must use
+        // the physical input timestamp while the input monitor is running.
+        *a.last_input.lock().unwrap() = Instant::now() - Duration::from_secs(10);
+        *a.last_activity.lock().unwrap() = Instant::now();
+
+        let d = get_idle_duration(&a).unwrap();
+        assert!(d.as_secs() >= 9 && d.as_secs() <= 11);
+    }
+
+    #[test]
+    fn mark_input_activity_updates_both_timestamps() {
+        let a = ActivityState::new();
+        let before = Instant::now();
+        a.mark_input_activity();
+        assert!(*a.last_input.lock().unwrap() >= before);
+        assert!(*a.last_activity.lock().unwrap() >= before);
+    }
 }
