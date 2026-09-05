@@ -49,6 +49,7 @@ pub fn spawn_proactive_monitor(state: Arc<crate::routes::AppState>, interval_min
 /// actionable observation. Returns an empty string if there's nothing worth
 /// flagging.
 async fn build_insight(state: &Arc<crate::routes::AppState>) -> anyhow::Result<String> {
+    // LOCAL today: must match the local-date buckets in the summary tables (M3).
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
 
     // Snapshot data without holding the DB lock across the AI call.
@@ -97,10 +98,12 @@ async fn build_insight(state: &Arc<crate::routes::AppState>) -> anyhow::Result<S
         crate::ai::ChatMessage::new("user", prompt),
     ];
 
-    let (provider, ai) = {
+    // Snapshot under the lock, call outside it: a single slow inference
+    // must not block chat/model-listing/config updates elsewhere.
+    let ai = {
         let ai = state.ai.lock().await;
-        (ai.default_provider.clone(), ai)
+        ai.snapshot()
     };
-    let reply = ai.chat(&provider, None, &messages).await?;
+    let reply = ai.chat(&ai.default_provider, None, &messages).await?;
     Ok(reply.trim().trim_matches('"').to_string())
 }

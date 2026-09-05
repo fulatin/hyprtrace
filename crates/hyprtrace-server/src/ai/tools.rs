@@ -233,6 +233,8 @@ pub fn all_tools() -> Vec<ToolDef> {
     ]
 }
 
+/// LOCAL calendar day — must match the local-date buckets in the summary
+/// tables (M3), not UTC.
 fn today() -> String {
     chrono::Local::now().format("%Y-%m-%d").to_string()
 }

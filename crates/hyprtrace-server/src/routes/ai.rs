@@ -21,7 +21,12 @@ pub struct AiModelsResponse {
 }
 
 pub async fn ai_models(State(state): State<Arc<AppState>>) -> Json<AiModelsResponse> {
-    let ai = state.ai.lock().await;
+    // Snapshot under the lock, call outside it: provider HTTP requests can
+    // take minutes and must not block other AI endpoints.
+    let ai = {
+        let ai = state.ai.lock().await;
+        ai.snapshot()
+    };
     let providers = ai.list_all_models().await;
     Json(AiModelsResponse {
         providers,
@@ -52,6 +57,7 @@ pub async fn ai_weekly_report(
     State(state): State<Arc<AppState>>,
     Json(req): Json<WeeklyReportRequest>,
 ) -> Result<Json<serde_json::Value>, Json<serde_json::Value>> {
+    // LOCAL dates: must match the local-date buckets in the summary tables (M3).
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let from = (chrono::Local::now() - chrono::Duration::days(6)).format("%Y-%m-%d").to_string();
 
@@ -103,11 +109,11 @@ pub async fn ai_weekly_report(
         crate::ai::ChatMessage::new("user", prompt),
     ];
 
-    let (provider_name, ai) = {
+    let ai = {
         let ai = state.ai.lock().await;
-        let p = req.provider.clone().unwrap_or_else(|| ai.default_provider.clone());
-        (p, ai)
+        ai.snapshot()
     };
+    let provider_name = req.provider.clone().unwrap_or_else(|| ai.default_provider.clone());
     let reply = match ai.chat(&provider_name, req.model.as_deref(), &messages).await {
         Ok(r) => r,
         Err(e) => {
@@ -186,6 +192,7 @@ async fn build_messages(
     let mut messages = vec![ChatMessage::new("system", system_prompt)];
 
     if req.include_data {
+        // LOCAL dates: must match the local-date buckets in the summary tables (M3).
         let today = chrono::Local::now().format("%Y-%m-%d").to_string();
         let (from, to) = match req.date_range.as_deref() {
             Some("week") => {
@@ -264,10 +271,11 @@ pub async fn ai_chat(
 
     let messages = build_messages(&state, system_prompt, &req).await;
 
-    let reply = {
+    let ai = {
         let ai = state.ai.lock().await;
-        ai.chat(&provider_name, req.model.as_deref(), &messages).await
+        ai.snapshot()
     };
+    let reply = ai.chat(&provider_name, req.model.as_deref(), &messages).await;
 
     match reply {
         Ok(reply) => {
@@ -324,7 +332,10 @@ pub async fn chat_stream(
     let pname = provider_name.clone();
     let model = req.model.clone();
     tokio::spawn(async move {
-        let ai = state_clone.ai.lock().await;
+        let ai = {
+            let ai = state_clone.ai.lock().await;
+            ai.snapshot()
+        };
         if let Err(e) = ai
             .chat_stream(&pname, model.as_deref(), &messages, ai_tx)
             .await
@@ -386,7 +397,10 @@ pub async fn chat_stream_text(
     let pname = provider_name.clone();
     let model = req.model.clone();
     tokio::spawn(async move {
-        let ai = state_clone.ai.lock().await;
+        let ai = {
+            let ai = state_clone.ai.lock().await;
+            ai.snapshot()
+        };
         if let Err(e) = ai
             .chat_stream(&pname, model.as_deref(), &messages, ai_tx)
             .await
@@ -537,7 +551,10 @@ async fn run_agent(
             if tools_enabled { Some(tools.clone()) } else { None };
 
         let handle = tokio::spawn(async move {
-            let ai = state_c.ai.lock().await;
+            let ai = {
+                let ai = state_c.ai.lock().await;
+                ai.snapshot()
+            };
             ai.chat_stream_events(
                 &pname_c,
                 model_c.as_deref(),
