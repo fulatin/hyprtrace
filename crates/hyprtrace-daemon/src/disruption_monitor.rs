@@ -73,7 +73,13 @@ fn spawn_notification_listener(db: Arc<Mutex<Database>>, running: Arc<AtomicBool
 
     // dbus-monitor emits a preamble + the Notify call. We track whether we're
     // inside the argument block of a Notify call, then extract the app name
-    // (1st string), summary (4th string).
+    // (1st string) and the summary (3rd string).
+    //
+    // Notify's signature is (app_name s, replaces_id u, app_icon s, summary s,
+    // body s, ...). Only the `s` arguments are counted here, so the strings are
+    // app_name / app_icon / summary / body in that order — the summary is the
+    // third string (index 2), NOT the fourth. Index 3 is the body, which used
+    // to be stored as the summary and shown as the notification "title".
     let mut app = String::new();
     let mut summary = String::new();
     let mut string_idx = 0usize;
@@ -101,14 +107,17 @@ fn spawn_notification_listener(db: Arc<Mutex<Database>>, running: Arc<AtomicBool
                 let value = s.trim_end_matches('"').to_string();
                 match string_idx {
                     0 => app = value,
-                    3 => summary = value,
+                    2 => summary = value,
                     _ => {}
                 }
                 string_idx += 1;
                 // After summary come arrays/structs; we have what we need when
                 // we see the first dict entry or closing, so grab summary then
                 // stop parsing this call when app+summary set.
-            } else if line.starts_with("array [") || line.starts_with("dict entry") || line.starts_with("}") {
+            } else if line.starts_with("array [")
+                || line.starts_with("dict entry")
+                || line.starts_with("}")
+            {
                 if !app.is_empty() {
                     let guard = match db.lock() {
                         Ok(g) => g,
@@ -143,7 +152,7 @@ fn spawn_clipboard_poller(db: Arc<Mutex<Database>>, running: Arc<AtomicBool>) {
             Ok(o) if o.status.success() => o.stdout,
             _ => continue, // clipboard empty or unavailable
         };
-        let hash = blake2_short(&output);
+        let hash = fnv1a_short(&output);
         if let Some(prev) = &last_hash {
             if prev != &hash {
                 {
@@ -165,7 +174,9 @@ fn spawn_clipboard_poller(db: Arc<Mutex<Database>>, running: Arc<AtomicBool>) {
     }
 }
 
-fn blake2_short(data: &[u8]) -> String {
+/// FNV-1a, truncated to the first 4 KiB. Not a cryptographic hash — it is
+/// only used to tell two consecutive notification payloads apart.
+fn fnv1a_short(data: &[u8]) -> String {
     // Cheap deterministic fingerprint without pulling in a hash crate.
     let mut h: u64 = 0xcbf29ce484222325;
     for b in data.iter().take(4096) {

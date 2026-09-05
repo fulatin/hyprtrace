@@ -2,8 +2,8 @@ use crate::config::Config;
 use crate::db::Database;
 use crate::idle_monitor::ActivityState;
 use anyhow::Context;
-use hyprland::event_listener::EventListener;
 use hyprland::data::Client;
+use hyprland::event_listener::EventListener;
 use hyprland::prelude::HyprDataActiveOptional;
 use std::sync::{Arc, Mutex};
 
@@ -15,14 +15,18 @@ pub struct WindowTracker {
 
 impl WindowTracker {
     pub fn new(db: Arc<Mutex<Database>>, config: Config, activity: ActivityState) -> Self {
-        Self { db, config, activity }
+        Self {
+            db,
+            config,
+            activity,
+        }
     }
 
     pub fn run(&mut self) -> anyhow::Result<()> {
         if let Ok(guard) = self.db.lock() {
-            let count = guard.clear_orphaned_sessions().unwrap_or(0);
+            let count = guard.finalize_orphaned_sessions().unwrap_or(0);
             if count > 0 {
-                log::info!("Cleared {} orphaned session(s) from previous run", count);
+                log::info!("Finalized {} session(s) left open by previous run", count);
             }
         }
 
@@ -51,12 +55,29 @@ impl WindowTracker {
                     // enabled, otherwise store an empty title (class still tracked).
                     let title: &str = if record_titles { &win_data.title } else { "" };
 
-                    let active = Client::get_active().ok().flatten();
+                    // Re-querying the active window here races with a fast
+                    // alt-tab: by the time this handler runs, Hyprland may
+                    // already report the *next* window, which would attach that
+                    // window's workspace/pid to this session. Only trust the
+                    // re-query when it still resolves to the window this event
+                    // is about; otherwise leave the fields unset rather than
+                    // attributing another window's context to this session.
+                    let active = Client::get_active()
+                        .ok()
+                        .flatten()
+                        .filter(|c| c.class.eq_ignore_ascii_case(&class));
+                    if active.is_none() {
+                        log::debug!(
+                            "Active-window re-query did not match event class '{}'; \
+                             recording session without workspace/pid",
+                            class
+                        );
+                    }
                     let workspace = active
                         .as_ref()
                         .map(|c| c.workspace.name.clone())
                         .unwrap_or_default();
-                    let pid = active.map(|c| c.pid);
+                    let pid = active.as_ref().map(|c| c.pid);
 
                     if let Some(prev_id) = end_current_session(&db) {
                         log::info!("Ended session {}", prev_id);
@@ -66,7 +87,9 @@ impl WindowTracker {
                         Ok(new_id) => {
                             log::info!(
                                 "Started session {}: class={}, workspace={}",
-                                new_id, class, workspace
+                                new_id,
+                                class,
+                                workspace
                             );
                         }
                         Err(e) => log::error!("Failed to start session: {}", e),
