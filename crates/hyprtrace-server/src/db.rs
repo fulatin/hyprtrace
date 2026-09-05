@@ -234,8 +234,7 @@ impl Database {
             &self.conn,
             rusqlite::TransactionBehavior::Immediate,
         )?;
-        let mut upd =
-            tx.prepare(&format!("UPDATE {table} SET date_local = ?1 WHERE id = ?2"))?;
+        let mut upd = tx.prepare(&format!("UPDATE {table} SET date_local = ?1 WHERE id = ?2"))?;
         let mut updated = 0usize;
         for (id, ts) in rows {
             if let Some(date) = local_date_from_rfc3339(&ts) {
@@ -774,6 +773,10 @@ impl Database {
     }
 
     pub fn app_ranking(&self, from: &str, to: &str, limit: usize) -> anyhow::Result<Vec<AppRank>> {
+        // SQL `LIMIT` takes a signed value and SQLite reads a negative one as
+        // "no limit", so an unclamped `usize::MAX` from a query parameter would
+        // cast to -1 and return every row ever recorded.
+        let limit = limit.clamp(1, 500);
         let mut stmt = self.conn.prepare(
             "SELECT class,
                     SUM(total_ms) as total_ms,
@@ -1336,22 +1339,111 @@ impl Database {
         Ok(out)
     }
 
-    pub fn set_goals(&self, goals: &[Goal]) -> anyhow::Result<()> {
-        self.conn.execute("DELETE FROM goals", [])?;
-        let mut stmt = self.conn.prepare(
-            "INSERT INTO goals (name, target_type, target_key, daily_target_ms, enabled)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-        )?;
-        for g in goals {
-            stmt.execute(params![
-                g.name.trim(),
-                g.target_type,
-                g.target_key.as_deref(),
-                g.daily_target_ms,
-                if g.enabled { 1 } else { 0 },
-            ])?;
+    /// Persist goals, either replacing the whole table or merging by scope.
+    ///
+    /// `replace_all = true` keeps the historical "the caller owns the full
+    /// list" behaviour, which is what the REST `PUT /goals` endpoint wants: the
+    /// web UI reads the list, edits it and posts it back, so a full replace is
+    /// the correct, idempotent semantic there.
+    ///
+    /// `replace_all = false` merges. A goal is matched by `id` when the caller
+    /// supplies one, and otherwise by its scope
+    /// `(target_type, COALESCE(target_key, ''))`; only if neither matches is a
+    /// new row inserted. This matters for the AI tools, where `set_goal` used to
+    /// `DELETE FROM goals` first: a single hallucinated or mis-parsed tool call
+    /// would silently wipe every goal the user had configured, even though the
+    /// model had only asked to change one. An empty and a `NULL` `target_key`
+    /// are treated as the same scope because the UI can emit either.
+    pub fn set_goals(&self, goals: &[Goal], replace_all: bool) -> anyhow::Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        {
+            if replace_all {
+                tx.execute("DELETE FROM goals", [])?;
+            }
+            let mut by_id = tx.prepare(
+                "UPDATE goals SET name = ?1, target_type = ?2, target_key = ?3,
+                        daily_target_ms = ?4, enabled = ?5
+                 WHERE id = ?6",
+            )?;
+            let mut by_scope = tx.prepare(
+                "UPDATE goals SET name = ?1, daily_target_ms = ?2, enabled = ?3
+                 WHERE target_type = ?4 AND COALESCE(target_key, '') = COALESCE(?5, '')",
+            )?;
+            let mut insert = tx.prepare(
+                "INSERT INTO goals (name, target_type, target_key, daily_target_ms, enabled)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+            )?;
+            for g in goals {
+                let name = g.name.trim();
+                let key = g
+                    .target_key
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty());
+                let enabled = if g.enabled { 1 } else { 0 };
+                // An id from the caller is authoritative; a stale one (goal
+                // deleted meanwhile) falls through to the scope match.
+                let mut stored = false;
+                if let Some(id) = g.id {
+                    stored = by_id.execute(params![
+                        name,
+                        g.target_type,
+                        key,
+                        g.daily_target_ms,
+                        enabled,
+                        id
+                    ])? > 0;
+                }
+                if !stored {
+                    stored = by_scope.execute(params![
+                        name,
+                        g.daily_target_ms,
+                        enabled,
+                        g.target_type,
+                        key
+                    ])? > 0;
+                }
+                if !stored {
+                    insert.execute(params![
+                        name,
+                        g.target_type,
+                        key,
+                        g.daily_target_ms,
+                        enabled
+                    ])?;
+                }
+            }
         }
+        tx.commit()?;
         Ok(())
+    }
+
+    /// Delete a single goal, by id when given, otherwise by scope.
+    ///
+    /// Deleting a goal used to be an implicit side effect of a full replace. It
+    /// is a separate operation now so that no caller can drop a goal without
+    /// naming it.
+    #[allow(dead_code)]
+    pub fn delete_goal(
+        &self,
+        id: Option<i64>,
+        target_type: Option<&str>,
+        target_key: Option<&str>,
+    ) -> anyhow::Result<usize> {
+        if let Some(id) = id {
+            return Ok(self
+                .conn
+                .execute("DELETE FROM goals WHERE id = ?1", params![id])?);
+        }
+        let Some(target_type) = target_type else {
+            return Ok(0);
+        };
+        let key = target_key.map(str::trim).filter(|s| !s.is_empty());
+        Ok(self.conn.execute(
+            "DELETE FROM goals
+             WHERE target_type = ?1 AND COALESCE(target_key, '') = COALESCE(?2, '')",
+            params![target_type, key],
+        )?)
     }
 
     /// Compute today's progress toward each goal.
@@ -1637,6 +1729,8 @@ impl Database {
         to: &str,
         limit: usize,
     ) -> anyhow::Result<Vec<ActivityEvent>> {
+        // See `app_ranking`: a negative LIMIT means "unlimited" in SQLite.
+        let limit = limit.clamp(1, 1000);
         let mut stmt = self.conn.prepare(
             "SELECT id, session_id, state, started_at, ended_at, duration_ms
              FROM activity_events
@@ -1873,31 +1967,72 @@ fn local_date_from_rfc3339(ts: &str) -> Option<String> {
     })
 }
 
-/// SQLite LIKE-style pattern match: `%` = any sequence, `_` = one char.
-/// Case-insensitive. Used for app-category rules.
+/// One unit of a LIKE pattern.
+enum LikeUnit {
+    /// `%` — matches any sequence, including an empty one.
+    AnySeq,
+    /// `_` — matches exactly one character.
+    AnyChar,
+    /// Anything else, including a wildcard that was escaped with `\`.
+    Literal(char),
+}
+
+/// Decode the pattern unit starting at `i`, plus how many chars it consumed.
+/// A backslash escapes `%`, `_` and itself, matching SQLite's `LIKE ... ESCAPE
+/// '\'`. A trailing lone backslash is a literal backslash.
+fn like_unit(p: &[char], i: usize) -> Option<(LikeUnit, usize)> {
+    let c = *p.get(i)?;
+    match c {
+        '\\' if i + 1 < p.len() => Some((LikeUnit::Literal(p[i + 1]), 2)),
+        '%' => Some((LikeUnit::AnySeq, 1)),
+        '_' => Some((LikeUnit::AnyChar, 1)),
+        _ => Some((LikeUnit::Literal(c), 1)),
+    }
+}
+
+/// SQLite LIKE-style pattern match: `%` = any sequence, `_` = one char, `\`
+/// escapes either of them. Case-insensitive. Used for app-category rules.
+///
+/// Two things differ from the previous implementation. `?` used to be accepted
+/// as a second single-char wildcard even though SQLite's LIKE has no `?`
+/// operator, so a rule written `Code?` silently also matched `Coder`; it is a
+/// literal question mark now. And `%` is checked before literal equality, so a
+/// pattern `%` no longer matches a class that happens to contain a percent
+/// sign — the wildcard always wins, and a literal `%` is spelled `\%`.
 fn like_match(pattern: &str, text: &str) -> bool {
     let p: Vec<char> = pattern.to_lowercase().chars().collect();
     let t: Vec<char> = text.to_lowercase().chars().collect();
     let (mut pi, mut ti) = (0usize, 0usize);
+    // Position of the most recent `%` and the text offset it will retry from.
     let (mut star, mut mark) = (usize::MAX, 0usize);
     while ti < t.len() {
-        if pi < p.len() && (p[pi] == '?' || p[pi] == '_' || p[pi] == t[ti]) {
-            pi += 1;
-            ti += 1;
-        } else if pi < p.len() && p[pi] == '%' {
-            star = pi;
-            mark = ti;
-            pi += 1;
-        } else if star != usize::MAX {
-            pi = star + 1;
-            mark += 1;
-            ti = mark;
-        } else {
-            return false;
+        match like_unit(&p, pi) {
+            Some((LikeUnit::AnySeq, _)) => {
+                star = pi;
+                mark = ti;
+                pi += 1;
+            }
+            Some((LikeUnit::AnyChar, w)) => {
+                pi += w;
+                ti += 1;
+            }
+            Some((LikeUnit::Literal(c), w)) if c == t[ti] => {
+                pi += w;
+                ti += 1;
+            }
+            // Pattern exhausted or a literal mismatch: backtrack to the last
+            // `%` and have it absorb one more character.
+            _ if star != usize::MAX => {
+                pi = star + 1;
+                mark += 1;
+                ti = mark;
+            }
+            _ => return false,
         }
     }
-    while pi < p.len() && p[pi] == '%' {
-        pi += 1;
+    // Trailing `%`s match the empty tail.
+    while let Some((LikeUnit::AnySeq, w)) = like_unit(&p, pi) {
+        pi += w;
     }
     pi == p.len()
 }
@@ -1906,6 +2041,210 @@ fn like_match(pattern: &str, text: &str) -> bool {
 mod tests {
     use super::*;
     use rusqlite::params;
+
+    #[test]
+    fn like_match_wildcards() {
+        assert!(like_match("firefox", "firefox"));
+        assert!(like_match("fire%", "firefox"));
+        assert!(like_match("%fox", "firefox"));
+        assert!(like_match("firefox%", "firefox"));
+        assert!(like_match("f_x", "fox"));
+        assert!(like_match("%", ""));
+        assert!(like_match("", ""));
+        // Case-insensitive.
+        assert!(like_match("Fire%", "firefox"));
+
+        assert!(!like_match("firefox", "firefox-esr"));
+        assert!(!like_match("firefox", "chromium"));
+        // `_` is exactly one character, not zero or two.
+        assert!(!like_match("f_x", "fx"));
+        assert!(!like_match("f_x", "foox"));
+        // No backtracking into a dead end.
+        assert!(!like_match("a%b%c", "abb"));
+    }
+
+    #[test]
+    fn like_match_question_mark_is_literal() {
+        // SQLite's LIKE has no `?` operator. Treating it as a single-char
+        // wildcard made a rule like "Code?" also match "Coder".
+        assert!(like_match("code?", "code?"));
+        assert!(!like_match("code?", "coder"));
+        assert!(!like_match("code?", "code"));
+    }
+
+    #[test]
+    fn like_match_backslash_escapes_wildcards() {
+        assert!(like_match("100\\%", "100%"));
+        assert!(!like_match("100\\%", "100x"));
+        assert!(like_match("a\\_b", "a_b"));
+        assert!(!like_match("a\\_b", "axb"));
+        assert!(like_match("a\\\\b", "a\\b"));
+        // A trailing lone backslash is a literal backslash.
+        assert!(like_match("a\\", "a\\"));
+    }
+
+    #[test]
+    fn set_goals_merges_by_scope_instead_of_wiping() {
+        let db = Database::open(std::path::Path::new(":memory:"), 60).unwrap();
+        db.migrate().unwrap();
+        let existing = vec![
+            Goal {
+                id: None,
+                name: "total".into(),
+                target_type: "all".into(),
+                target_key: None,
+                daily_target_ms: 3_600_000,
+                enabled: true,
+            },
+            Goal {
+                id: None,
+                name: "browsing".into(),
+                target_type: "class".into(),
+                target_key: Some("firefox".into()),
+                daily_target_ms: 1_800_000,
+                enabled: true,
+            },
+        ];
+        db.set_goals(&existing, true).unwrap();
+
+        // One goal, no mention of the other one.
+        db.set_goals(
+            &[Goal {
+                id: None,
+                name: "screen time".into(),
+                target_type: "all".into(),
+                target_key: None,
+                daily_target_ms: 7_200_000,
+                enabled: false,
+            }],
+            false,
+        )
+        .unwrap();
+
+        let goals = db.goals().unwrap();
+        assert_eq!(goals.len(), 2, "the unrelated goal must survive: {goals:?}");
+        let total = goals
+            .iter()
+            .find(|g| g.target_type == "all")
+            .expect("the 'all' goal should have been updated, not duplicated");
+        assert_eq!(total.name, "screen time");
+        assert_eq!(total.daily_target_ms, 7_200_000);
+        assert!(!total.enabled);
+        // The firefox goal is untouched.
+        assert!(goals
+            .iter()
+            .any(|g| g.name == "browsing" && g.daily_target_ms == 1_800_000 && g.enabled));
+    }
+
+    #[test]
+    fn set_goals_matches_scope_regardless_of_empty_or_null_key() {
+        let db = Database::open(std::path::Path::new(":memory:"), 60).unwrap();
+        db.migrate().unwrap();
+        let goal = |key: Option<&str>| Goal {
+            id: None,
+            name: "g".into(),
+            target_type: "all".into(),
+            target_key: key.map(String::from),
+            daily_target_ms: 1,
+            enabled: true,
+        };
+        // Stored with a NULL key, updated with an empty string (and back).
+        db.set_goals(&[goal(None)], true).unwrap();
+        db.set_goals(&[goal(Some(""))], false).unwrap();
+        assert_eq!(
+            db.goals().unwrap().len(),
+            1,
+            "empty key must not insert a duplicate"
+        );
+        db.set_goals(&[goal(Some("  "))], false).unwrap();
+        assert_eq!(db.goals().unwrap().len(), 1, "whitespace key is also empty");
+    }
+
+    #[test]
+    fn set_goals_replace_all_still_replaces() {
+        let db = Database::open(std::path::Path::new(":memory:"), 60).unwrap();
+        db.migrate().unwrap();
+        db.set_goals(
+            &[
+                Goal {
+                    id: None,
+                    name: "a".into(),
+                    target_type: "all".into(),
+                    target_key: None,
+                    daily_target_ms: 1,
+                    enabled: true,
+                },
+                Goal {
+                    id: None,
+                    name: "b".into(),
+                    target_type: "class".into(),
+                    target_key: Some("kitty".into()),
+                    daily_target_ms: 1,
+                    enabled: true,
+                },
+            ],
+            true,
+        )
+        .unwrap();
+        assert_eq!(db.goals().unwrap().len(), 2);
+
+        db.set_goals(
+            &[Goal {
+                id: None,
+                name: "c".into(),
+                target_type: "class".into(),
+                target_key: Some("alacritty".into()),
+                daily_target_ms: 1,
+                enabled: true,
+            }],
+            true,
+        )
+        .unwrap();
+        let goals = db.goals().unwrap();
+        assert_eq!(goals.len(), 1);
+        assert_eq!(goals[0].name, "c");
+    }
+
+    #[test]
+    fn delete_goal_removes_only_the_named_scope() {
+        let db = Database::open(std::path::Path::new(":memory:"), 60).unwrap();
+        db.migrate().unwrap();
+        db.set_goals(
+            &[
+                Goal {
+                    id: None,
+                    name: "a".into(),
+                    target_type: "all".into(),
+                    target_key: None,
+                    daily_target_ms: 1,
+                    enabled: true,
+                },
+                Goal {
+                    id: None,
+                    name: "b".into(),
+                    target_type: "class".into(),
+                    target_key: Some("kitty".into()),
+                    daily_target_ms: 1,
+                    enabled: true,
+                },
+            ],
+            true,
+        )
+        .unwrap();
+
+        let removed = db.delete_goal(None, Some("class"), Some("kitty")).unwrap();
+        assert_eq!(removed, 1);
+        let goals = db.goals().unwrap();
+        assert_eq!(goals.len(), 1);
+        assert_eq!(goals[0].name, "a");
+
+        // Deleting something that isn't there is a no-op, not an error.
+        assert_eq!(
+            db.delete_goal(None, Some("class"), Some("nope")).unwrap(),
+            0
+        );
+        assert_eq!(db.goals().unwrap().len(), 1);
+    }
 
     #[test]
     fn migrate_fresh_db_creates_schema_and_date_local() {
@@ -1931,12 +2270,20 @@ mod tests {
             "disruptions",
             "goals",
         ] {
-            assert!(tables.contains(&expected.to_string()), "missing table {expected}");
+            assert!(
+                tables.contains(&expected.to_string()),
+                "missing table {expected}"
+            );
         }
 
         // date_local must exist on the date-keyed tables (v7) so the server's
         // date-local queries work even when it initializes the DB first.
-        for table in ["sessions", "disruptions", "activity_events", "app_resources"] {
+        for table in [
+            "sessions",
+            "disruptions",
+            "activity_events",
+            "app_resources",
+        ] {
             let cols: Vec<String> = db
                 .conn
                 .prepare(&format!("PRAGMA table_info({table})"))
@@ -1945,7 +2292,10 @@ mod tests {
                 .unwrap()
                 .filter_map(|r| r.ok())
                 .collect();
-            assert!(cols.contains(&"date_local".to_string()), "{table} missing date_local");
+            assert!(
+                cols.contains(&"date_local".to_string()),
+                "{table} missing date_local"
+            );
         }
 
         // Queries the API handlers run must not fail on a fresh DB.

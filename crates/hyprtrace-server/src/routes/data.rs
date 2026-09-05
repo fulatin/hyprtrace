@@ -1,4 +1,6 @@
-use crate::models::{AppMetadata, CategoryRule, PaginatedResponse, Project, ProjectRule, ProjectStat, Session};
+use crate::models::{
+    AppMetadata, CategoryRule, PaginatedResponse, Project, ProjectRule, ProjectStat, Session,
+};
 use crate::routes::AppState;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -215,9 +217,9 @@ pub async fn summary(
     State(state): State<Arc<AppState>>,
     Query(query): Query<SummaryQuery>,
 ) -> Result<Json<crate::models::TodaySummary>, Json<serde_json::Value>> {
-    let date = query.date.unwrap_or_else(|| {
-        chrono::Local::now().format("%Y-%m-%d").to_string()
-    });
+    let date = query
+        .date
+        .unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d").to_string());
 
     let db = state.db.lock().await;
     match db.today_summary(&date) {
@@ -237,8 +239,13 @@ pub async fn app_ranking(
     let from = query.from.unwrap_or_else(|| today.clone());
     let to = query.to.unwrap_or(today);
 
+    // Clamped at the API boundary; the database layer clamps again as a
+    // backstop. A bare `usize::MAX` would reach SQL as `LIMIT -1`, which
+    // SQLite reads as "no limit" and would return the whole table.
+    let limit = query.limit.clamp(1, 500);
+
     let db = state.db.lock().await;
-    match db.app_ranking(&from, &to, query.limit) {
+    match db.app_ranking(&from, &to, limit) {
         Ok(result) => Ok(Json(result)),
         Err(e) => {
             log::error!("Failed to get app ranking: {}", e);
@@ -251,9 +258,9 @@ pub async fn timeline(
     State(state): State<Arc<AppState>>,
     Query(query): Query<DateQuery>,
 ) -> Result<Json<Vec<crate::models::HourlyBucket>>, Json<serde_json::Value>> {
-    let date = query.date.unwrap_or_else(|| {
-        chrono::Local::now().format("%Y-%m-%d").to_string()
-    });
+    let date = query
+        .date
+        .unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d").to_string());
 
     let db = state.db.lock().await;
     match db.hourly_breakdown(&date) {
@@ -274,7 +281,13 @@ pub async fn sessions(
     let to = query.to.unwrap_or(today);
 
     let db = state.db.lock().await;
-    match db.sessions_paginated(&from, &to, query.page, query.per_page, query.class.as_deref()) {
+    match db.sessions_paginated(
+        &from,
+        &to,
+        query.page,
+        query.per_page,
+        query.class.as_deref(),
+    ) {
         Ok((data, total)) => Ok(Json(PaginatedResponse {
             data,
             total,
@@ -356,9 +369,7 @@ pub struct AppsMetadataResponse {
     pub entries: HashMap<String, AppMetadata>,
 }
 
-pub async fn apps_metadata(
-    Query(query): Query<AppsMetadataQuery>,
-) -> Json<AppsMetadataResponse> {
+pub async fn apps_metadata(Query(query): Query<AppsMetadataQuery>) -> Json<AppsMetadataResponse> {
     let resolver = crate::desktop::global();
 
     let classes_param = query.classes.unwrap_or_default();
@@ -391,7 +402,9 @@ pub async fn rebuild_summary(
         Ok(_) => Ok(Json(serde_json::json!({"status": "ok"}))),
         Err(e) => {
             log::error!("Failed to rebuild daily_summary: {}", e);
-            Err(Json(serde_json::json!({"error": "Failed to rebuild daily summary"})))
+            Err(Json(
+                serde_json::json!({"error": "Failed to rebuild daily summary"}),
+            ))
         }
     }
 }
@@ -450,8 +463,10 @@ pub async fn activity_events(
     let from = query.from.unwrap_or_else(|| today.clone());
     let to = query.to.unwrap_or(today);
 
+    let limit = query.limit.clamp(1, 1000);
+
     let db = state.db.lock().await;
-    match db.activity_events(&from, &to, query.limit) {
+    match db.activity_events(&from, &to, limit) {
         Ok(events) => Ok(Json(events)),
         Err(e) => {
             log::error!("Failed to get activity events: {}", e);
@@ -468,7 +483,9 @@ pub async fn rebuild_hourly_summary(
         Ok(_) => Ok(Json(serde_json::json!({"status": "ok"}))),
         Err(e) => {
             log::error!("Failed to rebuild hourly_summary: {}", e);
-            Err(Json(serde_json::json!({"error": "Failed to rebuild hourly summary"})))
+            Err(Json(
+                serde_json::json!({"error": "Failed to rebuild hourly summary"}),
+            ))
         }
     }
 }
@@ -476,7 +493,8 @@ pub async fn rebuild_hourly_summary(
 pub async fn resources(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ResourceQuery>,
-) -> Result<Json<Vec<crate::models::AppResource>>, Json<serde_json::Value>> {    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+) -> Result<Json<Vec<crate::models::AppResource>>, Json<serde_json::Value>> {
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let from = query.from.unwrap_or_else(|| today.clone());
     let to = query.to.unwrap_or(today);
     let limit = query.limit.clamp(1, 50);
@@ -502,7 +520,8 @@ pub struct DisruptionQuery {
 pub async fn disruptions(
     State(state): State<Arc<AppState>>,
     Query(query): Query<DisruptionQuery>,
-) -> Result<Json<Vec<crate::models::DisruptionEvent>>, Json<serde_json::Value>> {    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+) -> Result<Json<Vec<crate::models::DisruptionEvent>>, Json<serde_json::Value>> {
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let from = query.from.unwrap_or_else(|| today.clone());
     let to = query.to.unwrap_or(today);
     let limit = query.limit.clamp(1, 200);
@@ -570,7 +589,10 @@ pub async fn put_goals(
     Json(req): Json<GoalsUpdate>,
 ) -> Result<Json<serde_json::Value>, Json<serde_json::Value>> {
     let db = state.db.lock().await;
-    match db.set_goals(&req.goals) {
+    // The web UI reads the goal list, edits it and posts the whole thing back,
+    // so a full replace is the idempotent semantic it expects. The AI tool path
+    // deliberately does not use this — see `Database::set_goals`.
+    match db.set_goals(&req.goals, true) {
         Ok(()) => Ok(Json(serde_json::json!({"status": "ok"}))),
         Err(e) => {
             log::error!("Failed to save goals: {}", e);
@@ -652,15 +674,23 @@ pub async fn report(
 ) -> Result<axum::response::Response, Json<serde_json::Value>> {
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let to = query.to.unwrap_or_else(|| today.clone());
-    let from = query
-        .from
-        .unwrap_or_else(|| (chrono::Local::now() - chrono::Duration::days(6)).format("%Y-%m-%d").to_string());
+    let from = query.from.unwrap_or_else(|| {
+        (chrono::Local::now() - chrono::Duration::days(6))
+            .format("%Y-%m-%d")
+            .to_string()
+    });
 
     let db = state.db.lock().await;
     match db.report(&from, &to) {
         Ok(md) => Ok(axum::response::Response::builder()
             .header("Content-Type", "text/markdown; charset=utf-8")
-            .header("Content-Disposition", format!("attachment; filename=\"hyprtrace-report-{}-{}.md\"", from, to))
+            .header(
+                "Content-Disposition",
+                format!(
+                    "attachment; filename=\"hyprtrace-report-{}-{}.md\"",
+                    from, to
+                ),
+            )
             .body(axum::body::Body::from(md))
             .unwrap()),
         Err(e) => {
@@ -718,8 +748,10 @@ pub async fn titles(
     let from = query.from.unwrap_or(default_from);
     let to = query.to.unwrap_or(today);
 
+    let limit = query.limit.clamp(1, 500);
+
     let db = state.db.lock().await;
-    match db.title_stats(&from, &to, query.class.as_deref(), query.limit) {
+    match db.title_stats(&from, &to, query.class.as_deref(), limit) {
         Ok(stats) => Ok(Json(stats)),
         Err(e) => {
             log::error!("Failed to get title stats: {}", e);
