@@ -56,7 +56,7 @@ pub fn all_tools() -> Vec<ToolDef> {
         },
         ToolDef {
             name: "set_goal",
-            description: "Create or update a daily usage goal. Replace all existing goals with the given list. target_type is 'all' or 'class'; target_key is the app class when type is 'class'; daily_target_ms is milliseconds.",
+            description: "Create or update a daily usage goal. This MERGES: a goal is matched by its scope (target_type + target_key) and updated in place, unknown scopes are added, and goals you do not mention are left untouched. To remove one, call delete_goal. To wipe every goal and start over, pass replace_all=true — only do that when the user explicitly asks to clear all of their goals. target_type is 'all' or 'class'; target_key is the app class when target_type is 'class'; daily_target_ms is milliseconds.",
             parameters: obj_params(
                 json!({
                     "goals": {
@@ -72,9 +72,24 @@ pub fn all_tools() -> Vec<ToolDef> {
                             },
                             "required": ["name", "target_type", "daily_target_ms"]
                         }
+                    },
+                    "replace_all": {
+                        "type": "boolean",
+                        "description": "Delete every existing goal before applying this list. Requires the user to have explicitly asked for it. Default false."
                     }
                 }),
                 &["goals"],
+            ),
+        },
+        ToolDef {
+            name: "delete_goal",
+            description: "Delete one daily usage goal, matched by target_type plus target_key ('class' goals) or by target_type 'all'. Deleting goals is only ever done through this tool, never as a side effect of setting another goal.",
+            parameters: obj_params(
+                json!({
+                    "target_type": {"type": "string", "enum": ["all", "class"]},
+                    "target_key": {"type": "string", "description": "App class; omit for target_type 'all'"}
+                }),
+                &["target_type"],
             ),
         },
         ToolDef {
@@ -397,11 +412,44 @@ pub async fn execute_tool(
                     })
                 })
                 .collect();
-            if parsed.is_empty() {
+            // An empty list is almost always a parse failure on the model's
+            // side. Under the old replace-all semantics that would have wiped
+            // the user's goals, so refuse it unless the caller explicitly opted
+            // into wiping (an empty list + replace_all is an unambiguous
+            // "clear everything" request).
+            let replace_all = args
+                .get("replace_all")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if parsed.is_empty() && !replace_all {
                 anyhow::bail!("set_goal requires at least one goal with a name");
             }
-            db.lock().await.set_goals(&parsed)?;
-            Ok(json!({"status": "ok", "goals_set": parsed.len()}))
+            db.lock().await.set_goals(&parsed, replace_all)?;
+            Ok(json!({
+                "status": "ok",
+                "goals_set": parsed.len(),
+                "replace_all": replace_all,
+            }))
+        }
+        "delete_goal" => {
+            let target_type = arg_str(args, "target_type")
+                .ok_or_else(|| anyhow::anyhow!("missing required argument: target_type"))?;
+            let target_key = arg_str(args, "target_key");
+            if target_type == "class" && target_key.is_none() {
+                anyhow::bail!("delete_goal requires target_key when target_type is 'class'");
+            }
+            let removed = db
+                .lock()
+                .await
+                .delete_goal(None, Some(target_type), target_key)?;
+            if removed == 0 {
+                return Ok(json!({
+                    "status": "not_found",
+                    "removed": 0,
+                    "message": "No goal matches that scope; call get_goals to see the current goals.",
+                }));
+            }
+            Ok(json!({"status": "ok", "removed": removed}))
         }
         "send_reminder" => {
             let title = arg_str(args, "title").unwrap_or("HyprTrace");
