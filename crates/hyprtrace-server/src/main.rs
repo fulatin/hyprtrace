@@ -58,10 +58,7 @@ async fn main() -> anyhow::Result<()> {
     retention::spawn_retention_cleanup(state.clone());
     weekly_report::spawn_weekly_report_scheduler(state.clone());
 
-    let web_dir = {
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
-        std::path::PathBuf::from(home).join(".local/share/hyprtrace/web")
-    };
+    let web_dir = resolve_web_dir();
 
     // SPA fallback: unknown non-API paths serve index.html (with a 200 status)
     // so client-side routes (/apps, /timeline, ...) survive a page refresh.
@@ -91,6 +88,22 @@ async fn main() -> anyhow::Result<()> {
     axum::serve(listener, router).await?;
 
     Ok(())
+}
+
+/// Resolve the directory that holds the built web UI.
+///
+/// A system install (e.g. the AUR package) places it under
+/// `/usr/share/hyprtrace/web`; a manual local install keeps it under
+/// `~/.local/share/hyprtrace/web`. Prefer the system location when it exists
+/// so the packaged build "just works", and fall back to the user directory
+/// for development / legacy local installs.
+fn resolve_web_dir() -> std::path::PathBuf {
+    let system = std::path::PathBuf::from("/usr/share/hyprtrace/web");
+    if system.join("index.html").exists() {
+        return system;
+    }
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+    std::path::PathBuf::from(home).join(".local/share/hyprtrace/web")
 }
 
 /// True when the error chain contains a SQLite busy/locked failure — transient
