@@ -186,15 +186,32 @@ fn get_idle_duration(activity: &ActivityState) -> Option<Duration> {
         }
     }
 
-    // Fallback: loginctl session idle hint (works on many systemd setups).
-    if let Some(dur) = query_loginctl_idle() {
-        return Some(dur);
+    resolve_idle_duration(query_loginctl_idle(), activity)
+}
+
+/// Decide the idle duration from the two available sources.
+///
+/// logind's idle hint is only trusted when it explicitly reports
+/// `IdleHint=yes`. Otherwise we fall back to the evdev-based activity
+/// timestamp: on Hyprland nothing calls logind's `SetIdleHint`, so
+/// `IdleHint=no` carries no information (it stays "no" even after the
+/// user has been away for hours) and must not be treated as "0s idle".
+fn resolve_idle_duration(
+    loginctl_idle: Option<Duration>,
+    activity: &ActivityState,
+) -> Option<Duration> {
+    if loginctl_idle.is_some() {
+        return loginctl_idle;
     }
 
     // Last resort: Hyprland window/workspace events only.
     if let Ok(guard) = activity.last_activity.lock() {
         Some(guard.elapsed())
     } else {
+        log::warn!(
+            "Idle detection unavailable: loginctl reports no idle hint and \
+             the activity state is inaccessible; sessions cannot be idle-detected"
+        );
         None
     }
 }
@@ -210,6 +227,16 @@ fn query_loginctl_idle() -> Option<Duration> {
     }
 
     let stdout = String::from_utf8(output.stdout).ok()?;
+    parse_loginctl_idle(&stdout, SystemTime::now())
+}
+
+/// Parse `loginctl show-user` output into an idle duration.
+///
+/// Returns `Some(duration)` only when logind explicitly reports
+/// `IdleHint=yes` AND a parseable `IdleSinceHint`. Anything else
+/// (`IdleHint=no`, missing/garbled timestamp, empty output) maps to `None`
+/// ("no idle information") so the evdev fallback stays in charge.
+fn parse_loginctl_idle(stdout: &str, now: SystemTime) -> Option<Duration> {
     let mut idle_hint = false;
     let mut idle_since: u64 = 0;
 
@@ -217,19 +244,18 @@ fn query_loginctl_idle() -> Option<Duration> {
         if line == "IdleHint=yes" {
             idle_hint = true;
         } else if let Some(val) = line.strip_prefix("IdleSinceHint=") {
-            idle_since = val.parse().ok()?;
+            idle_since = val.parse().unwrap_or(0);
         }
     }
 
     if !idle_hint || idle_since == 0 {
-        return Some(Duration::ZERO);
+        return None;
     }
 
     let since = UNIX_EPOCH + Duration::from_micros(idle_since);
-    SystemTime::now()
-        .duration_since(since)
-        .ok()
-        .or(Some(Duration::ZERO))
+    // Clock skew can put IdleSinceHint slightly in the future; treat that
+    // as unknown rather than as a bogus duration.
+    now.duration_since(since).ok()
 }
 
 fn resume_session(db: &Arc<Mutex<Database>>) -> anyhow::Result<()> {
@@ -286,5 +312,74 @@ mod tests {
         a.mark_input_activity();
         assert!(*a.last_input.lock().unwrap() >= before);
         assert!(*a.last_activity.lock().unwrap() >= before);
+    }
+
+    #[test]
+    fn loginctl_idle_hint_no_means_unknown_not_zero() {
+        // Hyprland never calls logind's SetIdleHint, so loginctl reports
+        // IdleHint=no forever. This must map to None ("no information")
+        // so the evdev fallback stays in charge — NOT to Some(ZERO),
+        // which would disable idle detection entirely (review H2).
+        let out = "IdleHint=no\nIdleSinceHint=0\n";
+        assert!(parse_loginctl_idle(out, SystemTime::now()).is_none());
+    }
+
+    #[test]
+    fn loginctl_idle_hint_yes_with_since_is_adopted() {
+        let now = SystemTime::now();
+        let since_us = now.duration_since(UNIX_EPOCH).unwrap().as_micros() as u64
+            - Duration::from_secs(90).as_micros() as u64;
+        let out = format!("IdleHint=yes\nIdleSinceHint={}\n", since_us);
+        let d = parse_loginctl_idle(&out, now).expect("expected a duration");
+        assert!((89..=91).contains(&d.as_secs()), "got {}s", d.as_secs());
+    }
+
+    #[test]
+    fn loginctl_idle_hint_yes_without_usable_since_is_unknown() {
+        // Missing timestamp or garbage must not be reported as 0s idle.
+        assert!(parse_loginctl_idle("IdleHint=yes\n", SystemTime::now()).is_none());
+        assert!(
+            parse_loginctl_idle("IdleHint=yes\nIdleSinceHint=abc\n", SystemTime::now())
+                .is_none()
+        );
+        assert!(
+            parse_loginctl_idle("IdleHint=yes\nIdleSinceHint=0\n", SystemTime::now()).is_none()
+        );
+    }
+
+    #[test]
+    fn loginctl_empty_or_garbage_output_is_unknown() {
+        assert!(parse_loginctl_idle("", SystemTime::now()).is_none());
+        assert!(parse_loginctl_idle("garbage output", SystemTime::now()).is_none());
+    }
+
+    #[test]
+    fn loginctl_since_in_future_is_unknown() {
+        // Clock skew guard: a future IdleSinceHint yields no duration
+        // instead of a bogus value.
+        let now = SystemTime::now();
+        let since_us =
+            now.duration_since(UNIX_EPOCH).unwrap().as_micros() as u64 + 60_000_000;
+        let out = format!("IdleHint=yes\nIdleSinceHint={}\n", since_us);
+        assert!(parse_loginctl_idle(&out, now).is_none());
+    }
+
+    #[test]
+    fn evdev_activity_is_used_when_loginctl_has_no_hint() {
+        // loginctl unavailable/uninformative -> fall back to the evdev
+        // activity timestamp instead of reporting 0s idle.
+        let activity = ActivityState::new();
+        activity.mark_activity();
+        let d = resolve_idle_duration(None, &activity).expect("evdev fallback");
+        assert!(d < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn loginctl_result_wins_over_evdev() {
+        // An explicit IdleHint=yes reading takes precedence.
+        let activity = ActivityState::new();
+        let d = resolve_idle_duration(Some(Duration::from_secs(1234)), &activity)
+            .expect("loginctl result");
+        assert_eq!(d, Duration::from_secs(1234));
     }
 }
