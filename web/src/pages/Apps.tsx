@@ -6,6 +6,7 @@ import type { AppRank, AppResource, DailyTrend, AppMetadata } from '../lib/types
 import AppRankingBar from '../components/AppRankingBar';
 import AppName from '../components/AppName';
 import AppTrendChart from '../components/AppTrendChart';
+import ErrorState from '../components/ErrorState';
 
 type Range = 'today' | 'week' | 'month';
 
@@ -13,10 +14,12 @@ export default function Apps() {
   const [range, setRange] = useState<Range>('today');
   const [data, setData] = useState<AppRank[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [selectedApp, setSelectedApp] = useState<string | null>(null);
   const [trend, setTrend] = useState<DailyTrend[]>([]);
   const [resources, setResources] = useState<AppResource[]>([]);
   const [appMetadata, setAppMetadata] = useState<Record<string, AppMetadata>>({});
+  const [reloadKey, setReloadKey] = useState(0);
 
   const getDateRange = () => {
     const today = format(new Date(), 'yyyy-MM-dd');
@@ -32,13 +35,17 @@ export default function Apps() {
 
   useEffect(() => {
     setLoading(true);
+    setError(null);
     const { from, to } = getDateRange();
     api.appRanking(from, to, 15).then((d) => {
       setData(d);
       setLoading(false);
+    }).catch((e) => {
+      setError(e instanceof Error ? e.message : 'Unknown error');
+      setLoading(false);
     });
     api.resources(from, to, 5).then(setResources).catch(() => setResources([]));
-  }, [range]);
+  }, [range, reloadKey]);
 
   // Resolve friendly names/icons for the displayed app classes once.
   useEffect(() => {
@@ -57,8 +64,8 @@ export default function Apps() {
     }
     const { from, to } = getDateRange();
     const granularity = range === 'today' ? 'hour' : undefined;
-    api.appTrend(selectedApp, from, to, granularity).then(setTrend);
-  }, [selectedApp, range]);
+    api.appTrend(selectedApp, from, to, granularity).then(setTrend).catch(() => setTrend([]));
+  }, [selectedApp, range, reloadKey]);
 
   return (
     <div className="space-y-6">
@@ -83,6 +90,8 @@ export default function Apps() {
 
       {loading ? (
         <div className="bg-gray-900 border border-gray-800 rounded-lg p-6 animate-pulse h-64" />
+      ) : error ? (
+        <ErrorState message={error} onRetry={() => setReloadKey((k) => k + 1)} />
       ) : (
         <>
           <div onClick={() => setSelectedApp(null)}>

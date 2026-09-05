@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { format } from 'date-fns';
 import { api } from '../lib/api';
 import type { Session } from '../lib/types';
+import ErrorState from '../components/ErrorState';
 
 const CATEGORY_COLORS = [
   '#22d3ee', '#a78bfa', '#34d399', '#f472b6', '#fbbf24',
@@ -39,16 +40,22 @@ export default function Timeline() {
   const [date, setDate] = useState(format(new Date(), 'yyyy-MM-dd'));
   const [sessions, setSessions] = useState<Session[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     setLoading(true);
+    setError(null);
     // Fetch the whole day (large per_page) ordered by start time.
     api.sessions(date, date, 1, 2000).then((res) => {
       const sorted = [...res.data].sort((a, b) => a.started_at.localeCompare(b.started_at));
       setSessions(sorted);
       setLoading(false);
+    }).catch((e) => {
+      setError(e instanceof Error ? e.message : 'Unknown error');
+      setLoading(false);
     });
-  }, [date]);
+  }, [date, reloadKey]);
 
   // Group sessions by app class so each app occupies a single row with all of
   // its time blocks, instead of one row per session.
@@ -116,6 +123,8 @@ export default function Timeline() {
 
       {loading ? (
         <div className="bg-gray-900 border border-gray-800 rounded-lg p-6 animate-pulse h-64" />
+      ) : error ? (
+        <ErrorState message={error} onRetry={() => setReloadKey((k) => k + 1)} />
       ) : (
         <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 overflow-x-auto">
           <div className="flex">

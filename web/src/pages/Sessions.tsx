@@ -3,6 +3,7 @@ import { format, subDays } from 'date-fns';
 import { api } from '../lib/api';
 import type { Session, PaginatedResponse, AppMetadata } from '../lib/types';
 import AppName from '../components/AppName';
+import ErrorState from '../components/ErrorState';
 
 function formatDuration(ms: number | null): string {
   if (ms === null || ms === 0) return '-';
@@ -33,13 +34,15 @@ export default function Sessions() {
   const [page, setPage] = useState(1);
   const [data, setData] = useState<PaginatedResponse<Session> | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
   const [classes, setClasses] = useState<string[]>([]);
   const [appMetadata, setAppMetadata] = useState<Record<string, AppMetadata>>({});
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     api.appClasses(weekAgo, today).then(setClasses).catch(() => {});
-  }, []);
+  }, [reloadKey]);
 
   // Resolve friendly names/icons for the app classes present in this page's
   // sessions once.
@@ -61,11 +64,15 @@ export default function Sessions() {
 
   useEffect(() => {
     setLoading(true);
+    setError(null);
     api.sessions(weekAgo, today, page, 50, filter || undefined).then((d) => {
       setData(d);
       setLoading(false);
+    }).catch((e) => {
+      setError(e instanceof Error ? e.message : 'Unknown error');
+      setLoading(false);
     });
-  }, [page, filter]);
+  }, [page, filter, reloadKey]);
   const getColor = (cls: string) => {
     const idx = classes.indexOf(cls);
     return COLORS[idx % COLORS.length];
@@ -89,6 +96,8 @@ export default function Sessions() {
 
       {loading ? (
         <div className="bg-gray-900 border border-gray-800 rounded-lg p-6 animate-pulse h-64" />
+      ) : error ? (
+        <ErrorState message={error} onRetry={() => setReloadKey((k) => k + 1)} />
       ) : (
         <div className="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden">
           <table className="w-full text-sm">
