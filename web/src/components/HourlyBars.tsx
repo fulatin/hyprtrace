@@ -1,11 +1,11 @@
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import type { HourlyBucket } from '../lib/types';
 
-interface HourlyHeatmapProps {
+interface HourlyBarsProps {
   data: HourlyBucket[];
 }
 
-export default function HourlyHeatmap({ data }: HourlyHeatmapProps) {
+export default function HourlyBars({ data }: HourlyBarsProps) {
   if (data.length === 0) {
     return (
       <div className="bg-gray-900 border border-gray-800 rounded-lg p-6 flex items-center justify-center h-48 text-gray-400">
