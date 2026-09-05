@@ -185,7 +185,20 @@ impl AiManager {
     pub async fn list_all_models(&self) -> HashMap<String, Vec<String>> {
         let mut result = HashMap::new();
         for (name, provider) in &self.providers {
-            let models = provider.list_models().await.unwrap_or_default();
+            // Bound each provider's model listing. An unreachable or slow
+            // endpoint (e.g. a misconfigured base_url) must not hold the shared
+            // AI lock for the full HTTP timeout (up to 300s), which would stall
+            // every concurrent chat/agent request. A short timeout degrades to
+            // an empty list rather than blocking the whole AI subsystem.
+            let models = match tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                provider.list_models(),
+            )
+            .await
+            {
+                Ok(Ok(models)) => models,
+                _ => Vec::new(),
+            };
             result.insert(name.clone(), models);
         }
         result

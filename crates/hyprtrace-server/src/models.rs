@@ -69,6 +69,26 @@ pub struct DailyTrend {
     pub focused_ms: i64,
 }
 
+/// Per-day activity totals, used for the yearly activity heatmap. Days with no
+/// recorded sessions are zero-filled so the client can render a complete grid.
+#[derive(Debug, Serialize)]
+pub struct DailyActivity {
+    pub date: String,
+    pub total_ms: i64,
+    pub focused_ms: i64,
+    pub session_count: i64,
+}
+
+/// Aggregate of time spent on a single window title (document/tab) over a range.
+#[derive(Debug, Serialize)]
+pub struct TitleStat {
+    pub class: String,
+    pub title: String,
+    pub total_ms: i64,
+    pub session_count: i64,
+    pub last_used_at: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct AiMessage {
     pub id: i64,

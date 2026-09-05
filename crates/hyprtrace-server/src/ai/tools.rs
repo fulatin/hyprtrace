@@ -234,7 +234,7 @@ pub fn all_tools() -> Vec<ToolDef> {
 }
 
 fn today() -> String {
-    chrono::Utc::now().format("%Y-%m-%d").to_string()
+    chrono::Local::now().format("%Y-%m-%d").to_string()
 }
 
 /// Ensure HYPRLAND_INSTANCE_SIGNATURE is set so hyprland-rs can find the IPC
@@ -265,7 +265,9 @@ fn ensure_hyprland_env() -> anyhow::Result<()> {
 }
 
 fn arg_str<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
-    args.get(key).and_then(|v| v.as_str()).filter(|s| !s.is_empty())
+    args.get(key)
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
 }
 
 fn arg_i64(args: &Value, key: &str) -> Option<i64> {
@@ -291,7 +293,9 @@ pub async fn execute_tool(
     match name {
         // ---- Usage DB tools (lock briefly, no await while holding) ----
         "get_today_summary" => {
-            let date = arg_str(args, "date").map(String::from).unwrap_or_else(today);
+            let date = arg_str(args, "date")
+                .map(String::from)
+                .unwrap_or_else(today);
             let s = db.lock().await.today_summary(&date)?;
             Ok(json!({
                 "date": s.date,
@@ -304,21 +308,30 @@ pub async fn execute_tool(
             }))
         }
         "get_app_ranking" => {
-            let from = arg_str(args, "from").map(String::from).unwrap_or_else(today);
+            let from = arg_str(args, "from")
+                .map(String::from)
+                .unwrap_or_else(today);
             let to = arg_str(args, "to").map(String::from).unwrap_or_else(today);
             let limit = arg_i64(args, "limit").unwrap_or(10).clamp(1, 25) as usize;
             let r = db.lock().await.app_ranking(&from, &to, limit)?;
             Ok(serde_json::to_value(r)?)
         }
         "get_sessions" => {
-            let from = arg_str(args, "from").map(String::from).unwrap_or_else(today);
+            let from = arg_str(args, "from")
+                .map(String::from)
+                .unwrap_or_else(today);
             let to = arg_str(args, "to").map(String::from).unwrap_or_else(today);
             let limit = arg_i64(args, "limit").unwrap_or(20).clamp(1, 50) as u32;
-            let (sessions, _total) = db.lock().await.sessions_paginated(&from, &to, 1, limit, None)?;
+            let (sessions, _total) = db
+                .lock()
+                .await
+                .sessions_paginated(&from, &to, 1, limit, None)?;
             Ok(serde_json::to_value(sessions)?)
         }
         "get_hourly_breakdown" => {
-            let date = arg_str(args, "date").map(String::from).unwrap_or_else(today);
+            let date = arg_str(args, "date")
+                .map(String::from)
+                .unwrap_or_else(today);
             let r = db.lock().await.hourly_breakdown(&date)?;
             Ok(serde_json::to_value(r)?)
         }
@@ -359,9 +372,19 @@ pub async fn execute_tool(
                 .iter()
                 .filter_map(|g| {
                     let name = g.get("name")?.as_str()?.to_string();
-                    let target_type = g.get("target_type").and_then(|v| v.as_str()).unwrap_or("all").to_string();
-                    let target_key = g.get("target_key").and_then(|v| v.as_str()).map(String::from);
-                    let daily_target_ms = g.get("daily_target_ms").and_then(|v| v.as_i64()).unwrap_or(0);
+                    let target_type = g
+                        .get("target_type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("all")
+                        .to_string();
+                    let target_key = g
+                        .get("target_key")
+                        .and_then(|v| v.as_str())
+                        .map(String::from);
+                    let daily_target_ms = g
+                        .get("daily_target_ms")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0);
                     Some(crate::models::Goal {
                         id: None,
                         name,
@@ -391,7 +414,7 @@ pub async fn execute_tool(
             let class = arg_str(args, "class")
                 .ok_or_else(|| anyhow::anyhow!("missing required argument: class"))?;
             let from = arg_str(args, "from").map(String::from).unwrap_or_else(|| {
-                (chrono::Utc::now() - chrono::Duration::days(7))
+                (chrono::Local::now() - chrono::Duration::days(7))
                     .format("%Y-%m-%d")
                     .to_string()
             });
@@ -538,11 +561,7 @@ fn execute_hyprland_tool(name: &str, key: Option<&str>) -> anyhow::Result<Value>
         }
         "devices" => {
             let d = hyprland::data::Devices::get()?;
-            let mice: Vec<Value> = d
-                .mice
-                .iter()
-                .map(|m| json!({"name": m.name}))
-                .collect();
+            let mice: Vec<Value> = d.mice.iter().map(|m| json!({"name": m.name})).collect();
             let keyboards: Vec<Value> = d
                 .keyboards
                 .iter()

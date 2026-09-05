@@ -53,23 +53,35 @@ db.execute(
 )
 db.execute("UPDATE activity_events SET duration_ms = 0 WHERE duration_ms < 0")
 
-# 3) Rebuild daily_summary from the repaired sessions.
+# 3) Rebuild daily_summary from the repaired sessions, bucketed by LOCAL date
+#    (matching the daemon's local-midnight bucketing).
+from collections import defaultdict
+rows = db.execute(
+    "SELECT started_at, class, duration_ms, COALESCE(focused_ms, 0) "
+    "FROM sessions WHERE ended_at IS NOT NULL AND duration_ms >= 0"
+).fetchall()
+daily = defaultdict(lambda: [0, 0, 0, 0])  # total_ms, session_count, focused_ms, focused_session_count
+for started_at, cls, duration_ms, focused_ms in rows:
+    try:
+        dt = datetime.datetime.fromisoformat(started_at)
+    except ValueError:
+        continue
+    local_date = dt.astimezone().date().isoformat()  # system local timezone
+    entry = daily[(local_date, cls)]
+    entry[0] += duration_ms
+    entry[1] += 1
+    entry[2] += focused_ms
+    if focused_ms > 0:
+        entry[3] += 1
+
 db.execute("DELETE FROM daily_summary")
-db.execute(
-    """
-    INSERT INTO daily_summary
-        (date, class, total_ms, session_count, focused_ms, focused_session_count)
-    SELECT date(started_at),
-           class,
-           SUM(duration_ms),
-           COUNT(*),
-           SUM(COALESCE(focused_ms, 0)),
-           SUM(CASE WHEN COALESCE(focused_ms, 0) > 0 THEN 1 ELSE 0 END)
-    FROM sessions
-    WHERE ended_at IS NOT NULL AND duration_ms >= 0
-    GROUP BY date(started_at), class
-    """
-)
+for (date, cls), (total_ms, session_count, focused_ms, focused_session_count) in sorted(daily.items()):
+    db.execute(
+        "INSERT INTO daily_summary "
+        "(date, class, total_ms, session_count, focused_ms, focused_session_count) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (date, cls, total_ms, session_count, focused_ms, focused_session_count),
+    )
 
 # 4) Rebuild hourly_summary bucketed by LOCAL start hour, matching the daemon.
 from collections import defaultdict

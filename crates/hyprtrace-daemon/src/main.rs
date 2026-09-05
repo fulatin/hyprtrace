@@ -23,7 +23,26 @@ fn main() -> anyhow::Result<()> {
 
     let db_path = cfg.db_path_expanded();
     let db = db::Database::open(&db_path, cfg.daemon.focused_threshold_seconds).context("Failed to open database")?;
-    db.migrate().context("Database migration failed")?;
+    // The migration writes to the shared DB while the server process may also
+    // be writing at startup. Transient lock contention is retried with a short
+    // backoff instead of exiting (which used to cause a systemd crash loop).
+    let mut migration_attempts = 0u32;
+    loop {
+        match db.migrate() {
+            Ok(()) => break,
+            Err(e) if is_sqlite_busy(&e) && migration_attempts < 5 => {
+                migration_attempts += 1;
+                let delay = std::time::Duration::from_secs(2 * migration_attempts as u64);
+                log::warn!(
+                    "Database migration busy (attempt {migration_attempts}/5), retrying in {}s: {:#}",
+                    delay.as_secs(),
+                    e
+                );
+                std::thread::sleep(delay);
+            }
+            Err(e) => return Err(e).context("Database migration failed"),
+        }
+    }
     log::info!("Database ready: {:?}", db_path);
 
     let db = Arc::new(Mutex::new(db));
@@ -107,4 +126,17 @@ fn main() -> anyhow::Result<()> {
     rx.recv().ok();
     log::info!("HyprTrace daemon exited");
     Ok(())
+}
+
+/// True when the error chain contains a SQLite busy/locked failure — transient
+/// lock contention worth retrying with a backoff instead of crashing.
+fn is_sqlite_busy(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        matches!(
+            cause.downcast_ref::<rusqlite::Error>(),
+            Some(rusqlite::Error::SqliteFailure(ffi, _))
+                if ffi.code == rusqlite::ErrorCode::DatabaseBusy
+                    || ffi.code == rusqlite::ErrorCode::DatabaseLocked
+        )
+    })
 }

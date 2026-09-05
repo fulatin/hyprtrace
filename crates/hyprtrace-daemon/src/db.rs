@@ -85,6 +85,7 @@ impl Database {
         self.migrate_v4()?;
         self.migrate_v5()?;
         self.migrate_v6()?;
+        self.migrate_v7()?;
         Ok(())
     }
 
@@ -128,60 +129,140 @@ impl Database {
         Ok(())
     }
 
+    /// Add a local-calendar-date column to the tables keyed by date, and backfill
+    /// any existing rows. Sessions/disruptions/activity_events store their
+    /// timestamps as UTC RFC3339, but the UI (and daily/hourly summaries) are
+    /// keyed by the user's LOCAL calendar date. An explicit `date_local` column
+    /// lets every `date(...)` filter use the same value the frontend requests,
+    /// without baking a timezone into the stored instant.
+    fn migrate_v7(&self) -> anyhow::Result<()> {
+        self.add_column_if_missing("sessions", "date_local", "TEXT", "''")?;
+        self.add_column_if_missing("disruptions", "date_local", "TEXT", "''")?;
+        self.add_column_if_missing("activity_events", "date_local", "TEXT", "''")?;
+        self.add_column_if_missing("app_resources", "date_local", "TEXT", "''")?;
+
+        self.backfill_date_local("sessions", "started_at")?;
+        self.backfill_date_local("disruptions", "occurred_at")?;
+        self.backfill_date_local("activity_events", "started_at")?;
+        self.backfill_date_local("app_resources", "sampled_at")?;
+
+        Ok(())
+    }
+
+    /// Compute the local calendar date (`YYYY-MM-DD`) of a stored row from its
+    /// UTC timestamp column, for any rows whose `date_local` is still empty.
+    ///
+    /// All updates run inside a SINGLE `BEGIN IMMEDIATE` transaction. One
+    /// autocommit UPDATE per row costs a fsync per commit (synchronous=FULL),
+    /// which measured ~200ms/row on some disks — a backfill of a few thousand
+    /// rows therefore held the SQLite write lock for tens of minutes. Long
+    /// enough that the server (which also writes at startup) hit its 5s
+    /// `busy_timeout`, exited with "database is locked", and systemd crash-
+    /// looped both services for the whole migration window.
+    fn backfill_date_local(&self, table: &str, ts_col: &str) -> anyhow::Result<()> {
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT id, {ts_col} FROM {table} WHERE date_local = ''"
+        ))?;
+        let rows: Vec<(i64, String)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<Result<_, _>>()?;
+        drop(stmt);
+        if rows.is_empty() {
+            return Ok(());
+        }
+
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
+        let mut upd =
+            tx.prepare(&format!("UPDATE {table} SET date_local = ?1 WHERE id = ?2"))?;
+        let mut updated = 0usize;
+        for (id, ts) in rows {
+            if let Some(date) = local_date_from_rfc3339(&ts) {
+                upd.execute(params![date, id])?;
+                updated += 1;
+            }
+        }
+        drop(upd);
+        tx.commit()?;
+
+        if updated > 0 {
+            log::info!("Backfilled date_local for {table}: {updated} row(s)");
+        }
+        Ok(())
+    }
+
     /// Recompute daily_summary and hourly_summary from the `sessions` table.
     /// Used by migrate_v6 to clean up summaries polluted by negative durations.
+    ///
+    /// The DELETE + INSERTs run inside a single transaction for the same reason
+    /// as `backfill_date_local`: per-row autocommit statements cost a fsync
+    /// each and would otherwise hold the write lock for minutes at startup.
     fn rebuild_summaries_from_sessions(&self) -> anyhow::Result<()> {
-        self.conn.execute("DELETE FROM daily_summary", [])?;
-        self.conn.execute(
-            "INSERT INTO daily_summary (date, class, total_ms, session_count, focused_ms, focused_session_count)
-             SELECT date(started_at),
-                    class,
-                    SUM(duration_ms),
-                    COUNT(*),
-                    SUM(COALESCE(focused_ms, 0)),
-                    SUM(CASE WHEN COALESCE(focused_ms, 0) > 0 THEN 1 ELSE 0 END)
-             FROM sessions
-             WHERE ended_at IS NOT NULL AND duration_ms >= 0
-             GROUP BY date(started_at), class",
-            [],
-        )?;
-
-        self.conn.execute("DELETE FROM hourly_summary", [])?;
-
         let mut stmt = self.conn.prepare(
             "SELECT started_at, class, duration_ms, COALESCE(focused_ms, 0)
              FROM sessions
              WHERE ended_at IS NOT NULL AND duration_ms >= 0",
         )?;
-        let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, i64>(2)?,
-                row.get::<_, i64>(3)?,
-            ))
-        })?;
+        let rows: Vec<(String, String, i64, i64)> = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            })?
+            .collect::<Result<_, _>>()?;
+        drop(stmt);
 
-        let mut agg: HashMap<(String, u8, String), (i64, i64, i64)> = HashMap::new();
-        for r in rows {
-            let (started_at, class, duration_ms, focused_ms) = r?;
-            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&started_at) {
-                let date = started_at[..10].to_string();
-                let hour = dt.with_timezone(&chrono::Local).hour() as u8;
-                let entry = agg.entry((date, hour, class)).or_insert((0, 0, 0));
-                entry.0 += duration_ms;
-                entry.1 += 1;
-                entry.2 += focused_ms;
+        // Bucket by the LOCAL calendar date of the session start.
+        let mut daily: HashMap<(String, String), (i64, i64, i64, i64)> = HashMap::new();
+        let mut hourly: HashMap<(String, u8, String), (i64, i64, i64)> = HashMap::new();
+        for (started_at, class, duration_ms, focused_ms) in rows {
+            if let Some(dt) = chrono::DateTime::parse_from_rfc3339(&started_at).ok() {
+                let local = dt.with_timezone(&chrono::Local);
+                let date = local.format("%Y-%m-%d").to_string();
+                let hour = local.hour() as u8;
+                let d = daily
+                    .entry((date.clone(), class.clone()))
+                    .or_insert((0, 0, 0, 0));
+                d.0 += duration_ms;
+                d.1 += 1;
+                d.2 += focused_ms;
+                if focused_ms > 0 {
+                    d.3 += 1;
+                }
+                let h = hourly.entry((date, hour, class)).or_insert((0, 0, 0));
+                h.0 += duration_ms;
+                h.1 += 1;
+                h.2 += focused_ms;
             }
         }
 
-        for ((date, hour, class), (total_ms, session_count, focused_ms)) in agg {
-            self.conn.execute(
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
+        tx.execute("DELETE FROM daily_summary", [])?;
+        for ((date, class), (total_ms, session_count, focused_ms, focused_count)) in daily {
+            tx.execute(
+                "INSERT INTO daily_summary (date, class, total_ms, session_count, focused_ms, focused_session_count)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![date, class, total_ms, session_count, focused_ms, focused_count],
+            )?;
+        }
+
+        tx.execute("DELETE FROM hourly_summary", [])?;
+        for ((date, hour, class), (total_ms, session_count, focused_ms)) in hourly {
+            tx.execute(
                 "INSERT INTO hourly_summary (date, hour, class, total_ms, session_count, focused_ms)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![date, hour as i64, class, total_ms, session_count, focused_ms],
             )?;
         }
+        tx.commit()?;
 
         Ok(())
     }
@@ -309,11 +390,15 @@ impl Database {
         workspace: &str,
         pid: Option<i32>,
     ) -> anyhow::Result<i64> {
-        let now = chrono::Utc::now().to_rfc3339();
+        let now = chrono::Utc::now();
+        let date_local = now
+            .with_timezone(&chrono::Local)
+            .format("%Y-%m-%d")
+            .to_string();
         self.conn.execute(
-            "INSERT INTO sessions (class, title, workspace, started_at, activity_state, pid)
-             VALUES (?1, ?2, ?3, ?4, 'active', ?5)",
-            params![class, title, workspace, now, pid],
+            "INSERT INTO sessions (class, title, workspace, started_at, activity_state, pid, date_local)
+             VALUES (?1, ?2, ?3, ?4, 'active', ?5, ?6)",
+            params![class, title, workspace, now.to_rfc3339(), pid, date_local],
         )?;
         let id = self.conn.last_insert_rowid();
         if let Ok(mut starts) = self.monotonic_starts.lock() {
@@ -379,24 +464,27 @@ impl Database {
             started
         };
 
-        // Bucket the session on the day it STARTED (UTC), matching the
-        // server's date(started_at) queries and rebuild paths. Using the end
-        // date here made cross-midnight sessions land on the wrong day and
-        // corrupted the idle-time calculation (span on start date vs active
-        // time on end date).
-        let session_date = started.format("%Y-%m-%d").to_string();
+        // Bucket the session on the LOCAL day it STARTED. This matches the
+        // server's date_local field and the local-date queries the frontend
+        // sends, so a session that spans midnight is attributed to the day the
+        // user actually started it (in their own timezone).
 
         let focused_ms = std::cmp::max(0, duration_ms - self.focused_threshold_ms);
 
+        let session_date = started
+            .with_timezone(&chrono::Local)
+            .format("%Y-%m-%d")
+            .to_string();
+
         if clock_jumped {
             self.conn.execute(
-                "UPDATE sessions SET ended_at = ?1, duration_ms = ?2, focused_ms = ?3, started_at = ?4 WHERE id = ?5",
-                params![now_str, duration_ms, focused_ms, started.to_rfc3339(), session_id],
+                "UPDATE sessions SET ended_at = ?1, duration_ms = ?2, focused_ms = ?3, started_at = ?4, date_local = ?5 WHERE id = ?6",
+                params![now_str, duration_ms, focused_ms, started.to_rfc3339(), session_date, session_id],
             )?;
         } else {
             self.conn.execute(
-                "UPDATE sessions SET ended_at = ?1, duration_ms = ?2, focused_ms = ?3 WHERE id = ?4",
-                params![now_str, duration_ms, focused_ms, session_id],
+                "UPDATE sessions SET ended_at = ?1, duration_ms = ?2, focused_ms = ?3, date_local = ?4 WHERE id = ?5",
+                params![now_str, duration_ms, focused_ms, session_date, session_id],
             )?;
         }
         if let Ok(mut starts) = self.monotonic_starts.lock() {
@@ -471,10 +559,14 @@ impl Database {
     }
 
     fn save_activity_event(&self, session_id: i64, state: &str) -> anyhow::Result<()> {
-        let now = chrono::Utc::now().to_rfc3339();
+        let now = chrono::Utc::now();
+        let date_local = now
+            .with_timezone(&chrono::Local)
+            .format("%Y-%m-%d")
+            .to_string();
         self.conn.execute(
-            "INSERT INTO activity_events (session_id, state, started_at) VALUES (?1, ?2, ?3)",
-            params![session_id, state, now],
+            "INSERT INTO activity_events (session_id, state, started_at, date_local) VALUES (?1, ?2, ?3, ?4)",
+            params![session_id, state, now.to_rfc3339(), date_local],
         )?;
         Ok(())
     }
@@ -569,15 +661,21 @@ impl Database {
         cpu_pct: f64,
         mem_kb: i64,
     ) -> anyhow::Result<()> {
+        let now = chrono::Utc::now();
+        let date_local = now
+            .with_timezone(&chrono::Local)
+            .format("%Y-%m-%d")
+            .to_string();
         self.conn.execute(
-            "INSERT INTO app_resources (session_id, class, sampled_at, cpu_pct, mem_kb)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO app_resources (session_id, class, sampled_at, cpu_pct, mem_kb, date_local)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 session_id,
                 class,
-                chrono::Utc::now().to_rfc3339(),
+                now.to_rfc3339(),
                 cpu_pct,
-                mem_kb
+                mem_kb,
+                date_local
             ],
         )?;
         Ok(())
@@ -585,18 +683,28 @@ impl Database {
 
     /// Record a desktop notification (an interruption).
     pub fn save_notification(&self, app: &str, summary: &str) -> anyhow::Result<()> {
+        let now = chrono::Utc::now();
+        let date_local = now
+            .with_timezone(&chrono::Local)
+            .format("%Y-%m-%d")
+            .to_string();
         self.conn.execute(
-            "INSERT INTO disruptions (kind, app, summary, occurred_at) VALUES ('notification', ?1, ?2, ?3)",
-            params![app, summary, chrono::Utc::now().to_rfc3339()],
+            "INSERT INTO disruptions (kind, app, summary, occurred_at, date_local) VALUES ('notification', ?1, ?2, ?3, ?4)",
+            params![app, summary, now.to_rfc3339(), date_local],
         )?;
         Ok(())
     }
 
     /// Record a clipboard copy event.
     pub fn save_clipboard(&self) -> anyhow::Result<()> {
+        let now = chrono::Utc::now();
+        let date_local = now
+            .with_timezone(&chrono::Local)
+            .format("%Y-%m-%d")
+            .to_string();
         self.conn.execute(
-            "INSERT INTO disruptions (kind, occurred_at) VALUES ('clipboard', ?1)",
-            params![chrono::Utc::now().to_rfc3339()],
+            "INSERT INTO disruptions (kind, occurred_at, date_local) VALUES ('clipboard', ?1, ?2)",
+            params![now.to_rfc3339(), date_local],
         )?;
         Ok(())
     }
@@ -638,7 +746,7 @@ impl Database {
 
     /// Today's active milliseconds for a goal. "all" = total across classes.
     pub fn today_active_for_goal(&self, goal: &Goal) -> i64 {
-        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
         let sql = if goal.target_type == "class" {
             "SELECT COALESCE(SUM(total_ms), 0) FROM daily_summary WHERE date = ?1 AND class = ?2"
         } else {
@@ -711,9 +819,19 @@ impl Database {
     }
 }
 
+/// Local calendar date (`YYYY-MM-DD`) of a stored UTC RFC3339 timestamp.
+fn local_date_from_rfc3339(ts: &str) -> Option<String> {
+    chrono::DateTime::parse_from_rfc3339(ts).ok().map(|dt| {
+        dt.with_timezone(&chrono::Local)
+            .format("%Y-%m-%d")
+            .to_string()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Timelike;
 
     #[test]
     fn migrate_fresh_and_upgrade_paths() {
@@ -831,11 +949,16 @@ mod tests {
 
         // Simulate a session whose duration was recorded before the clock-jump
         // fix, plus a polluted daily_summary and activity_event.
+        let started_ts = "2026-08-15T15:55:04.800+00:00";
+        let started_dt = chrono::DateTime::parse_from_rfc3339(started_ts).unwrap();
+        let local_dt = started_dt.with_timezone(&chrono::Local);
+        let expected_local_date = local_dt.format("%Y-%m-%d").to_string();
+        let expected_local_hour = local_dt.hour() as i64;
         db.conn
             .execute(
                 "INSERT INTO sessions (class, title, workspace, started_at, ended_at, duration_ms, activity_state, focused_ms)
-                 VALUES ('kitty', 'yay', '~', '2026-08-15T15:55:04.800+00:00', '2026-08-15T07:56:28.878+00:00', -28715922, 'active', 0)",
-                [],
+                 VALUES ('kitty', 'yay', '~', ?1, '2026-08-15T07:56:28.878+00:00', -28715922, 'active', 0)",
+                params![started_ts],
             )
             .unwrap();
         let sid = db.conn.last_insert_rowid();
@@ -887,8 +1010,8 @@ mod tests {
         let daily: (i64, i64) = db
             .conn
             .query_row(
-                "SELECT total_ms, session_count FROM daily_summary WHERE date = '2026-08-15' AND class = 'kitty'",
-                [],
+                "SELECT total_ms, session_count FROM daily_summary WHERE date = ?1 AND class = 'kitty'",
+                params![expected_local_date],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .unwrap();
@@ -897,8 +1020,8 @@ mod tests {
         let hourly: (i64, i64) = db
             .conn
             .query_row(
-                "SELECT total_ms, session_count FROM hourly_summary WHERE date = '2026-08-15' AND hour = 23 AND class = 'kitty'",
-                [],
+                "SELECT total_ms, session_count FROM hourly_summary WHERE date = ?1 AND hour = ?2 AND class = 'kitty'",
+                params![expected_local_date, expected_local_hour],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .unwrap();
@@ -947,7 +1070,11 @@ mod tests {
 
         let daily_negative: i64 = db
             .conn
-            .query_row("SELECT COUNT(*) FROM daily_summary WHERE total_ms < 0", [], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM daily_summary WHERE total_ms < 0",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(daily_negative, 0);
 
@@ -1091,15 +1218,20 @@ mod tests {
         let db = Database::open(&path, 20 * 60).unwrap();
         db.migrate().unwrap();
 
-        // Simulate a session started just before midnight (UTC) and ended
-        // after midnight. It must be bucketed on the START date so the
-        // server's date(started_at) queries and rebuild paths agree.
-        let started_at = "2026-08-15T23:50:00+00:00";
+        // Simulate a session started just before LOCAL midnight. It must be
+        // bucketed on the LOCAL day it started, matching the daemon's
+        // date_local field and the frontend's local-date queries.
+        let started_at_ts = "2026-08-15T23:50:00+00:00";
+        let expected_local_date = chrono::DateTime::parse_from_rfc3339(started_at_ts)
+            .unwrap()
+            .with_timezone(&chrono::Local)
+            .format("%Y-%m-%d")
+            .to_string();
         db.conn
             .execute(
                 "INSERT INTO sessions (class, title, workspace, started_at, activity_state, focused_ms)
                  VALUES ('kitty', 'late', '1', ?1, 'active', 0)",
-                params![started_at],
+                params![started_at_ts],
             )
             .unwrap();
         let id = db.conn.last_insert_rowid();
@@ -1114,7 +1246,7 @@ mod tests {
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .unwrap();
-        assert_eq!(daily_date, "2026-08-15");
+        assert_eq!(daily_date, expected_local_date);
         assert!(daily_total >= 0);
 
         let hourly_date: String = db
@@ -1125,7 +1257,7 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(hourly_date, "2026-08-15");
+        assert_eq!(hourly_date, expected_local_date);
 
         drop(db);
         std::fs::remove_dir_all(&dir).ok();

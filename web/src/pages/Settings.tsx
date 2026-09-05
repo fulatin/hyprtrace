@@ -48,6 +48,10 @@ export default function Settings() {
   const [savingGoals, setSavingGoals] = useState(false);
   const [goalMsg, setGoalMsg] = useState('');
 
+  const [recordTitles, setRecordTitles] = useState(true);
+  const [savingTitles, setSavingTitles] = useState(false);
+  const [titlesMsg, setTitlesMsg] = useState('');
+
   const [retentionDays, setRetentionDays] = useState(0);
   const days7Ago = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
   const today = new Date().toISOString().slice(0, 10);
@@ -88,6 +92,7 @@ export default function Settings() {
         setOpenaiModel(c.openai_model);
         setOllamaUrl(c.ollama_url);
         setOllamaModel(c.ollama_model);
+        setRecordTitles(c.record_titles ?? true);
         setRetentionDays(c.retention_days ?? 0);
         setWeeklyEnabled(c.weekly_report_enabled);
         setWeeklyDay(c.weekly_report_day);
@@ -383,6 +388,22 @@ export default function Settings() {
       setWeeklyMsg('Save failed: ' + (e instanceof Error ? e.message : 'Unknown error'));
     } finally {
       setSavingWeekly(false);
+    }
+  };
+
+  const handleSaveTitles = async () => {
+    setSavingTitles(true);
+    setTitlesMsg('');
+    try {
+      await api.updateConfig({ record_titles: recordTitles });
+      setTitlesMsg('Saved');
+      const fresh = await api.getConfig();
+      setConfig(fresh);
+      setRecordTitles(fresh.record_titles ?? true);
+    } catch (e) {
+      setTitlesMsg('Save failed: ' + (e instanceof Error ? e.message : 'Unknown error'));
+    } finally {
+      setSavingTitles(false);
     }
   };
 
@@ -924,6 +945,37 @@ export default function Settings() {
           </h3>
 
           <div className="space-y-4">
+            <div>
+              <p className="text-xs font-medium text-gray-300 mb-2">Window titles</p>
+              <label className="flex items-center gap-2 text-sm text-gray-300">
+                <input
+                  type="checkbox"
+                  checked={recordTitles}
+                  onChange={(e) => setRecordTitles(e.target.checked)}
+                  className="accent-cyan-500"
+                />
+                Record window titles
+              </label>
+              <p className="text-xs text-gray-500 mt-1">
+                When disabled, new sessions store no window title (only the app class is kept). Takes effect after the daemon restarts.
+              </p>
+              <div className="mt-2 flex items-center gap-3">
+                <button
+                  onClick={handleSaveTitles}
+                  disabled={savingTitles}
+                  className="flex items-center gap-2 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white rounded-md px-3 py-1.5 text-xs transition-colors"
+                >
+                  <Save size={12} />
+                  {savingTitles ? 'Saving...' : 'Save privacy settings'}
+                </button>
+                {titlesMsg && (
+                  <span className={`text-xs ${titlesMsg === 'Saved' ? 'text-emerald-400' : 'text-red-400'}`}>
+                    {titlesMsg}
+                  </span>
+                )}
+              </div>
+            </div>
+
             <div>
               <p className="text-xs font-medium text-gray-300 mb-2">Delete usage data</p>
               <div className="flex items-center gap-2 flex-wrap">

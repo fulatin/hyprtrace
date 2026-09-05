@@ -6,6 +6,7 @@ import Apps from './pages/Apps';
 import Timeline from './pages/Timeline';
 import Sessions from './pages/Sessions';
 import AIChat from './pages/AIChat';
+import Titles from './pages/Titles';
 import Settings from './pages/Settings';
 
 export default function App() {
@@ -18,6 +19,7 @@ export default function App() {
             <Route path="/apps" element={<Apps />} />
             <Route path="/timeline" element={<Timeline />} />
             <Route path="/sessions" element={<Sessions />} />
+            <Route path="/titles" element={<Titles />} />
             <Route path="/ai" element={<AIChat />} />
             <Route path="/settings" element={<Settings />} />
           </Route>

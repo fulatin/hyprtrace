@@ -30,6 +30,7 @@ impl WindowTracker {
         let activity = self.activity.clone();
         let activity2 = activity.clone();
         let activity3 = activity.clone();
+        let record_titles = self.config.daemon.record_titles;
         let mut listener = EventListener::new();
 
         listener.add_active_window_changed_handler(move |data| {
@@ -46,7 +47,9 @@ impl WindowTracker {
             match data {
                 Some(win_data) => {
                     let class = win_data.class.to_lowercase();
-                    let title = &win_data.title;
+                    // Respect the privacy toggle: record window titles only when
+                    // enabled, otherwise store an empty title (class still tracked).
+                    let title: &str = if record_titles { &win_data.title } else { "" };
 
                     let active = Client::get_active().ok().flatten();
                     let workspace = active

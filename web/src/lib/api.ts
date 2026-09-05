@@ -24,6 +24,8 @@ import type {
   GoalsResponse,
   TrendPrediction,
   AppsMetadataResponse,
+  DailyActivity,
+  TitleStat,
 } from './types';
 
 async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
@@ -109,6 +111,14 @@ export const api = {
   activityEvents: (from: string, to: string, limit = 100) =>
     fetchJSON<ActivityEvent[]>(
       `/api/activity/events?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&limit=${limit}`
+    ),
+
+  activityDaily: (days = 371) =>
+    fetchJSON<DailyActivity[]>(`/api/activity/daily?days=${days}`),
+
+  titles: (from: string, to: string, cls?: string, limit = 100) =>
+    fetchJSON<TitleStat[]>(
+      `/api/titles?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&limit=${limit}${cls ? `&class=${encodeURIComponent(cls)}` : ''}`
     ),
 
   rebuildHourlySummary: () =>

@@ -192,7 +192,7 @@ pub async fn project_stats(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ProjectStatsQuery>,
 ) -> Result<Json<Vec<ProjectStat>>, Json<serde_json::Value>> {
-    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let from = query.from.unwrap_or_else(|| today.clone());
     let to = query.to.unwrap_or(today);
 
@@ -211,7 +211,7 @@ pub async fn summary(
     Query(query): Query<SummaryQuery>,
 ) -> Result<Json<crate::models::TodaySummary>, Json<serde_json::Value>> {
     let date = query.date.unwrap_or_else(|| {
-        chrono::Utc::now().format("%Y-%m-%d").to_string()
+        chrono::Local::now().format("%Y-%m-%d").to_string()
     });
 
     let db = state.db.lock().await;
@@ -228,7 +228,7 @@ pub async fn app_ranking(
     State(state): State<Arc<AppState>>,
     Query(query): Query<AppRankingQuery>,
 ) -> Result<Json<Vec<crate::models::AppRank>>, Json<serde_json::Value>> {
-    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let from = query.from.unwrap_or_else(|| today.clone());
     let to = query.to.unwrap_or(today);
 
@@ -247,7 +247,7 @@ pub async fn timeline(
     Query(query): Query<DateQuery>,
 ) -> Result<Json<Vec<crate::models::HourlyBucket>>, Json<serde_json::Value>> {
     let date = query.date.unwrap_or_else(|| {
-        chrono::Utc::now().format("%Y-%m-%d").to_string()
+        chrono::Local::now().format("%Y-%m-%d").to_string()
     });
 
     let db = state.db.lock().await;
@@ -264,7 +264,7 @@ pub async fn sessions(
     State(state): State<Arc<AppState>>,
     Query(query): Query<SessionQuery>,
 ) -> Result<Json<PaginatedResponse<Session>>, Json<serde_json::Value>> {
-    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let from = query.from.unwrap_or_else(|| today.clone());
     let to = query.to.unwrap_or(today);
 
@@ -287,7 +287,7 @@ pub async fn delete_sessions(
     State(state): State<Arc<AppState>>,
     Query(query): Query<DeleteSessionsQuery>,
 ) -> Result<Json<serde_json::Value>, Json<serde_json::Value>> {
-    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let from = query.from.unwrap_or_else(|| today.clone());
     let to = query.to.unwrap_or(today);
 
@@ -327,7 +327,7 @@ pub async fn app_classes(
     State(state): State<Arc<AppState>>,
     Query(query): Query<DateRangeQuery>,
 ) -> Result<Json<Vec<String>>, Json<serde_json::Value>> {
-    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let from = query.from.unwrap_or_else(|| today.clone());
     let to = query.to.unwrap_or(today);
 
@@ -396,7 +396,7 @@ pub async fn app_trend(
     Path(class): Path<String>,
     Query(query): Query<AppTrendQuery>,
 ) -> Result<Json<Vec<crate::models::DailyTrend>>, Json<serde_json::Value>> {
-    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let db = state.db.lock().await;
 
     if query.granularity.as_deref() == Some("hour") {
@@ -410,7 +410,7 @@ pub async fn app_trend(
         }
     } else {
         let from = query.from.unwrap_or_else(|| {
-            let d = chrono::Utc::now() - chrono::Duration::days(7);
+            let d = chrono::Local::now() - chrono::Duration::days(7);
             d.format("%Y-%m-%d").to_string()
         });
         let to = query.to.unwrap_or(today);
@@ -441,7 +441,7 @@ pub async fn activity_events(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ActivityEventsQuery>,
 ) -> Result<Json<Vec<crate::models::ActivityEvent>>, Json<serde_json::Value>> {
-    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let from = query.from.unwrap_or_else(|| today.clone());
     let to = query.to.unwrap_or(today);
 
@@ -471,7 +471,7 @@ pub async fn rebuild_hourly_summary(
 pub async fn resources(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ResourceQuery>,
-) -> Result<Json<Vec<crate::models::AppResource>>, Json<serde_json::Value>> {    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+) -> Result<Json<Vec<crate::models::AppResource>>, Json<serde_json::Value>> {    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let from = query.from.unwrap_or_else(|| today.clone());
     let to = query.to.unwrap_or(today);
     let limit = query.limit.clamp(1, 50);
@@ -497,7 +497,7 @@ pub struct DisruptionQuery {
 pub async fn disruptions(
     State(state): State<Arc<AppState>>,
     Query(query): Query<DisruptionQuery>,
-) -> Result<Json<Vec<crate::models::DisruptionEvent>>, Json<serde_json::Value>> {    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+) -> Result<Json<Vec<crate::models::DisruptionEvent>>, Json<serde_json::Value>> {    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let from = query.from.unwrap_or_else(|| today.clone());
     let to = query.to.unwrap_or(today);
     let limit = query.limit.clamp(1, 200);
@@ -521,7 +521,7 @@ pub async fn efficiency(
     State(state): State<Arc<AppState>>,
     Query(query): Query<EfficiencyQuery>,
 ) -> Result<Json<crate::models::EfficiencyScore>, Json<serde_json::Value>> {
-    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let date = query.date.unwrap_or(today);
     let db = state.db.lock().await;
     match db.efficiency_score(&date) {
@@ -645,11 +645,11 @@ pub async fn report(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ReportQuery>,
 ) -> Result<axum::response::Response, Json<serde_json::Value>> {
-    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let to = query.to.unwrap_or_else(|| today.clone());
     let from = query
         .from
-        .unwrap_or_else(|| (chrono::Utc::now() - chrono::Duration::days(6)).format("%Y-%m-%d").to_string());
+        .unwrap_or_else(|| (chrono::Local::now() - chrono::Duration::days(6)).format("%Y-%m-%d").to_string());
 
     let db = state.db.lock().await;
     match db.report(&from, &to) {
@@ -660,6 +660,64 @@ pub async fn report(
             .unwrap()),
         Err(e) => {
             log::error!("Failed to build report: {}", e);
+            Err(Json(serde_json::json!({"error": "Internal server error"})))
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct DailyActivityQuery {
+    #[serde(default = "default_activity_days")]
+    pub days: i64,
+}
+
+fn default_activity_days() -> i64 {
+    371
+}
+
+pub async fn daily_activity(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<DailyActivityQuery>,
+) -> Result<Json<Vec<crate::models::DailyActivity>>, Json<serde_json::Value>> {
+    let db = state.db.lock().await;
+    match db.daily_activity(query.days) {
+        Ok(days) => Ok(Json(days)),
+        Err(e) => {
+            log::error!("Failed to get daily activity: {}", e);
+            Err(Json(serde_json::json!({"error": "Internal server error"})))
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct TitlesQuery {
+    pub from: Option<String>,
+    pub to: Option<String>,
+    pub class: Option<String>,
+    #[serde(default = "default_titles_limit")]
+    pub limit: usize,
+}
+
+fn default_titles_limit() -> usize {
+    50
+}
+
+pub async fn titles(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<TitlesQuery>,
+) -> Result<Json<Vec<crate::models::TitleStat>>, Json<serde_json::Value>> {
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let default_from = (chrono::Local::now() - chrono::Duration::days(6))
+        .format("%Y-%m-%d")
+        .to_string();
+    let from = query.from.unwrap_or(default_from);
+    let to = query.to.unwrap_or(today);
+
+    let db = state.db.lock().await;
+    match db.title_stats(&from, &to, query.class.as_deref(), query.limit) {
+        Ok(stats) => Ok(Json(stats)),
+        Err(e) => {
+            log::error!("Failed to get title stats: {}", e);
             Err(Json(serde_json::json!({"error": "Internal server error"})))
         }
     }

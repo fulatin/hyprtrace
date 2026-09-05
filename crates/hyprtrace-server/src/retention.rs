@@ -33,7 +33,7 @@ async fn cleanup_once(state: &Arc<crate::routes::AppState>) {
         return;
     }
 
-    let cutoff = (chrono::Utc::now() - chrono::Duration::days(retention_days as i64))
+    let cutoff = (chrono::Local::now() - chrono::Duration::days(retention_days as i64))
         .format("%Y-%m-%d")
         .to_string();
 

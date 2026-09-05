@@ -28,6 +28,8 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/summary/rebuild", axum::routing::post(data::rebuild_summary))
         .route("/hourly-summary/rebuild", axum::routing::post(data::rebuild_hourly_summary))
         .route("/activity/events", axum::routing::get(data::activity_events))
+        .route("/activity/daily", axum::routing::get(data::daily_activity))
+        .route("/titles", axum::routing::get(data::titles))
         .route("/resources", axum::routing::get(data::resources))
         .route("/disruptions", axum::routing::get(data::disruptions))
         .route("/efficiency", axum::routing::get(data::efficiency))

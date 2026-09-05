@@ -6,13 +6,15 @@ import { Clock, AppWindow, Hash, Moon, BrainCircuit, BellRing, Copy, Gauge, Targ
 
 import { api } from '../lib/api';
 
-import type { TodaySummary, HourlyBucket, DisruptionEvent, EfficiencyScore, GoalProgress, TrendPrediction, AppMetadata, ProjectStat } from '../lib/types';
+import type { TodaySummary, HourlyBucket, DisruptionEvent, EfficiencyScore, GoalProgress, TrendPrediction, AppMetadata, ProjectStat, DailyActivity } from '../lib/types';
 
 import StatCard from '../components/StatCard';
 
 import AppUsagePie from '../components/AppUsagePie';
 
 import HourlyHeatmap from '../components/HourlyHeatmap';
+
+import ActivityHeatmap from '../components/ActivityHeatmap';
 
 function formatDuration(ms: number): string {
 
@@ -77,6 +79,7 @@ export default function Dashboard() {
   const [compare, setCompare] = useState<CompareState>(EMPTY_COMPARE);
   const [appMetadata, setAppMetadata] = useState<Record<string, AppMetadata>>({});
   const [projectStats, setProjectStats] = useState<ProjectStat[]>([]);
+  const [activity, setActivity] = useState<DailyActivity[]>([]);
 
   const [loading, setLoading] = useState(true);
 
@@ -97,6 +100,11 @@ export default function Dashboard() {
     }
     api.appsMetadata(classes).then((res) => setAppMetadata(res.entries)).catch(() => setAppMetadata({}));
   }, [summary]);
+
+  // Yearly activity heatmap is independent of the selected date; fetch once.
+  useEffect(() => {
+    api.activityDaily(371).then(setActivity).catch(() => setActivity([]));
+  }, []);
 
   useEffect(() => {
 
@@ -335,6 +343,8 @@ export default function Dashboard() {
         </div>
 
       </div>
+
+      <ActivityHeatmap data={activity} />
 
       {goalProgress.length > 0 && isToday && (
 

@@ -5,10 +5,7 @@ use std::time::Duration;
 /// Periodically analyzes recent usage data with the configured AI provider and
 /// sends a desktop notification when the AI flags something notable (e.g.
 /// excessive late-night use, a spike in gaming, missing a goal).
-pub fn spawn_proactive_monitor(
-    state: Arc<crate::routes::AppState>,
-    interval_minutes: u64,
-) {
+pub fn spawn_proactive_monitor(state: Arc<crate::routes::AppState>, interval_minutes: u64) {
     tokio::spawn(async move {
         let interval = Duration::from_secs((interval_minutes.max(15)) * 60);
         // Avoid repeating the same notification back-to-back.
@@ -52,7 +49,7 @@ pub fn spawn_proactive_monitor(
 /// actionable observation. Returns an empty string if there's nothing worth
 /// flagging.
 async fn build_insight(state: &Arc<crate::routes::AppState>) -> anyhow::Result<String> {
-    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
 
     // Snapshot data without holding the DB lock across the AI call.
     let (summary_json, goals_json, efficiency_json) = {
@@ -60,9 +57,21 @@ async fn build_insight(state: &Arc<crate::routes::AppState>) -> anyhow::Result<S
         let summary = db.today_summary(&today).ok();
         let goals = db.goal_progress().ok();
         let efficiency = db.efficiency_score(&today).ok();
-        let s = summary.map(|s| serde_json::to_value(s)).transpose().ok().flatten();
-        let g = goals.map(|g| serde_json::to_value(g)).transpose().ok().flatten();
-        let e = efficiency.map(|e| serde_json::to_value(e)).transpose().ok().flatten();
+        let s = summary
+            .map(|s| serde_json::to_value(s))
+            .transpose()
+            .ok()
+            .flatten();
+        let g = goals
+            .map(|g| serde_json::to_value(g))
+            .transpose()
+            .ok()
+            .flatten();
+        let e = efficiency
+            .map(|e| serde_json::to_value(e))
+            .transpose()
+            .ok()
+            .flatten();
         (s, g, e)
     };
 

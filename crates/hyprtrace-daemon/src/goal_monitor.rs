@@ -68,7 +68,7 @@ pub fn spawn_goal_monitor(
 
             // Focus break reminder.
             let focused_ms = guard.current_focused_duration_ms();
-            let day = chrono::Utc::now().format("%Y-%m-%d").to_string();
+            let day = chrono::Local::now().format("%Y-%m-%d").to_string();
             let focused_min = focused_ms / 60_000;
             if break_after_minutes > 0 && focused_min as u64 >= break_after_minutes {
                 if break_notified.as_ref().map(|(d, _)| d.as_str()) != Some(day.as_str()) {
@@ -87,7 +87,12 @@ pub fn spawn_goal_monitor(
 }
 
 fn goal_key(goal: &Goal) -> String {
-    format!("{}:{}:{}", goal.name, goal.target_type, goal.target_key.as_deref().unwrap_or(""))
+    format!(
+        "{}:{}:{}",
+        goal.name,
+        goal.target_type,
+        goal.target_key.as_deref().unwrap_or("")
+    )
 }
 
 fn fmt_ms(ms: i64) -> String {

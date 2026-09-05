@@ -20,6 +20,10 @@ pub struct DaemonConfig {
     pub idle_timeout_seconds: u64,
     #[serde(default = "default_focused_threshold")]
     pub focused_threshold_seconds: u64,
+    #[serde(default = "default_enable_input_monitor")]
+    pub enable_input_monitor: bool,
+    #[serde(default = "default_record_titles")]
+    pub record_titles: bool,
     #[serde(default = "default_break_after_minutes")]
     pub break_after_minutes: u64,
     #[serde(default = "default_late_night_start")]
@@ -42,6 +46,14 @@ fn default_focused_threshold() -> u64 {
     20 * 60
 }
 
+fn default_enable_input_monitor() -> bool {
+    true
+}
+
+fn default_record_titles() -> bool {
+    true
+}
+
 fn default_break_after_minutes() -> u64 {
     90
 }
@@ -60,6 +72,8 @@ impl Default for DaemonConfig {
             db_path: default_db_path(),
             idle_timeout_seconds: default_idle_timeout(),
             focused_threshold_seconds: default_focused_threshold(),
+            enable_input_monitor: default_enable_input_monitor(),
+            record_titles: default_record_titles(),
             break_after_minutes: default_break_after_minutes(),
             late_night_start_hour: default_late_night_start(),
             late_night_end_hour: default_late_night_end(),

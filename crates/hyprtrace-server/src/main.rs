@@ -8,6 +8,7 @@ mod retention;
 mod routes;
 mod weekly_report;
 
+use anyhow::Context;
 use std::sync::Arc;
 
 #[tokio::main]
@@ -19,8 +20,27 @@ async fn main() -> anyhow::Result<()> {
     let cfg = config::Config::load()?;
     let db_path = cfg.db_path_expanded();
     let db = db::Database::open(&db_path, cfg.daemon.focused_threshold_seconds)?;
-    db.ensure_categories()?;
-    db.ensure_projects()?;
+    // The daemon may be running its DB migration (which writes the shared DB)
+    // when the server starts. Retry startup writes with a backoff instead of
+    // exiting — a single failed write here used to make systemd crash-loop the
+    // server for the whole migration window ("database is locked").
+    let mut init_attempts = 0u32;
+    loop {
+        match db.ensure_categories().and_then(|_| db.ensure_projects()) {
+            Ok(()) => break,
+            Err(e) if is_sqlite_busy(&e) && init_attempts < 5 => {
+                init_attempts += 1;
+                let delay = std::time::Duration::from_secs(2 * init_attempts as u64);
+                log::warn!(
+                    "Database startup init busy (attempt {init_attempts}/5), retrying in {}s: {:#}",
+                    delay.as_secs(),
+                    e
+                );
+                tokio::time::sleep(delay).await;
+            }
+            Err(e) => return Err(e).context("Failed to initialize database"),
+        }
+    }
     let ai = ai::AiManager::from_config(&cfg.ai);
 
     let state = Arc::new(routes::AppState {
@@ -61,4 +81,17 @@ async fn main() -> anyhow::Result<()> {
     axum::serve(listener, router).await?;
 
     Ok(())
+}
+
+/// True when the error chain contains a SQLite busy/locked failure — transient
+/// lock contention worth retrying with a backoff instead of crashing.
+fn is_sqlite_busy(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        matches!(
+            cause.downcast_ref::<rusqlite::Error>(),
+            Some(rusqlite::Error::SqliteFailure(ffi, _))
+                if ffi.code == rusqlite::ErrorCode::DatabaseBusy
+                    || ffi.code == rusqlite::ErrorCode::DatabaseLocked
+        )
+    })
 }

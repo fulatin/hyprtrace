@@ -52,8 +52,8 @@ pub async fn ai_weekly_report(
     State(state): State<Arc<AppState>>,
     Json(req): Json<WeeklyReportRequest>,
 ) -> Result<Json<serde_json::Value>, Json<serde_json::Value>> {
-    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-    let from = (chrono::Utc::now() - chrono::Duration::days(6)).format("%Y-%m-%d").to_string();
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let from = (chrono::Local::now() - chrono::Duration::days(6)).format("%Y-%m-%d").to_string();
 
     // Snapshot data without holding the lock across the AI call.
     let snapshot = {
@@ -186,14 +186,14 @@ async fn build_messages(
     let mut messages = vec![ChatMessage::new("system", system_prompt)];
 
     if req.include_data {
-        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
         let (from, to) = match req.date_range.as_deref() {
             Some("week") => {
-                let d = chrono::Utc::now() - chrono::Duration::days(7);
+                let d = chrono::Local::now() - chrono::Duration::days(7);
                 (d.format("%Y-%m-%d").to_string(), today.clone())
             }
             Some("month") => {
-                let d = chrono::Utc::now() - chrono::Duration::days(30);
+                let d = chrono::Local::now() - chrono::Duration::days(30);
                 (d.format("%Y-%m-%d").to_string(), today.clone())
             }
             _ => (today.clone(), today.clone()),

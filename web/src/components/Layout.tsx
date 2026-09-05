@@ -4,6 +4,7 @@ import {
   BarChart3,
   Clock,
   List,
+  FileText,
   Bot,
   Settings,
 } from 'lucide-react';
@@ -13,6 +14,7 @@ const navItems = [
   { to: '/apps', icon: BarChart3, label: 'Apps' },
   { to: '/timeline', icon: Clock, label: 'Timeline' },
   { to: '/sessions', icon: List, label: 'Sessions' },
+  { to: '/titles', icon: FileText, label: 'Documents' },
   { to: '/ai', icon: Bot, label: 'AI Chat' },
   { to: '/settings', icon: Settings, label: 'Settings' },
 ];

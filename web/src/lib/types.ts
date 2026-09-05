@@ -138,6 +138,21 @@ export interface DailyTrend {
   focused_ms: number;
 }
 
+export interface DailyActivity {
+  date: string;
+  total_ms: number;
+  focused_ms: number;
+  session_count: number;
+}
+
+export interface TitleStat {
+  class: string;
+  title: string;
+  total_ms: number;
+  session_count: number;
+  last_used_at: string;
+}
+
 export interface AiMessage {
   id: number;
   created_at: string;
@@ -178,6 +193,7 @@ export interface ConfigResponse {
   ollama_url: string;
   ollama_model: string;
   default_provider: string;
+  record_titles: boolean;
   retention_days: number;
   weekly_report_enabled: boolean;
   weekly_report_day: number;
@@ -192,6 +208,7 @@ export interface ConfigUpdateRequest {
   ollama_url?: string;
   ollama_model?: string;
   default_provider?: string;
+  record_titles?: boolean;
   retention_days?: number;
   weekly_report_enabled?: boolean;
   weekly_report_day?: number;
