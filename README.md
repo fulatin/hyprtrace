@@ -146,11 +146,12 @@ record_titles = true                    # 是否记录窗口标题（关闭后�
 break_after_minutes = 90                # 连续聚焦多久提醒休息
 late_night_start_hour = 23              # 深夜提醒窗口起点（本地时区）
 late_night_end_hour = 6                 # 深夜提醒窗口终点
-hyprlock_command = ""                   # 可选：深夜强制锁定命令（如 "hyprlock"）
+hyprlock_command = ""                   # 可选：深夜强制锁定命令（如 "hyprlock"，空格分隔参数，不经过 shell 执行）
 
 [server]
 host = "127.0.0.1"
 port = 9420
+auth_token = ""                         # 可选：API 访问令牌。留空则仅需本机访问；若绑定局域网地址（0.0.0.0 等）请务必设置
 
 [ai]
 default_provider = "ollama"

@@ -64,5 +64,11 @@ pub fn create_router(state: Arc<AppState>) -> Router {
                 axum::Json(serde_json::json!({"error": "Not found"})),
             )
         })
+        // Security guard (review H1): Origin allow-list + optional static
+        // token, applied to every /api route registered above.
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::auth::guard,
+        ))
         .with_state(state)
 }
