@@ -33,7 +33,7 @@ pub struct ConfigResponse {
     pub weekly_report_enabled: bool,
     pub weekly_report_day: u32,
     pub weekly_report_hour: u32,
-    pub weekly_report_minute: u32
+    pub weekly_report_minute: u32,
 }
 
 #[derive(Deserialize)]
@@ -49,12 +49,10 @@ pub struct ConfigUpdateRequest {
     pub weekly_report_enabled: Option<bool>,
     pub weekly_report_day: Option<u32>,
     pub weekly_report_hour: Option<u32>,
-    pub weekly_report_minute: Option<u32>
+    pub weekly_report_minute: Option<u32>,
 }
 
-pub async fn get_config(
-    State(state): State<Arc<AppState>>,
-) -> Json<ConfigResponse> {
+pub async fn get_config(State(state): State<Arc<AppState>>) -> Json<ConfigResponse> {
     let config = state.config.lock().await;
     let ai = state.ai.lock().await;
 
@@ -70,7 +68,7 @@ pub async fn get_config(
         weekly_report_enabled: config.server.weekly_report_enabled,
         weekly_report_day: config.server.weekly_report_day,
         weekly_report_hour: config.server.weekly_report_hour,
-        weekly_report_minute: config.server.weekly_report_minute
+        weekly_report_minute: config.server.weekly_report_minute,
     })
 }
 
@@ -81,59 +79,67 @@ pub async fn update_config(
     let mut config = state.config.lock().await;
 
     // Collect only the keys touched by this request as (toml path, value)
-    // pairs. They are merged into the on-disk TOML document below so that
-    // unknown fields (daemon-only settings such as `enable_input_monitor`)
-    // survive the save instead of being silently reset.
-    let mut updates: Vec<(&[&str], toml::Value)> = Vec::new();
+    // pairs; `None` means "remove this key" (see the api_key branch below).
+    // They are merged into the on-disk TOML document below so that unknown
+    // fields (daemon-only settings such as `enable_input_monitor`) survive the
+    // save instead of being silently reset.
+    let mut updates: Vec<(&[&str], Option<toml::Value>)> = Vec::new();
 
     if let Some(v) = req.openai_url {
-        updates.push((AI_OPENAI_BASE_URL, toml::Value::String(v.clone())));
+        updates.push((AI_OPENAI_BASE_URL, Some(toml::Value::String(v.clone()))));
         config.ai.openai.base_url = v;
     }
     if let Some(v) = req.openai_api_key {
-        if !v.is_empty() {
-            updates.push((AI_OPENAI_API_KEY, toml::Value::String(v.clone())));
+        // An empty string means "forget this key". It used to be ignored, so a
+        // user who had saved a key could never un-configure the provider
+        // through the UI. The key is removed from the file rather than stored
+        // as `api_key = ""`, which would leave a blank secret sitting on disk.
+        if v.is_empty() {
+            updates.push((AI_OPENAI_API_KEY, None));
+            config.ai.openai.api_key.clear();
+        } else {
+            updates.push((AI_OPENAI_API_KEY, Some(toml::Value::String(v.clone()))));
             config.ai.openai.api_key = v;
         }
     }
     if let Some(v) = req.openai_model {
-        updates.push((AI_OPENAI_MODEL, toml::Value::String(v.clone())));
+        updates.push((AI_OPENAI_MODEL, Some(toml::Value::String(v.clone()))));
         config.ai.openai.default_model = v;
     }
     if let Some(v) = req.ollama_url {
-        updates.push((AI_OLLAMA_BASE_URL, toml::Value::String(v.clone())));
+        updates.push((AI_OLLAMA_BASE_URL, Some(toml::Value::String(v.clone()))));
         config.ai.ollama.base_url = v;
     }
     if let Some(v) = req.ollama_model {
-        updates.push((AI_OLLAMA_MODEL, toml::Value::String(v.clone())));
+        updates.push((AI_OLLAMA_MODEL, Some(toml::Value::String(v.clone()))));
         config.ai.ollama.default_model = v;
     }
     if let Some(v) = req.default_provider {
-        updates.push((AI_DEFAULT_PROVIDER, toml::Value::String(v.clone())));
+        updates.push((AI_DEFAULT_PROVIDER, Some(toml::Value::String(v.clone()))));
         config.ai.default_provider = v;
     }
     if let Some(v) = req.record_titles {
-        updates.push((DAEMON_RECORD_TITLES, toml::Value::Boolean(v)));
+        updates.push((DAEMON_RECORD_TITLES, Some(toml::Value::Boolean(v))));
         config.daemon.record_titles = v;
     }
     if let Some(v) = req.retention_days {
-        updates.push((SERVER_RETENTION_DAYS, toml::Value::Integer(v as i64)));
+        updates.push((SERVER_RETENTION_DAYS, Some(toml::Value::Integer(v as i64))));
         config.server.retention_days = v;
     }
     if let Some(v) = req.weekly_report_enabled {
-        updates.push((SERVER_WEEKLY_ENABLED, toml::Value::Boolean(v)));
+        updates.push((SERVER_WEEKLY_ENABLED, Some(toml::Value::Boolean(v))));
         config.server.weekly_report_enabled = v;
     }
     if let Some(v) = req.weekly_report_day {
-        updates.push((SERVER_WEEKLY_DAY, toml::Value::Integer(v as i64)));
+        updates.push((SERVER_WEEKLY_DAY, Some(toml::Value::Integer(v as i64))));
         config.server.weekly_report_day = v;
     }
     if let Some(v) = req.weekly_report_hour {
-        updates.push((SERVER_WEEKLY_HOUR, toml::Value::Integer(v as i64)));
+        updates.push((SERVER_WEEKLY_HOUR, Some(toml::Value::Integer(v as i64))));
         config.server.weekly_report_hour = v;
     }
     if let Some(v) = req.weekly_report_minute {
-        updates.push((SERVER_WEEKLY_MINUTE, toml::Value::Integer(v as i64)));
+        updates.push((SERVER_WEEKLY_MINUTE, Some(toml::Value::Integer(v as i64))));
         config.server.weekly_report_minute = v;
     }
 
@@ -149,7 +155,12 @@ pub async fn update_config(
             Json(serde_json::json!({"error": format!("Failed to load config: {}", e)}))
         })?;
         for (path, value) in &updates {
-            config::set_toml_value(&mut doc, path, value.clone());
+            match value {
+                Some(v) => config::set_toml_value(&mut doc, path, v.clone()),
+                None => {
+                    config::remove_toml_value(&mut doc, path);
+                }
+            }
         }
         config::save_toml_document(&config_path, &doc).map_err(|e| {
             Json(serde_json::json!({"error": format!("Failed to save config: {}", e)}))
