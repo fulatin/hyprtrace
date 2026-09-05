@@ -476,28 +476,33 @@ impl Database {
             .format("%Y-%m-%d")
             .to_string();
 
+        // Ending a session writes several tables (session row, daily_summary,
+        // hourly_summary, activity_events). Wrap all of it in ONE transaction
+        // so an interruption or mid-way failure can no longer leave a
+        // half-written state (e.g. session closed but summaries never updated).
+        // unchecked_transaction is fine here: the Database lives behind a
+        // Mutex, so no other thread touches this connection concurrently.
+        let tx = self.conn.unchecked_transaction()?;
+
         if clock_jumped {
-            self.conn.execute(
+            tx.execute(
                 "UPDATE sessions SET ended_at = ?1, duration_ms = ?2, focused_ms = ?3, started_at = ?4, date_local = ?5 WHERE id = ?6",
                 params![now_str, duration_ms, focused_ms, started.to_rfc3339(), session_date, session_id],
             )?;
         } else {
-            self.conn.execute(
+            tx.execute(
                 "UPDATE sessions SET ended_at = ?1, duration_ms = ?2, focused_ms = ?3, date_local = ?4 WHERE id = ?5",
                 params![now_str, duration_ms, focused_ms, session_date, session_id],
             )?;
         }
-        if let Ok(mut starts) = self.monotonic_starts.lock() {
-            starts.remove(&session_id);
-        }
 
-        let class: String = self.conn.query_row(
+        let class: String = tx.query_row(
             "SELECT class FROM sessions WHERE id = ?1",
             params![session_id],
             |row| row.get(0),
         )?;
 
-        let activity_state: String = self.conn.query_row(
+        let activity_state: String = tx.query_row(
             "SELECT activity_state FROM sessions WHERE id = ?1",
             params![session_id],
             |row| row.get(0),
@@ -508,7 +513,7 @@ impl Database {
             0i64
         };
 
-        self.conn.execute(
+        tx.execute(
             "INSERT INTO daily_summary (date, class, total_ms, session_count, focused_ms, focused_session_count)
              VALUES (?1, ?2, ?3, 1, ?4, ?5)
              ON CONFLICT(date, class) DO UPDATE SET
@@ -520,9 +525,12 @@ impl Database {
         )?;
 
         // Maintain hourly_summary incrementally so the server's fast path stays fresh.
-        // Bucket by the session's LOCAL start hour (consistent with server's fallback).
+        // Maintain hourly_summary incrementally so the server's fast path stays
+        // fresh. Bucket by the session's LOCAL start hour (matching date_local).
+        // Lenient by design (pre-existing behavior): a failed hourly upsert
+        // only logs; the rest of the end-session still commits.
         let local_hour = started.with_timezone(&chrono::Local).hour() as i64;
-        if let Err(e) = self.conn.execute(
+        if let Err(e) = tx.execute(
             "INSERT INTO hourly_summary (date, hour, class, total_ms, session_count, focused_ms)
              VALUES (?1, ?2, ?3, ?4, 1, ?5)
              ON CONFLICT(date, hour, class) DO UPDATE SET
@@ -534,8 +542,15 @@ impl Database {
             log::warn!("Failed to upsert hourly_summary: {}", e);
         }
 
+        // Runs on the same connection, so these writes join the transaction.
         self.close_activity_event(session_id);
 
+        tx.commit()?;
+        // Only drop the monotonic start once the end has durably committed;
+        // on a rollback the session is still open and must stay resumable.
+        if let Ok(mut starts) = self.monotonic_starts.lock() {
+            starts.remove(&session_id);
+        }
         Ok(())
     }
 
@@ -727,25 +742,34 @@ impl Database {
     }
 
     pub fn set_goals(&self, goals: &[Goal]) -> anyhow::Result<()> {
-        self.conn.execute("DELETE FROM goals", [])?;
-        let mut stmt = self.conn.prepare(
-            "INSERT INTO goals (name, target_type, target_key, daily_target_ms, enabled)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-        )?;
-        for g in goals {
-            stmt.execute(params![
-                g.name.trim(),
-                g.target_type,
-                g.target_key.as_deref(),
-                g.daily_target_ms,
-                if g.enabled { 1 } else { 0 },
-            ])?;
+        // DELETE + re-INSERT is a full replacement and must be atomic: before
+        // this transaction, a failure mid-way left the goals table cleared
+        // (or partially filled) instead of unchanged.
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM goals", [])?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO goals (name, target_type, target_key, daily_target_ms, enabled)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+            )?;
+            for g in goals {
+                stmt.execute(params![
+                    g.name.trim(),
+                    g.target_type,
+                    g.target_key.as_deref(),
+                    g.daily_target_ms,
+                    if g.enabled { 1 } else { 0 },
+                ])?;
+            }
         }
+        tx.commit()?;
         Ok(())
     }
 
     /// Today's active milliseconds for a goal. "all" = total across classes.
     pub fn today_active_for_goal(&self, goal: &Goal) -> i64 {
+        // LOCAL today: must match the local-date buckets end_session writes,
+        // otherwise goal progress misses same-day rows (or reads stale ones).
         let today = chrono::Local::now().format("%Y-%m-%d").to_string();
         let sql = if goal.target_type == "class" {
             "SELECT COALESCE(SUM(total_ms), 0) FROM daily_summary WHERE date = ?1 AND class = ?2"
@@ -832,6 +856,179 @@ fn local_date_from_rfc3339(ts: &str) -> Option<String> {
 mod tests {
     use super::*;
     use chrono::Timelike;
+
+    #[test]
+    fn today_active_for_goal_reads_local_today_bucket() {
+        let dir = std::env::temp_dir().join(format!("hyprtrace-test-goal-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.db");
+
+        let db = Database::open(&path, 20 * 60).unwrap();
+        db.migrate().unwrap();
+
+        // A row bucketed on today's LOCAL date must be visible to goal
+        // progress (writer and reader share the same bucket key).
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        db.conn
+            .execute(
+                "INSERT INTO daily_summary (date, class, total_ms, session_count) VALUES (?1, 'measured', 1234, 1)",
+                params![today],
+            )
+            .unwrap();
+
+        let goal = Goal {
+            id: None,
+            name: "g".to_string(),
+            target_type: "class".to_string(),
+            target_key: Some("measured".to_string()),
+            daily_target_ms: 3_600_000,
+            enabled: true,
+        };
+        assert_eq!(db.today_active_for_goal(&goal), 1234);
+
+        drop(db);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ---- M7: transaction atomicity (failure injection via triggers) ----
+
+    fn test_goal(name: &str, enabled: bool) -> Goal {
+        Goal {
+            id: None,
+            name: name.to_string(),
+            target_type: "all".to_string(),
+            target_key: None,
+            daily_target_ms: 3_600_000,
+            enabled,
+        }
+    }
+
+    #[test]
+    fn set_goals_is_atomic_on_injected_failure() {
+        let dir = std::env::temp_dir().join(format!("hyprtrace-test-m7a-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.db");
+
+        let db = Database::open(&path, 20 * 60).unwrap();
+        db.migrate().unwrap();
+
+        db.set_goals(&[test_goal("work", true), test_goal("read", false)])
+            .unwrap();
+        assert_eq!(db.goals().unwrap().len(), 2);
+
+        // Inject a failure mid-replace: the trigger aborts the INSERT of the
+        // goal named "boom", after DELETE and one INSERT already ran.
+        db.conn
+            .execute_batch(
+                "CREATE TRIGGER fail_boom_goal BEFORE INSERT ON goals
+                 WHEN NEW.name = 'boom'
+                 BEGIN SELECT RAISE(ABORT, 'injected failure'); END;",
+            )
+            .unwrap();
+
+        let result = db.set_goals(&[test_goal("new1", true), test_goal("boom", true)]);
+        assert!(result.is_err(), "injected trigger must fail the replace");
+
+        // Atomic: the failed replace must leave the ORIGINAL goals in place
+        // (rollback), not a cleared or partially-written table.
+        let names: Vec<String> = db.goals().unwrap().into_iter().map(|g| g.name).collect();
+        assert_eq!(names, vec!["work".to_string(), "read".to_string()]);
+
+        drop(db);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn end_session_is_atomic_on_injected_failure() {
+        let dir = std::env::temp_dir().join(format!("hyprtrace-test-m7b-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.db");
+
+        let db = Database::open(&path, 20 * 60).unwrap();
+        db.migrate().unwrap();
+
+        let id = db.start_session("boomclass", "title", "1", None).unwrap();
+
+        // Inject a failure after the sessions UPDATE: the trigger aborts the
+        // daily_summary INSERT for this class.
+        db.conn
+            .execute_batch(
+                "CREATE TRIGGER fail_boom_daily BEFORE INSERT ON daily_summary
+                 WHEN NEW.class = 'boomclass'
+                 BEGIN SELECT RAISE(ABORT, 'injected failure'); END;",
+            )
+            .unwrap();
+
+        assert!(db.end_session(id).is_err(), "injected trigger must fail the end");
+
+        // Atomic: the session must remain open (no half-written end)...
+        let ended_at: Option<String> = db
+            .conn
+            .query_row(
+                "SELECT ended_at FROM sessions WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(ended_at.is_none(), "session row must be rolled back");
+
+        // ...and no summary rows may leak from the aborted attempt.
+        let ds: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM daily_summary", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(ds, 0);
+        let hs: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM hourly_summary", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(hs, 0);
+
+        drop(db);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn end_session_and_set_goals_commit_happy_path() {
+        let dir = std::env::temp_dir().join(format!("hyprtrace-test-m7c-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.db");
+
+        let db = Database::open(&path, 20 * 60).unwrap();
+        db.migrate().unwrap();
+
+        // Happy path still commits everything.
+        let id = db.start_session("code", "main.rs", "1", None).unwrap();
+        db.end_session(id).unwrap();
+        let ended_at: String = db
+            .conn
+            .query_row(
+                "SELECT ended_at FROM sessions WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(!ended_at.is_empty());
+        let (ds, hs): (i64, i64) = db
+            .conn
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM daily_summary),
+                        (SELECT COUNT(*) FROM hourly_summary)",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((ds, hs), (1, 1));
+
+        db.set_goals(&[test_goal("g1", true), test_goal("g2", true)])
+            .unwrap();
+        assert_eq!(db.goals().unwrap().len(), 2);
+
+        drop(db);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ---- pre-existing coverage ----
 
     #[test]
     fn migrate_fresh_and_upgrade_paths() {
