@@ -63,7 +63,22 @@ pub fn spawn_wellbeing_monitor(
             // Optional hard cutoff: lock the session.
             if let Some(cmd) = &hyprlock_command {
                 log::info!("Digital wellbeing: triggering Hyprlock cutoff");
-                let _ = Command::new("sh").arg("-c").arg(cmd).spawn();
+                // Execute directly WITHOUT a shell (security review H1):
+                // the command comes from the config file, so shell
+                // metacharacters must never be interpreted. The value is
+                // expected to be a program name followed by plain arguments,
+                // e.g. "hyprlock" or "swaylock -f".
+                let mut parts = cmd.split_whitespace();
+                match (parts.next(), parts.collect::<Vec<_>>()) {
+                    (Some(program), args) => {
+                        if let Err(e) = Command::new(program).args(&args).spawn() {
+                            log::warn!("Failed to spawn {:?}: {}", program, e);
+                        }
+                    }
+                    (None, _) => {
+                        log::warn!("hyprlock_command is empty, skipping cutoff");
+                    }
+                }
             }
         }
     });

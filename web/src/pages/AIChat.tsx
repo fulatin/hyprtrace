@@ -12,6 +12,7 @@ import "streamdown/styles.css";
 import { useChat } from "@ai-sdk/react";
 import { NdjsonChatTransport } from "../lib/transport";
 import { api } from "../lib/api";
+import { authHeaders } from "../lib/auth";
 import type { AiMessage, AiModelsResponse } from "../lib/types";
 import ChatInput from "../components/ChatInput";
 import ToolCallCard from "../components/ToolCallCard";
@@ -95,6 +96,7 @@ export default function AIChat() {
               .map((p: any) => p.text)
               .join("") ?? "";
           return {
+            headers: authHeaders(),
             body: {
               message: text,
               provider: (body as any)?.provider ?? selectedProvider,

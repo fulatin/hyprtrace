@@ -1,3 +1,4 @@
+import { authHeaders } from './auth';
 import type {
   TodaySummary,
   AppRank,
@@ -29,7 +30,11 @@ import type {
 } from './types';
 
 async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(url, options);
+  const headers = new Headers(options?.headers);
+  for (const [k, v] of Object.entries(authHeaders())) {
+    headers.set(k, v);
+  }
+  const res = await fetch(url, { ...options, headers });
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`API Error: ${res.status} ${text}`);
@@ -176,7 +181,9 @@ export const api = {
     fetchJSON<TrendPrediction>(`/api/predict?window=${window}`),
 
   report: async (from: string, to: string): Promise<void> => {
-    const res = await fetch(`/api/report?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+    const res = await fetch(`/api/report?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`, {
+      headers: authHeaders(),
+    });
     if (!res.ok) throw new Error(`API Error: ${res.status}`);
     const md = await res.text();
     const blob = new Blob([md], { type: 'text/markdown' });

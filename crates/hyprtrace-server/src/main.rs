@@ -1,4 +1,5 @@
 mod ai;
+mod auth;
 mod config;
 mod db;
 mod desktop;
@@ -70,8 +71,13 @@ async fn main() -> anyhow::Result<()> {
 
     let router = axum::Router::new()
         .nest("/api", routes::create_router(state))
-        .fallback_service(static_service)
-        .layer(tower_http::cors::CorsLayer::permissive());
+        .fallback_service(static_service);
+    // NOTE: no CORS layer on purpose (security review H1).
+    // Dev mode goes through the Vite dev-server `/api` proxy (same-origin) and
+    // production serves the web UI from this server itself (same-origin), so
+    // cross-origin requests are never legitimate. Cross-site protection is
+    // enforced server-side by the auth middleware (Origin allow-list + optional
+    // token) instead of relying on browser-side CORS headers.
 
     let addr = format!("{}:{}", cfg.server.host, cfg.server.port);
     log::info!("HyprTrace API server starting at http://{}", addr);

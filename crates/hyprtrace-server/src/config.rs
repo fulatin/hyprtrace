@@ -97,7 +97,13 @@ pub struct ServerConfig {
     #[serde(default = "default_weekly_report_hour")]
     pub weekly_report_hour: u32,
     #[serde(default = "default_weekly_report_minute")]
-    pub weekly_report_minute: u32
+    pub weekly_report_minute: u32,
+    /// Optional static API token. When set (non-empty), every `/api/*`
+    /// request except `/api/health` must present it via the `X-Auth-Token`
+    /// or `Authorization: Bearer` header. Leave unset for plain localhost
+    /// use; set it if you bind the server to a non-loopback address.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_token: Option<String>,
 }
 
 fn default_host() -> String {
@@ -129,7 +135,8 @@ impl Default for ServerConfig {
             weekly_report_enabled: false,
             weekly_report_day: default_weekly_report_day(),
             weekly_report_hour: default_weekly_report_hour(),
-            weekly_report_minute: default_weekly_report_minute()
+            weekly_report_minute: default_weekly_report_minute(),
+            auth_token: None,
         }
     }
 }
