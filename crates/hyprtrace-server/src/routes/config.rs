@@ -13,6 +13,12 @@ const AI_OLLAMA_MODEL: &[&str] = &["ai", "ollama", "default_model"];
 const AI_OPENAI_BASE_URL: &[&str] = &["ai", "openai", "base_url"];
 const AI_OPENAI_API_KEY: &[&str] = &["ai", "openai", "api_key"];
 const AI_OPENAI_MODEL: &[&str] = &["ai", "openai", "default_model"];
+const DAEMON_RECORD_TITLES: &[&str] = &["daemon", "record_titles"];
+const SERVER_RETENTION_DAYS: &[&str] = &["server", "retention_days"];
+const SERVER_WEEKLY_ENABLED: &[&str] = &["server", "weekly_report_enabled"];
+const SERVER_WEEKLY_DAY: &[&str] = &["server", "weekly_report_day"];
+const SERVER_WEEKLY_HOUR: &[&str] = &["server", "weekly_report_hour"];
+const SERVER_WEEKLY_MINUTE: &[&str] = &["server", "weekly_report_minute"];
 
 #[derive(Serialize)]
 pub struct ConfigResponse {
@@ -107,21 +113,27 @@ pub async fn update_config(
         config.ai.default_provider = v;
     }
     if let Some(v) = req.record_titles {
+        updates.push((DAEMON_RECORD_TITLES, toml::Value::Boolean(v)));
         config.daemon.record_titles = v;
     }
     if let Some(v) = req.retention_days {
+        updates.push((SERVER_RETENTION_DAYS, toml::Value::Integer(v as i64)));
         config.server.retention_days = v;
     }
     if let Some(v) = req.weekly_report_enabled {
+        updates.push((SERVER_WEEKLY_ENABLED, toml::Value::Boolean(v)));
         config.server.weekly_report_enabled = v;
     }
     if let Some(v) = req.weekly_report_day {
+        updates.push((SERVER_WEEKLY_DAY, toml::Value::Integer(v as i64)));
         config.server.weekly_report_day = v;
     }
     if let Some(v) = req.weekly_report_hour {
+        updates.push((SERVER_WEEKLY_HOUR, toml::Value::Integer(v as i64)));
         config.server.weekly_report_hour = v;
     }
     if let Some(v) = req.weekly_report_minute {
+        updates.push((SERVER_WEEKLY_MINUTE, toml::Value::Integer(v as i64)));
         config.server.weekly_report_minute = v;
     }
 
