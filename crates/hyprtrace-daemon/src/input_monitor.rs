@@ -25,7 +25,10 @@ pub fn spawn_input_monitor(activity: ActivityState) {
             match evdev::Device::open(path) {
                 Ok(dev) => {
                     if dev.set_nonblocking(true).is_err() {
-                        log::warn!("Input monitor: failed to set nonblocking on {}", path.display());
+                        log::warn!(
+                            "Input monitor: failed to set nonblocking on {}",
+                            path.display()
+                        );
                         continue;
                     }
                     devices.push(dev);

@@ -25,9 +25,18 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/app/:class/trend", axum::routing::get(data::app_trend))
         .route("/apps/classes", axum::routing::get(data::app_classes))
         .route("/apps/metadata", axum::routing::get(data::apps_metadata))
-        .route("/summary/rebuild", axum::routing::post(data::rebuild_summary))
-        .route("/hourly-summary/rebuild", axum::routing::post(data::rebuild_hourly_summary))
-        .route("/activity/events", axum::routing::get(data::activity_events))
+        .route(
+            "/summary/rebuild",
+            axum::routing::post(data::rebuild_summary),
+        )
+        .route(
+            "/hourly-summary/rebuild",
+            axum::routing::post(data::rebuild_hourly_summary),
+        )
+        .route(
+            "/activity/events",
+            axum::routing::get(data::activity_events),
+        )
         .route("/activity/daily", axum::routing::get(data::daily_activity))
         .route("/titles", axum::routing::get(data::titles))
         .route("/resources", axum::routing::get(data::resources))
@@ -38,7 +47,10 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/report", axum::routing::get(data::report))
         .route("/predict", axum::routing::get(data::predict))
         .route("/status", axum::routing::get(data::current_status))
-        .route("/workspace/recommendations", axum::routing::get(data::workspace_recommendations))
+        .route(
+            "/workspace/recommendations",
+            axum::routing::get(data::workspace_recommendations),
+        )
         .route("/categories", axum::routing::get(data::get_categories))
         .route("/categories", axum::routing::put(data::put_categories))
         .route("/projects", axum::routing::get(data::get_projects))
@@ -48,11 +60,23 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/ai/tools", axum::routing::get(ai::ai_tools))
         .route("/ai/chat", axum::routing::post(ai::ai_chat))
         .route("/ai/chat/stream", axum::routing::post(ai::chat_stream))
-        .route("/ai/chat/stream/text", axum::routing::post(ai::chat_stream_text))
+        .route(
+            "/ai/chat/stream/text",
+            axum::routing::post(ai::chat_stream_text),
+        )
         .route("/ai/chat/agent", axum::routing::post(ai::chat_agent))
-        .route("/ai/report/weekly", axum::routing::post(ai::ai_weekly_report))
-        .route("/ai/conversations", axum::routing::get(ai::ai_conversations))
-        .route("/ai/conversations", axum::routing::delete(ai::clear_conversations))
+        .route(
+            "/ai/report/weekly",
+            axum::routing::post(ai::ai_weekly_report),
+        )
+        .route(
+            "/ai/conversations",
+            axum::routing::get(ai::ai_conversations),
+        )
+        .route(
+            "/ai/conversations",
+            axum::routing::delete(ai::clear_conversations),
+        )
         .route("/config", axum::routing::get(config::get_config))
         .route("/config", axum::routing::put(config::update_config))
         // Explicit 404 for unmatched /api/* paths. Without this, axum's nest

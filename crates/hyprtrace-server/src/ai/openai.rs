@@ -164,8 +164,9 @@ impl AiProvider for OpenAiProvider {
                     if let Some(calls) = delta["tool_calls"].as_array() {
                         for call in calls {
                             let idx = call["index"].as_u64().unwrap_or(0) as usize;
-                            let entry =
-                                pending.entry(idx).or_insert_with(|| (String::new(), String::new(), String::new()));
+                            let entry = pending
+                                .entry(idx)
+                                .or_insert_with(|| (String::new(), String::new(), String::new()));
                             if let Some(id) = call["id"].as_str() {
                                 if !id.is_empty() {
                                     entry.0 = id.to_string();
@@ -184,7 +185,11 @@ impl AiProvider for OpenAiProvider {
 
                     if let Some(content) = delta["content"].as_str() {
                         if !content.is_empty() {
-                            if tx.send(StreamEvent::Text(content.to_string())).await.is_err() {
+                            if tx
+                                .send(StreamEvent::Text(content.to_string()))
+                                .await
+                                .is_err()
+                            {
                                 return Ok(());
                             }
                         }

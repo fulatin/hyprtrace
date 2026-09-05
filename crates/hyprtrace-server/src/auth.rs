@@ -32,11 +32,7 @@ use std::sync::Arc;
 /// already been stripped — accept both forms to stay correct at any layer.
 const HEALTH_PATHS: [&str; 2] = ["/health", "/api/health"];
 
-pub async fn guard(
-    State(state): State<Arc<AppState>>,
-    req: Request,
-    next: Next,
-) -> Response {
+pub async fn guard(State(state): State<Arc<AppState>>, req: Request, next: Next) -> Response {
     let path = req.uri().path().to_string();
 
     // Layer 1: Origin allow-list (blocks cross-site browser requests).

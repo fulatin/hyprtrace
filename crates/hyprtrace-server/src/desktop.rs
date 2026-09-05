@@ -86,7 +86,9 @@ impl AppMetadataResolver {
             if key.is_empty() {
                 continue;
             }
-            self.entries.entry(key).or_insert_with(|| entry.metadata.clone());
+            self.entries
+                .entry(key)
+                .or_insert_with(|| entry.metadata.clone());
         }
     }
 
@@ -287,7 +289,9 @@ mod tests {
         );
 
         let resolver = resolver_over(&dir);
-        let meta = resolver.lookup("CODE").expect("startup WM class should match");
+        let meta = resolver
+            .lookup("CODE")
+            .expect("startup WM class should match");
         assert_eq!(meta.desktop_id, "code.desktop");
         assert_eq!(meta.display_name, "Visual Studio Code");
         assert_eq!(meta.icon, "vscode");
@@ -314,11 +318,16 @@ mod tests {
         let resolver = resolver_over(&dir);
         // Stem match.
         let meta = resolver.lookup("firefox").expect("stem should match");
-        assert_eq!(meta.display_name, "Firefox", "localized Name must not override plain Name");
+        assert_eq!(
+            meta.display_name, "Firefox",
+            "localized Name must not override plain Name"
+        );
         assert_eq!(meta.icon, "firefox");
 
         // Name fallback (lowercased plain Name) also matches.
-        let meta = resolver.lookup("FIREFOX").expect("name fallback should match");
+        let meta = resolver
+            .lookup("FIREFOX")
+            .expect("name fallback should match");
         assert_eq!(meta.display_name, "Firefox");
 
         let _ = std::fs::remove_dir_all(&dir);

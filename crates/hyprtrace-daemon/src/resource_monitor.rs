@@ -74,7 +74,11 @@ pub fn spawn_resource_monitor(db: Arc<Mutex<Database>>, interval_secs: u64) {
             }
             log::trace!(
                 "Resource sample: session={} class={} pid={} cpu={:.1}% mem={}KB",
-                session_id, class, pid, cpu_pct, mem_kb
+                session_id,
+                class,
+                pid,
+                cpu_pct,
+                mem_kb
             );
 
             last = Some((pid, jiffies, now));
