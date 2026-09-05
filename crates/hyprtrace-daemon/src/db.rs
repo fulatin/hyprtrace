@@ -175,8 +175,7 @@ impl Database {
             &self.conn,
             rusqlite::TransactionBehavior::Immediate,
         )?;
-        let mut upd =
-            tx.prepare(&format!("UPDATE {table} SET date_local = ?1 WHERE id = ?2"))?;
+        let mut upd = tx.prepare(&format!("UPDATE {table} SET date_local = ?1 WHERE id = ?2"))?;
         let mut updated = 0usize;
         for (id, ts) in rows {
             if let Some(date) = local_date_from_rfc3339(&ts) {
@@ -741,31 +740,6 @@ impl Database {
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
-    pub fn set_goals(&self, goals: &[Goal]) -> anyhow::Result<()> {
-        // DELETE + re-INSERT is a full replacement and must be atomic: before
-        // this transaction, a failure mid-way left the goals table cleared
-        // (or partially filled) instead of unchanged.
-        let tx = self.conn.unchecked_transaction()?;
-        tx.execute("DELETE FROM goals", [])?;
-        {
-            let mut stmt = tx.prepare(
-                "INSERT INTO goals (name, target_type, target_key, daily_target_ms, enabled)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-            )?;
-            for g in goals {
-                stmt.execute(params![
-                    g.name.trim(),
-                    g.target_type,
-                    g.target_key.as_deref(),
-                    g.daily_target_ms,
-                    if g.enabled { 1 } else { 0 },
-                ])?;
-            }
-        }
-        tx.commit()?;
-        Ok(())
-    }
-
     /// Today's active milliseconds for a goal. "all" = total across classes.
     pub fn today_active_for_goal(&self, goal: &Goal) -> i64 {
         // LOCAL today: must match the local-date buckets end_session writes,
@@ -821,21 +795,71 @@ impl Database {
         }
     }
 
-    pub fn clear_orphaned_sessions(&self) -> anyhow::Result<usize> {
-        // Delete activity_events FIRST: with PRAGMA foreign_keys=ON, deleting a
-        // session that still has referencing events raises a constraint error,
-        // which previously made this cleanup fail silently and left orphaned
-        // sessions open until the first window event closed them with a bogus
-        // multi-hour duration (see phantom "reboot" sessions).
-        self.conn.execute(
-            "DELETE FROM activity_events
-             WHERE session_id IN (SELECT id FROM sessions WHERE ended_at IS NULL)",
-            [],
-        )?;
-        let count = self
+    /// Close sessions left open by an unclean shutdown (crash, power loss).
+    ///
+    /// These used to be deleted outright, which threw away the usage they had
+    /// already recorded. They are finalised instead: the end time is taken from
+    /// the last activity event belonging to the session, falling back to the
+    /// session start when it never recorded one. The monotonic elapsed time is
+    /// not available here (those markers live in memory only), so the duration
+    /// is wall-clock based and can differ slightly from a session closed in
+    /// flight — losing that precision is vastly better than losing the record.
+    pub fn finalize_orphaned_sessions(&self) -> anyhow::Result<usize> {
+        let mut stmt = self
             .conn
-            .execute("DELETE FROM sessions WHERE ended_at IS NULL", [])?;
-        // All open sessions are gone; drop their monotonic start markers too.
+            .prepare("SELECT id, started_at FROM sessions WHERE ended_at IS NULL")?;
+        let orphans: Vec<(i64, String)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(stmt);
+
+        let now = chrono::Utc::now();
+        let mut count = 0usize;
+
+        for (id, started_at) in orphans {
+            let started = chrono::DateTime::parse_from_rfc3339(&started_at)
+                .map(|d| d.with_timezone(&chrono::Utc))
+                .unwrap_or(now);
+
+            // Last observed activity for this session, if any.
+            let last_event: Option<String> = self
+                .conn
+                .query_row(
+                    "SELECT MAX(COALESCE(ended_at, started_at))
+                     FROM activity_events WHERE session_id = ?1",
+                    params![id],
+                    |row| row.get(0),
+                )
+                .ok()
+                .flatten();
+
+            let mut ended = match last_event {
+                Some(s) => chrono::DateTime::parse_from_rfc3339(&s)
+                    .map(|d| d.with_timezone(&chrono::Utc))
+                    .unwrap_or(started),
+                // No events at all: keep the session as a zero-length record
+                // rather than dropping it.
+                None => started,
+            };
+            // A stepped clock could put the event in the future; never let a
+            // session end before it started or after "now".
+            if ended > now {
+                ended = now;
+            }
+            if ended < started {
+                ended = started;
+            }
+
+            let duration_ms = (ended - started).num_milliseconds().max(0);
+
+            self.conn.execute(
+                "UPDATE sessions SET ended_at = ?1, duration_ms = ?2 WHERE id = ?3",
+                params![ended.to_rfc3339(), duration_ms, id],
+            )?;
+            count += 1;
+        }
+
+        // No session is open any more; drop their monotonic start markers too.
         if let Ok(mut starts) = self.monotonic_starts.lock() {
             starts.clear();
         }
@@ -892,52 +916,6 @@ mod tests {
 
     // ---- M7: transaction atomicity (failure injection via triggers) ----
 
-    fn test_goal(name: &str, enabled: bool) -> Goal {
-        Goal {
-            id: None,
-            name: name.to_string(),
-            target_type: "all".to_string(),
-            target_key: None,
-            daily_target_ms: 3_600_000,
-            enabled,
-        }
-    }
-
-    #[test]
-    fn set_goals_is_atomic_on_injected_failure() {
-        let dir = std::env::temp_dir().join(format!("hyprtrace-test-m7a-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("test.db");
-
-        let db = Database::open(&path, 20 * 60).unwrap();
-        db.migrate().unwrap();
-
-        db.set_goals(&[test_goal("work", true), test_goal("read", false)])
-            .unwrap();
-        assert_eq!(db.goals().unwrap().len(), 2);
-
-        // Inject a failure mid-replace: the trigger aborts the INSERT of the
-        // goal named "boom", after DELETE and one INSERT already ran.
-        db.conn
-            .execute_batch(
-                "CREATE TRIGGER fail_boom_goal BEFORE INSERT ON goals
-                 WHEN NEW.name = 'boom'
-                 BEGIN SELECT RAISE(ABORT, 'injected failure'); END;",
-            )
-            .unwrap();
-
-        let result = db.set_goals(&[test_goal("new1", true), test_goal("boom", true)]);
-        assert!(result.is_err(), "injected trigger must fail the replace");
-
-        // Atomic: the failed replace must leave the ORIGINAL goals in place
-        // (rollback), not a cleared or partially-written table.
-        let names: Vec<String> = db.goals().unwrap().into_iter().map(|g| g.name).collect();
-        assert_eq!(names, vec!["work".to_string(), "read".to_string()]);
-
-        drop(db);
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
     #[test]
     fn end_session_is_atomic_on_injected_failure() {
         let dir = std::env::temp_dir().join(format!("hyprtrace-test-m7b-{}", std::process::id()));
@@ -959,7 +937,10 @@ mod tests {
             )
             .unwrap();
 
-        assert!(db.end_session(id).is_err(), "injected trigger must fail the end");
+        assert!(
+            db.end_session(id).is_err(),
+            "injected trigger must fail the end"
+        );
 
         // Atomic: the session must remain open (no half-written end)...
         let ended_at: Option<String> = db
@@ -989,7 +970,7 @@ mod tests {
     }
 
     #[test]
-    fn end_session_and_set_goals_commit_happy_path() {
+    fn end_session_commits_every_aggregate() {
         let dir = std::env::temp_dir().join(format!("hyprtrace-test-m7c-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("test.db");
@@ -1019,10 +1000,6 @@ mod tests {
             )
             .unwrap();
         assert_eq!((ds, hs), (1, 1));
-
-        db.set_goals(&[test_goal("g1", true), test_goal("g2", true)])
-            .unwrap();
-        assert_eq!(db.goals().unwrap().len(), 2);
 
         drop(db);
         std::fs::remove_dir_all(&dir).ok();
@@ -1099,7 +1076,7 @@ mod tests {
     }
 
     #[test]
-    fn clear_orphaned_sessions_with_open_events() {
+    fn finalize_orphaned_sessions_keeps_records() {
         let dir = std::env::temp_dir().join(format!("hyprtrace-test3-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("test.db");
@@ -1107,29 +1084,59 @@ mod tests {
         let db = Database::open(&path, 20 * 60).unwrap();
         db.migrate().unwrap();
 
-        // Properly-ended session stays; orphans (with their open activity
-        // events) get deleted — the FK constraint that previously made this
-        // cleanup fail silently.
+        // One properly ended session plus two left open by a crash. The orphans
+        // must survive startup cleanup (finalised, not deleted).
         let ended = db.start_session("kitty", "normal", "5", None).unwrap();
         db.end_session(ended).unwrap();
-        db.start_session("kitty", "reboot", "5", None).unwrap();
-        db.start_session("firefox", "tab", "2", None).unwrap();
+        let orphan_a = db.start_session("kitty", "reboot", "5", None).unwrap();
+        let orphan_b = db.start_session("firefox", "tab", "2", None).unwrap();
 
-        // At this point two sessions are open; clear them like startup does.
-        let count = db.clear_orphaned_sessions().unwrap();
-        assert_eq!(count, 2);
+        // Give the orphans some activity so the end time can be derived from it.
+        for sid in [orphan_a, orphan_b] {
+            db.conn
+                .execute(
+                    "INSERT INTO activity_events (session_id, state, started_at, ended_at, duration_ms)
+                     VALUES (?1, 'active', ?2, ?2, 0)",
+                    params![sid, chrono::Utc::now().to_rfc3339()],
+                )
+                .unwrap();
+        }
+
+        let count = db.finalize_orphaned_sessions().unwrap();
+        assert_eq!(count, 2, "both open sessions should be finalised");
 
         let remaining: i64 = db
             .conn
             .query_row("SELECT COUNT(*) FROM sessions", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(remaining, 1); // only the properly-ended session remains
+        assert_eq!(remaining, 3, "orphans are kept, not deleted");
+
+        let still_open: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sessions WHERE ended_at IS NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(still_open, 0, "no session stays open");
+
+        // End time must not precede the start time, and duration must be >= 0.
+        let bad: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sessions WHERE ended_at < started_at OR duration_ms < 0",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(bad, 0, "finalised timestamps stay ordered");
 
         let events_left: i64 = db
             .conn
             .query_row("SELECT COUNT(*) FROM activity_events", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(events_left, 1); // events of deleted orphans are gone too
+        assert!(events_left >= 1, "events of finalised sessions are kept");
 
         drop(db);
         std::fs::remove_dir_all(&dir).ok();
