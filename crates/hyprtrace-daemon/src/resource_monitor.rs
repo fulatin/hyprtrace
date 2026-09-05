@@ -4,8 +4,8 @@ use std::time::Duration;
 
 /// Sample CPU/memory of the currently focused window's process every interval
 /// and store the readings in `app_resources`. CPU% is computed from the delta
-/// of /proc/<pid>/stat jiffies between samples so it reflects utilization, not
-/// an instantaneous snapshot.
+/// of /proc/<pid>/stat jiffies between samples (converted to seconds via
+/// CLK_TCK) so it reflects utilization, not an instantaneous snapshot.
 pub fn spawn_resource_monitor(db: Arc<Mutex<Database>>, interval_secs: u64) {
     std::thread::spawn(move || {
         let interval = Duration::from_secs(interval_secs.max(5));
@@ -13,6 +13,7 @@ pub fn spawn_resource_monitor(db: Arc<Mutex<Database>>, interval_secs: u64) {
             .map(|n| n.get())
             .unwrap_or(1)
             .max(1) as f64;
+        let clk_tck = clock_ticks_per_second();
 
         // (pid, utime+stime jiffies, wall time of that reading)
         let mut last: Option<(i32, u64, std::time::Instant)> = None;
@@ -51,13 +52,9 @@ pub fn spawn_resource_monitor(db: Arc<Mutex<Database>>, interval_secs: u64) {
 
             let cpu_pct = match &last {
                 Some((lp, lj, lt)) if *lp == pid => {
+                    let dj = jiffies.saturating_sub(*lj);
                     let dt = now.duration_since(*lt).as_secs_f64();
-                    if dt > 0.0 {
-                        let dj = jiffies.saturating_sub(*lj) as f64;
-                        (dj / dt / ncpu * 100.0).clamp(0.0, 100.0 * ncpu)
-                    } else {
-                        0.0
-                    }
+                    compute_cpu_pct(dj, dt, ncpu, clk_tck)
                 }
                 _ => 0.0,
             };
@@ -85,9 +82,39 @@ pub fn spawn_resource_monitor(db: Arc<Mutex<Database>>, interval_secs: u64) {
     });
 }
 
+/// Clock ticks per second for /proc/<pid>/stat jiffies. Linux exports this
+/// via sysconf(_SC_CLK_TCK); it is 100 on every mainstream kernel, which we
+/// use as a fallback if sysconf fails.
+fn clock_ticks_per_second() -> f64 {
+    let tck = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
+    if tck > 0 {
+        tck as f64
+    } else {
+        100.0
+    }
+}
+
+/// Convert a jiffies delta into a CPU percentage normalized over all cores.
+///
+/// `dj` is the utime+stime delta in clock ticks; ticks must be divided by
+/// CLK_TCK to obtain CPU-seconds before dividing by wall time (see review
+/// H3: the missing conversion inflated readings ~CLK_TCK-fold, mostly
+/// clamped to the 100*ncpu ceiling).
+fn compute_cpu_pct(dj: u64, dt: f64, ncpu: f64, clk_tck: f64) -> f64 {
+    if dt <= 0.0 || clk_tck <= 0.0 || ncpu <= 0.0 {
+        return 0.0;
+    }
+    let cpu_secs = dj as f64 / clk_tck;
+    (cpu_secs / dt / ncpu * 100.0).clamp(0.0, 100.0 * ncpu)
+}
+
 /// /proc/<pid>/stat fields (1-indexed): 14=utime, 15=stime (clock ticks).
 fn read_proc_jiffies(pid: i32) -> Option<u64> {
     let stat = std::fs::read_to_string(format!("/proc/{}/stat", pid)).ok()?;
+    parse_proc_stat_jiffies(&stat)
+}
+
+fn parse_proc_stat_jiffies(stat: &str) -> Option<u64> {
     // The comm field (2) can contain spaces/parens; find the last ')' then
     // skip the following space. Fields after that are reliably indexed.
     let close = stat.rfind(')')?;
@@ -109,4 +136,77 @@ fn read_proc_mem_kb(pid: i32) -> Option<i64> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cpu_pct_converts_jiffies_via_clk_tck() {
+        // 300 ticks at 100 ticks/s = 3 CPU-seconds over 6s wall time on 4
+        // cores: 3/6/4*100 = 12.5%. Before the CLK_TCK fix this computed
+        // 1250% (ticks treated as raw seconds).
+        let pct = compute_cpu_pct(300, 6.0, 4.0, 100.0);
+        assert!((pct - 12.5).abs() < 1e-9, "got {}", pct);
+    }
+
+    #[test]
+    fn cpu_pct_single_core_full_load_on_many_cores() {
+        // 1000 ticks = 10 CPU-seconds in 10s wall = exactly one busy core.
+        // On an 8-core machine that is 100%/8 = 12.5%.
+        let pct = compute_cpu_pct(1000, 10.0, 8.0, 100.0);
+        assert!((pct - 12.5).abs() < 1e-9, "got {}", pct);
+    }
+
+    #[test]
+    fn cpu_pct_all_cores_saturated() {
+        // 8000 ticks = 80 CPU-seconds in 10s on 8 cores: every core fully
+        // busy. The formula normalizes over all cores, so this reads 100%.
+        let pct = compute_cpu_pct(8000, 10.0, 8.0, 100.0);
+        assert!((pct - 100.0).abs() < 1e-9, "got {}", pct);
+    }
+
+    #[test]
+    fn cpu_pct_clamps_at_100_times_ncpu() {
+        // Absurd jiffies delta (well beyond 8 fully busy cores) is clamped
+        // to the historical 100*ncpu ceiling.
+        let pct = compute_cpu_pct(800_000, 10.0, 8.0, 100.0);
+        assert!((pct - 800.0).abs() < 1e-9, "got {}", pct);
+    }
+
+    #[test]
+    fn cpu_pct_zero_on_idle_or_invalid_input() {
+        assert_eq!(compute_cpu_pct(0, 10.0, 4.0, 100.0), 0.0);
+        assert_eq!(compute_cpu_pct(100, 0.0, 4.0, 100.0), 0.0);
+        assert_eq!(compute_cpu_pct(100, -1.0, 4.0, 100.0), 0.0);
+        assert_eq!(compute_cpu_pct(100, 10.0, 4.0, 0.0), 0.0);
+    }
+
+    #[test]
+    fn clk_tck_resolves_to_positive_value() {
+        // On this environment sysconf must succeed (Linux); 100 is the
+        // universal value, so just sanity-check bounds.
+        let tck = clock_ticks_per_second();
+        assert!(tck > 0.0 && tck.is_finite(), "got {}", tck);
+    }
+
+    #[test]
+    fn proc_stat_parsing_handles_comm_with_parens_and_spaces() {
+        // comm contains ')' and spaces; utime=250, stime=50 (fields 14/15).
+        let stat = "42 (firefox (web content)) R 1 0 0 0 0 0 0 0 0 0 250 50 0 0";
+        assert_eq!(parse_proc_stat_jiffies(stat), Some(300));
+    }
+
+    #[test]
+    fn proc_stat_parsing_rejects_truncated_or_malformed_input() {
+        assert_eq!(parse_proc_stat_jiffies(""), None);
+        assert_eq!(parse_proc_stat_jiffies("42 (vim) R 1 2 3"), None);
+        assert_eq!(parse_proc_stat_jiffies("no closing paren 1 2 3"), None);
+        // utime (field 14, index 11) is not a number here.
+        assert_eq!(
+            parse_proc_stat_jiffies("7 (app) R x x x x x x x x x x x 2"),
+            None
+        );
+    }
 }

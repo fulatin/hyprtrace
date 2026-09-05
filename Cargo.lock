@@ -883,6 +883,7 @@ dependencies = [
  "env_logger",
  "evdev",
  "hyprland",
+ "libc",
  "log",
  "rusqlite",
  "serde",
