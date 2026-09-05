@@ -31,6 +31,227 @@ impl Database {
         })
     }
 
+    /// Run idempotent schema migrations.
+    ///
+    /// The daemon owns the canonical schema, but the server may be started
+    /// before the daemon has ever run (install.sh enables both services with
+    /// no ordering guarantee). Without these migrations every API would fail
+    /// with "no such table" until the daemon writes the database once.
+    ///
+    /// KEEP IN SYNC with `crates/hyprtrace-daemon/src/db.rs::migrate` — any
+    /// schema change must be applied to both copies (ideally by extracting a
+    /// shared schema crate; until then, this is a deliberate copy). This copy
+    /// includes the `date_local` column (daemon v7) so the server's date-local
+    /// queries work even when it initializes the database first.
+    pub fn migrate(&self) -> anyhow::Result<()> {
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS sessions (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                class       TEXT NOT NULL,
+                title       TEXT NOT NULL DEFAULT '',
+                workspace   TEXT,
+                started_at  TEXT NOT NULL,
+                ended_at    TEXT,
+                duration_ms INTEGER DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS daily_summary (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                date          TEXT NOT NULL,
+                class         TEXT NOT NULL,
+                total_ms      INTEGER NOT NULL DEFAULT 0,
+                session_count INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(date, class)
+            );
+
+            CREATE TABLE IF NOT EXISTS ai_conversations (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                role       TEXT NOT NULL,
+                content    TEXT NOT NULL,
+                model      TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_sessions_class ON sessions(class);
+            CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at);
+            CREATE INDEX IF NOT EXISTS idx_daily_summary_date ON daily_summary(date);",
+        )?;
+
+        self.migrate_v2()?;
+        self.migrate_v3()?;
+        self.migrate_v4()?;
+        self.migrate_v5()?;
+        self.migrate_v7()?;
+        Ok(())
+    }
+
+    fn migrate_v2(&self) -> anyhow::Result<()> {
+        self.add_column_if_missing("sessions", "activity_state", "TEXT", "'active'")?;
+        self.add_column_if_missing("sessions", "focused_ms", "INTEGER", "0")?;
+
+        self.add_column_if_missing("daily_summary", "focused_ms", "INTEGER", "0")?;
+        self.add_column_if_missing("daily_summary", "focused_session_count", "INTEGER", "0")?;
+
+        self.add_column_if_missing("ai_conversations", "complete", "INTEGER", "1")?;
+
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS activity_events (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id  INTEGER,
+                state       TEXT NOT NULL,
+                started_at  TEXT NOT NULL,
+                ended_at    TEXT,
+                duration_ms INTEGER DEFAULT 0,
+                FOREIGN KEY (session_id) REFERENCES sessions(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS hourly_summary (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                date          TEXT NOT NULL,
+                hour          INTEGER NOT NULL,
+                class         TEXT NOT NULL,
+                total_ms      INTEGER NOT NULL DEFAULT 0,
+                session_count INTEGER NOT NULL DEFAULT 0,
+                focused_ms    INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(date, hour, class)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_hourly_summary_date ON hourly_summary(date);
+            CREATE INDEX IF NOT EXISTS idx_activity_events_session ON activity_events(session_id);",
+        )?;
+        Ok(())
+    }
+
+    fn migrate_v3(&self) -> anyhow::Result<()> {
+        self.add_column_if_missing("sessions", "pid", "INTEGER", "NULL")?;
+
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS app_resources (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER,
+                class      TEXT NOT NULL,
+                sampled_at TEXT NOT NULL,
+                cpu_pct    REAL,
+                mem_kb     INTEGER,
+                FOREIGN KEY (session_id) REFERENCES sessions(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_app_resources_class ON app_resources(class);
+            CREATE INDEX IF NOT EXISTS idx_app_resources_session ON app_resources(session_id);",
+        )?;
+        Ok(())
+    }
+
+    fn migrate_v4(&self) -> anyhow::Result<()> {
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS disruptions (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                kind       TEXT NOT NULL,
+                app        TEXT,
+                summary    TEXT,
+                occurred_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_disruptions_at ON disruptions(occurred_at);
+            CREATE INDEX IF NOT EXISTS idx_disruptions_kind ON disruptions(kind);",
+        )?;
+        Ok(())
+    }
+
+    fn migrate_v5(&self) -> anyhow::Result<()> {
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS goals (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                name            TEXT NOT NULL,
+                target_type     TEXT NOT NULL DEFAULT 'all',
+                target_key      TEXT,
+                daily_target_ms INTEGER NOT NULL,
+                enabled         INTEGER NOT NULL DEFAULT 1
+            );",
+        )?;
+        Ok(())
+    }
+
+    /// Mirrors the daemon's v7: add the local-calendar-date column to the
+    /// date-keyed tables and backfill existing rows, inside one transaction.
+    fn migrate_v7(&self) -> anyhow::Result<()> {
+        self.add_column_if_missing("sessions", "date_local", "TEXT", "''")?;
+        self.add_column_if_missing("disruptions", "date_local", "TEXT", "''")?;
+        self.add_column_if_missing("activity_events", "date_local", "TEXT", "''")?;
+        self.add_column_if_missing("app_resources", "date_local", "TEXT", "''")?;
+
+        self.backfill_date_local("sessions", "started_at")?;
+        self.backfill_date_local("disruptions", "occurred_at")?;
+        self.backfill_date_local("activity_events", "started_at")?;
+        self.backfill_date_local("app_resources", "sampled_at")?;
+        Ok(())
+    }
+
+    fn add_column_if_missing(
+        &self,
+        table: &str,
+        column: &str,
+        col_type: &str,
+        default: &str,
+    ) -> anyhow::Result<()> {
+        let exists: bool = {
+            let mut stmt = self
+                .conn
+                .prepare(&format!("PRAGMA table_info({})", table))?;
+            let rows: Vec<String> = stmt
+                .query_map([], |row| row.get::<_, String>(1))?
+                .filter_map(|r| r.ok())
+                .collect();
+            rows.iter().any(|name| name == column)
+        };
+        if !exists {
+            let sql = format!(
+                "ALTER TABLE {} ADD COLUMN {} {} DEFAULT {}",
+                table, column, col_type, default
+            );
+            self.conn.execute_batch(&sql)?;
+            log::info!("Added column {}.{} ({})", table, column, col_type);
+        }
+        Ok(())
+    }
+
+    /// Compute the local calendar date (`YYYY-MM-DD`) of a stored row from its
+    /// UTC timestamp column, for any rows whose `date_local` is still empty.
+    /// Runs in one transaction (a per-row autocommit loop would be far slower).
+    fn backfill_date_local(&self, table: &str, ts_col: &str) -> anyhow::Result<()> {
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT id, {ts_col} FROM {table} WHERE date_local = ''"
+        ))?;
+        let rows: Vec<(i64, String)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<Result<_, _>>()?;
+        drop(stmt);
+        if rows.is_empty() {
+            return Ok(());
+        }
+
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
+        let mut upd =
+            tx.prepare(&format!("UPDATE {table} SET date_local = ?1 WHERE id = ?2"))?;
+        let mut updated = 0usize;
+        for (id, ts) in rows {
+            if let Some(date) = local_date_from_rfc3339(&ts) {
+                upd.execute(params![date, id])?;
+                updated += 1;
+            }
+        }
+        drop(upd);
+        tx.commit()?;
+
+        if updated > 0 {
+            log::info!("Backfilled date_local for {table}: {updated} row(s)");
+        }
+        Ok(())
+    }
+
     /// Create the app_categories table (if missing) and seed default rules.
     pub fn ensure_categories(&self) -> anyhow::Result<()> {
         self.conn.execute_batch(
@@ -1643,6 +1864,15 @@ impl Database {
     }
 }
 
+/// Local calendar date (`YYYY-MM-DD`) of a stored UTC RFC3339 timestamp.
+fn local_date_from_rfc3339(ts: &str) -> Option<String> {
+    chrono::DateTime::parse_from_rfc3339(ts).ok().map(|dt| {
+        dt.with_timezone(&chrono::Local)
+            .format("%Y-%m-%d")
+            .to_string()
+    })
+}
+
 /// SQLite LIKE-style pattern match: `%` = any sequence, `_` = one char.
 /// Case-insensitive. Used for app-category rules.
 fn like_match(pattern: &str, text: &str) -> bool {
@@ -1676,6 +1906,53 @@ fn like_match(pattern: &str, text: &str) -> bool {
 mod tests {
     use super::*;
     use rusqlite::params;
+
+    #[test]
+    fn migrate_fresh_db_creates_schema_and_date_local() {
+        let db = Database::open(std::path::Path::new(":memory:"), 60).unwrap();
+        db.migrate().unwrap();
+        db.migrate().unwrap(); // idempotent
+
+        let tables: Vec<String> = db
+            .conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='table'")
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        for expected in [
+            "sessions",
+            "daily_summary",
+            "ai_conversations",
+            "activity_events",
+            "hourly_summary",
+            "app_resources",
+            "disruptions",
+            "goals",
+        ] {
+            assert!(tables.contains(&expected.to_string()), "missing table {expected}");
+        }
+
+        // date_local must exist on the date-keyed tables (v7) so the server's
+        // date-local queries work even when it initializes the DB first.
+        for table in ["sessions", "disruptions", "activity_events", "app_resources"] {
+            let cols: Vec<String> = db
+                .conn
+                .prepare(&format!("PRAGMA table_info({table})"))
+                .unwrap()
+                .query_map([], |r| r.get::<_, String>(1))
+                .unwrap()
+                .filter_map(|r| r.ok())
+                .collect();
+            assert!(cols.contains(&"date_local".to_string()), "{table} missing date_local");
+        }
+
+        // Queries the API handlers run must not fail on a fresh DB.
+        db.today_summary("2026-09-05").unwrap();
+        db.goals().unwrap();
+        db.current_status().unwrap();
+    }
 
     #[test]
     fn report_and_ranking_smoke() {

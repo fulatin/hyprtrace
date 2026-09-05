@@ -20,10 +20,14 @@ async fn main() -> anyhow::Result<()> {
     let cfg = config::Config::load()?;
     let db_path = cfg.db_path_expanded();
     let db = db::Database::open(&db_path, cfg.daemon.focused_threshold_seconds)?;
-    // The daemon may be running its DB migration (which writes the shared DB)
-    // when the server starts. Retry startup writes with a backoff instead of
-    // exiting — a single failed write here used to make systemd crash-loop the
-    // server for the whole migration window ("database is locked").
+    // Migrate before serving: the server may start before the daemon has ever
+    // run (services have no ordering dependency), and every API would fail
+    // with "no such table" on a fresh database.
+    db.migrate()?;
+    // The daemon may also be running its DB migration (which writes the shared
+    // DB) when the server starts. Retry startup writes with a backoff instead
+    // of exiting — a single failed write here used to make systemd crash-loop
+    // the server for the whole migration window ("database is locked").
     let mut init_attempts = 0u32;
     loop {
         match db.ensure_categories().and_then(|_| db.ensure_projects()) {

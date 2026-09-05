@@ -7,6 +7,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+// Default dates fall back to the LOCAL calendar day (chrono::Local) so they
+// line up with the local-date buckets the daemon writes into the summary
+// tables — UTC defaults put early-morning activity (00:00–08:00 in UTC+8)
+// on the previous calendar day (review M3).
+
 #[derive(Deserialize)]
 pub struct SummaryQuery {
     pub date: Option<String>,
