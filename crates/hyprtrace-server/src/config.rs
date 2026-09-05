@@ -283,8 +283,7 @@ pub fn load_toml_document(path: &std::path::Path) -> anyhow::Result<toml::Value>
     if path.exists() {
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read config file: {:?}", path))?;
-        toml::from_str(&content)
-            .with_context(|| format!("Failed to parse config file: {:?}", path))
+        toml::from_str(&content).with_context(|| format!("Failed to parse config file: {:?}", path))
     } else {
         Ok(toml::Value::Table(Default::default()))
     }
@@ -324,10 +323,96 @@ pub fn set_toml_value(doc: &mut toml::Value, path: &[&str], value: toml::Value) 
     current.insert(last.to_string(), value);
 }
 
+/// Remove a single nested key (e.g. `["ai", "openai", "api_key"]`) from a raw
+/// TOML document, leaving every other key — including unknown ones — untouched.
+/// Returns whether the key was present.
+///
+/// This is what "unset" means for settings that are optional rather than
+/// defaulted: an absent API key is not the same thing as an empty one, and
+/// storing `api_key = ""` makes the provider look configured while every
+/// request fails authentication.
+pub fn remove_toml_value(doc: &mut toml::Value, path: &[&str]) -> bool {
+    let Some((last, parents)) = path.split_last() else {
+        return false;
+    };
+    let Some(doc_table) = doc.as_table_mut() else {
+        return false;
+    };
+    if parents.is_empty() {
+        return doc_table.remove(*last).is_some();
+    }
+    let mut current = doc_table;
+    for key in parents {
+        let Some(next) = current.get_mut(*key).and_then(|v| v.as_table_mut()) else {
+            return false;
+        };
+        current = next;
+    }
+    match current.remove(*last) {
+        Some(_) => true,
+        None => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[test]
+    fn remove_toml_value_deletes_only_the_named_key() {
+        let mut doc: toml::Value = toml::from_str(
+            "[ai.openai]\napi_key = \"sk-123\"\nbase_url = \"https://api.openai.com/v1\"\n\n[daemon]\nrecord_titles = true\n",
+        )
+        .unwrap();
+
+        assert!(remove_toml_value(&mut doc, &["ai", "openai", "api_key"]));
+        let openai = doc.get("ai").and_then(|v| v.get("openai")).unwrap();
+        assert!(
+            openai.get("api_key").is_none(),
+            "the key itself must be gone"
+        );
+        assert_eq!(
+            openai.get("base_url").and_then(|v| v.as_str()),
+            Some("https://api.openai.com/v1"),
+            "siblings must survive"
+        );
+        assert_eq!(
+            doc.get("daemon")
+                .and_then(|v| v.get("record_titles"))
+                .and_then(|v| v.as_bool()),
+            Some(true),
+            "unrelated sections must survive"
+        );
+        // Removing it twice is a no-op, not an error.
+        assert!(!remove_toml_value(&mut doc, &["ai", "openai", "api_key"]));
+    }
+
+    #[test]
+    fn remove_toml_value_tolerates_missing_paths() {
+        let mut doc: toml::Value = toml::from_str("[ai]\ndefault_provider = \"ollama\"\n").unwrap();
+
+        assert!(!remove_toml_value(&mut doc, &["ai", "openai", "api_key"]));
+        assert_eq!(
+            doc.get("ai")
+                .and_then(|v| v.get("default_provider"))
+                .and_then(|v| v.as_str()),
+            Some("ollama")
+        );
+        // An intermediate value that is not a table must not be clobbered.
+        assert!(!remove_toml_value(
+            &mut doc,
+            &["ai", "default_provider", "nested"]
+        ));
+        assert_eq!(
+            doc.get("ai")
+                .and_then(|v| v.get("default_provider"))
+                .and_then(|v| v.as_str()),
+            Some("ollama")
+        );
+        // A top-level key works too.
+        assert!(remove_toml_value(&mut doc, &["ai"]));
+        assert!(doc.get("ai").is_none());
+    }
     #[test]
     fn set_toml_value_preserves_unknown_fields() {
         // Simulates a config file written by the daemon, which has fields the
