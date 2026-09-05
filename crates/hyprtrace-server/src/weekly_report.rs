@@ -39,7 +39,11 @@ pub fn spawn_weekly_report_scheduler(state: Arc<crate::routes::AppState>) {
             let week_key = format!("{}-{:02}", iso_year, iso_week);
 
             let due = weekday == config.server.weekly_report_day
-                && (hour, minute) >= (config.server.weekly_report_hour, config.server.weekly_report_minute);
+                && (hour, minute)
+                    >= (
+                        config.server.weekly_report_hour,
+                        config.server.weekly_report_minute,
+                    );
 
             if !due || sent_weeks.contains(&week_key) {
                 continue;
@@ -61,7 +65,9 @@ async fn run_weekly_report(
     today_dt: &chrono::DateTime<chrono::Local>,
 ) -> anyhow::Result<()> {
     let to = today_dt.format("%Y-%m-%d").to_string();
-    let from = (*today_dt - chrono::Duration::days(6)).format("%Y-%m-%d").to_string();
+    let from = (*today_dt - chrono::Duration::days(6))
+        .format("%Y-%m-%d")
+        .to_string();
 
     let (report_md, total_ms, top_class, top_ms) = {
         let db = state.db.lock().await;
@@ -78,8 +84,7 @@ async fn run_weekly_report(
 
     // Write the report to ~/.local/share/hyprtrace/reports/weekly-<to>.md.
     let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
-    let reports_dir = std::path::PathBuf::from(home)
-        .join(".local/share/hyprtrace/reports");
+    let reports_dir = std::path::PathBuf::from(home).join(".local/share/hyprtrace/reports");
     std::fs::create_dir_all(&reports_dir)?;
     let path = reports_dir.join(format!("weekly-{}.md", to));
     std::fs::write(&path, report_md)?;
@@ -100,7 +105,12 @@ async fn run_weekly_report(
     };
 
     let result = Command::new("notify-send")
-        .args(["-a", "hyprtrace", "HyprTrace weekly report", &notification_body])
+        .args([
+            "-a",
+            "hyprtrace",
+            "HyprTrace weekly report",
+            &notification_body,
+        ])
         .spawn();
     match result {
         Ok(_) => log::info!("Weekly report notification sent"),

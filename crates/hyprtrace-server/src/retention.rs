@@ -37,7 +37,10 @@ async fn cleanup_once(state: &Arc<crate::routes::AppState>) {
         .format("%Y-%m-%d")
         .to_string();
 
-    log::info!("Retention cleanup starting: deleting sessions before {}", cutoff);
+    log::info!(
+        "Retention cleanup starting: deleting sessions before {}",
+        cutoff
+    );
 
     let deleted = {
         let db = state.db.lock().await;

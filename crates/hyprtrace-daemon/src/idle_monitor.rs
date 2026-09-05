@@ -118,7 +118,11 @@ fn tick(
             if let Some(id) = last_idle_ended.take() {
                 let guard = db.lock().map_err(|e| anyhow::anyhow!("DB lock: {}", e))?;
                 guard.set_session_state_only(id, "away")?;
-                log::info!("Session {} marked as away (absent > {}s)", id, away_timeout.as_secs());
+                log::info!(
+                    "Session {} marked as away (absent > {}s)",
+                    id,
+                    away_timeout.as_secs()
+                );
             }
         }
         return Ok(());
@@ -218,7 +222,11 @@ fn resolve_idle_duration(
 
 fn query_loginctl_idle() -> Option<Duration> {
     let output = std::process::Command::new("loginctl")
-        .args(["show-user", "--property=IdleHint", "--property=IdleSinceHint"])
+        .args([
+            "show-user",
+            "--property=IdleHint",
+            "--property=IdleSinceHint",
+        ])
         .output()
         .ok()?;
 
@@ -270,7 +278,9 @@ fn resume_session(db: &Arc<Mutex<Database>>) -> anyhow::Result<()> {
                 Ok(id) => {
                     log::info!(
                         "Resumed session {}: class={}, workspace={}",
-                        id, class, workspace
+                        id,
+                        class,
+                        workspace
                     );
                 }
                 Err(e) => log::error!("Failed to start session on resume: {}", e),
@@ -339,8 +349,7 @@ mod tests {
         // Missing timestamp or garbage must not be reported as 0s idle.
         assert!(parse_loginctl_idle("IdleHint=yes\n", SystemTime::now()).is_none());
         assert!(
-            parse_loginctl_idle("IdleHint=yes\nIdleSinceHint=abc\n", SystemTime::now())
-                .is_none()
+            parse_loginctl_idle("IdleHint=yes\nIdleSinceHint=abc\n", SystemTime::now()).is_none()
         );
         assert!(
             parse_loginctl_idle("IdleHint=yes\nIdleSinceHint=0\n", SystemTime::now()).is_none()
@@ -358,8 +367,7 @@ mod tests {
         // Clock skew guard: a future IdleSinceHint yields no duration
         // instead of a bogus value.
         let now = SystemTime::now();
-        let since_us =
-            now.duration_since(UNIX_EPOCH).unwrap().as_micros() as u64 + 60_000_000;
+        let since_us = now.duration_since(UNIX_EPOCH).unwrap().as_micros() as u64 + 60_000_000;
         let out = format!("IdleHint=yes\nIdleSinceHint={}\n", since_us);
         assert!(parse_loginctl_idle(&out, now).is_none());
     }

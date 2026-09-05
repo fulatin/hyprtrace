@@ -59,7 +59,9 @@ pub async fn ai_weekly_report(
 ) -> Result<Json<serde_json::Value>, Json<serde_json::Value>> {
     // LOCAL dates: must match the local-date buckets in the summary tables (M3).
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-    let from = (chrono::Local::now() - chrono::Duration::days(6)).format("%Y-%m-%d").to_string();
+    let from = (chrono::Local::now() - chrono::Duration::days(6))
+        .format("%Y-%m-%d")
+        .to_string();
 
     // Snapshot data without holding the lock across the AI call.
     let snapshot = {
@@ -113,8 +115,14 @@ pub async fn ai_weekly_report(
         let ai = state.ai.lock().await;
         ai.snapshot()
     };
-    let provider_name = req.provider.clone().unwrap_or_else(|| ai.default_provider.clone());
-    let reply = match ai.chat(&provider_name, req.model.as_deref(), &messages).await {
+    let provider_name = req
+        .provider
+        .clone()
+        .unwrap_or_else(|| ai.default_provider.clone());
+    let reply = match ai
+        .chat(&provider_name, req.model.as_deref(), &messages)
+        .await
+    {
         Ok(r) => r,
         Err(e) => {
             log::error!("AI weekly report failed: {}", e);
@@ -275,7 +283,9 @@ pub async fn ai_chat(
         let ai = state.ai.lock().await;
         ai.snapshot()
     };
-    let reply = ai.chat(&provider_name, req.model.as_deref(), &messages).await;
+    let reply = ai
+        .chat(&provider_name, req.model.as_deref(), &messages)
+        .await;
 
     match reply {
         Ok(reply) => {
@@ -547,8 +557,11 @@ async fn run_agent(
         let msgs = messages.clone();
         let pname_c = provider_name.clone();
         let model_c = model.clone();
-        let tools_c: Option<Vec<crate::ai::ToolDef>> =
-            if tools_enabled { Some(tools.clone()) } else { None };
+        let tools_c: Option<Vec<crate::ai::ToolDef>> = if tools_enabled {
+            Some(tools.clone())
+        } else {
+            None
+        };
 
         let handle = tokio::spawn(async move {
             let ai = {
@@ -658,22 +671,21 @@ async fn run_agent(
             log::info!("Agent: executing tool {} ({})", tc.name, tc.id);
             send!(json!({"type": "tool_call", "id": tc.id, "name": tc.name, "args": tc.arguments}));
 
-            let result =
-                crate::ai::tools::execute_tool(&tc.name, &tc.arguments, &state.db).await;
+            let result = crate::ai::tools::execute_tool(&tc.name, &tc.arguments, &state.db).await;
 
             match result {
                 Ok(r) => {
-                    send!(json!({"type": "tool_result", "id": tc.id, "name": tc.name, "ok": true, "result": r}));
-                    messages.push(ChatMessage::tool_result(
-                        &provider_name,
-                        &tc,
-                        r.to_string(),
-                    ));
+                    send!(
+                        json!({"type": "tool_result", "id": tc.id, "name": tc.name, "ok": true, "result": r})
+                    );
+                    messages.push(ChatMessage::tool_result(&provider_name, &tc, r.to_string()));
                 }
                 Err(e) => {
                     let es = e.to_string();
                     log::warn!("Agent: tool {} failed: {}", tc.name, es);
-                    send!(json!({"type": "tool_result", "id": tc.id, "name": tc.name, "ok": false, "result": es}));
+                    send!(
+                        json!({"type": "tool_result", "id": tc.id, "name": tc.name, "ok": false, "result": es})
+                    );
                     messages.push(ChatMessage::tool_result(
                         &provider_name,
                         &tc,
@@ -688,24 +700,16 @@ async fn run_agent(
     // conversation history isn't confusing.
     if msg_id.is_none() && full_text.trim().is_empty() {
         let db = state.db.lock().await;
-        if let Err(e) = db.save_ai_message("assistant", "(responded via tool calls)", &model_name)
-        {
+        if let Err(e) = db.save_ai_message("assistant", "(responded via tool calls)", &model_name) {
             log::warn!("Agent: failed to save marker message: {}", e);
         }
     }
 
     finalize(&state, msg_id, &full_text, &model_name).await;
-    let _ = ndjson_tx
-        .send(Ok(b"{\"type\":\"done\"}\n".to_vec()))
-        .await;
+    let _ = ndjson_tx.send(Ok(b"{\"type\":\"done\"}\n".to_vec())).await;
 }
 
-async fn finalize(
-    state: &Arc<AppState>,
-    msg_id: Option<i64>,
-    full_text: &str,
-    _model_name: &str,
-) {
+async fn finalize(state: &Arc<AppState>, msg_id: Option<i64>, full_text: &str, _model_name: &str) {
     if let Some(id) = msg_id {
         let db = state.db.lock().await;
         if let Err(e) = db.update_ai_message(id, full_text, true) {

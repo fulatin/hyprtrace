@@ -82,10 +82,12 @@ fn main() -> anyhow::Result<()> {
     log::info!("HyprTrace daemon starting...");
 
     let cfg = config::Config::load().context("Failed to load config")?;
-    cfg.ensure_db_dir().context("Failed to create database directory")?;
+    cfg.ensure_db_dir()
+        .context("Failed to create database directory")?;
 
     let db_path = cfg.db_path_expanded();
-    let db = db::Database::open(&db_path, cfg.daemon.focused_threshold_seconds).context("Failed to open database")?;
+    let db = db::Database::open(&db_path, cfg.daemon.focused_threshold_seconds)
+        .context("Failed to open database")?;
     // The migration writes to the shared DB while the server process may also
     // be writing at startup. Transient lock contention is retried with a short
     // backoff instead of exiting (which used to cause a systemd crash loop).

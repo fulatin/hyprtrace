@@ -87,9 +87,8 @@ impl AiProvider for OllamaProvider {
         });
         if let Some(tools) = tools {
             if !tools.is_empty() {
-                body["tools"] = serde_json::Value::Array(
-                    tools.iter().map(|t| t.to_api_json()).collect(),
-                );
+                body["tools"] =
+                    serde_json::Value::Array(tools.iter().map(|t| t.to_api_json()).collect());
             }
         }
 
@@ -151,7 +150,11 @@ impl AiProvider for OllamaProvider {
 
                     if let Some(content) = json["message"]["content"].as_str() {
                         if !content.is_empty() {
-                            if tx.send(StreamEvent::Text(content.to_string())).await.is_err() {
+                            if tx
+                                .send(StreamEvent::Text(content.to_string()))
+                                .await
+                                .is_err()
+                            {
                                 return Ok(());
                             }
                         }
