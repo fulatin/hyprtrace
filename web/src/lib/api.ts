@@ -6,7 +6,6 @@ import type {
   Session,
   DailyTrend,
   AiMessage,
-  AiChatResponse,
   AiModelsResponse,
   ConfigResponse,
   ConfigUpdateRequest,
@@ -76,18 +75,6 @@ export const api = {
 
   aiModels: () =>
     fetchJSON<AiModelsResponse>('/api/ai/models'),
-
-  aiChat: (provider: string, message: string, includeData: boolean, dateRange: string) =>
-    fetchJSON<AiChatResponse>('/api/ai/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        provider,
-        message,
-        include_data: includeData,
-        date_range: dateRange,
-      }),
-    }),
 
 
 

@@ -18,6 +18,7 @@ import ChatInput from "../components/ChatInput";
 import ToolCallCard from "../components/ToolCallCard";
 
 const QUICK_QUESTIONS = [
+  "Analyze today's usage data and give me insights",
   "What window am I using right now?",
   "Which apps did I use the most today?",
   "How many workspaces do I have and what's on them?",
@@ -41,6 +42,33 @@ function extractText(message: any): string {
       .map((p: any) => p.text)
       .join("") ?? ""
   );
+}
+
+/**
+ * Identifier for client-side message objects.
+ *
+ * `crypto.randomUUID` only exists in secure contexts — https, or http on
+ * localhost. The web UI is routinely opened over plain http on a LAN address,
+ * where the method is simply absent and calling it throws, which would take
+ * the whole history-loading effect down with it. `crypto.getRandomValues` has
+ * no such restriction, so it is the preferred fallback; the timestamp-based
+ * branch is only there to keep the function total.
+ */
+function newId(): string {
+  const c: Crypto | undefined = globalThis.crypto;
+  if (c && typeof c.randomUUID === "function") {
+    return c.randomUUID();
+  }
+  if (c && typeof c.getRandomValues === "function") {
+    const bytes = c.getRandomValues(new Uint8Array(16));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
+    bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant 10xx
+    const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join(
+      "",
+    );
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  }
+  return `${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}`;
 }
 
 const STORAGE_PROVIDER = "hyprtrace_ai_provider";
@@ -75,11 +103,9 @@ export default function AIChat() {
   const [includeData, setIncludeData] = useState(true);
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const [dateRange, setDateRange] = useState("today");
-  const [hasAutoAnalyzed, setHasAutoAnalyzed] = useState(false);
   const [incompleteId, setIncompleteId] = useState<number | null>(null);
   const [pollTimedOut, setPollTimedOut] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const sendCalledRef = useRef(false);
   const dbIdToUiId = useRef(new Map<number, string>());
 
   const transport = useMemo(
@@ -118,7 +144,6 @@ export default function AIChat() {
 
   const handleSend = useCallback(
     (message: string) => {
-      sendCalledRef.current = true;
       sendMessage({ text: message });
     },
     [sendMessage],
@@ -169,7 +194,7 @@ export default function AIChat() {
       .then((convs: AiMessage[]) => {
         if (convs.length > 0) {
           const msgs = convs.map((c) => {
-            const uiId = crypto.randomUUID();
+            const uiId = newId();
             dbIdToUiId.current.set(c.id, uiId);
             return {
               id: uiId,
@@ -188,28 +213,17 @@ export default function AIChat() {
           }
 
           setMessages(msgs);
-        } else {
-          setHasAutoAnalyzed(false);
         }
         setHistoryLoaded(true);
       })
       .catch(() => setHistoryLoaded(true));
   }, []);
 
-  useEffect(() => {
-    if (
-      historyLoaded &&
-      messages.length === 0 &&
-      !hasAutoAnalyzed &&
-      !sendCalledRef.current
-    ) {
-      setHasAutoAnalyzed(true);
-      const timer = setTimeout(() => {
-        handleSend("Analyze today's usage data and give me insights");
-      }, 500);
-      return () => clearTimeout(timer);
-    }
-  }, [historyLoaded, messages.length, hasAutoAnalyzed, handleSend]);
+  // Note: opening an empty chat used to fire "Analyze today's usage data" on a
+  // timer. Nothing runs on load any more — with a paid provider configured,
+  // merely opening the page was spending money the user never authorised, and
+  // with a local model it burned CPU on every visit. The same prompt is one
+  // click away in the quick-question row below.
 
   // Poll for a message that was mid-generation when the page refreshed.
   // The server keeps streaming in the background and saves partial content,
@@ -254,10 +268,6 @@ export default function AIChat() {
 
   const handleClearContext = async () => {
     setMessages([]);
-    // Keep auto-analysis suppressed after a manual clear — the user explicitly
-    // dismissed the conversation, so don't fire the proactive prompt again.
-    setHasAutoAnalyzed(true);
-    sendCalledRef.current = false;
     try {
       await api.clearConversations();
     } catch {}
@@ -342,6 +352,10 @@ export default function AIChat() {
             </p>
             <p className="text-gray-500 text-sm mb-8">
               Ask anything about your usage data
+              <span className="block text-gray-600 text-xs mt-2">
+                Nothing is sent until you ask — every question is a request to
+                the configured model.
+              </span>
             </p>
             <div className="flex flex-wrap justify-center gap-2 max-w-lg">
               {QUICK_QUESTIONS.map((q, i) => (

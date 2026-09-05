@@ -12,7 +12,7 @@ import StatCard from '../components/StatCard';
 
 import AppUsagePie from '../components/AppUsagePie';
 
-import HourlyHeatmap from '../components/HourlyHeatmap';
+import HourlyBars from '../components/HourlyBars';
 
 import ActivityHeatmap from '../components/ActivityHeatmap';
 
@@ -444,7 +444,7 @@ export default function Dashboard() {
 
         <AppUsagePie data={summary?.top_apps ?? []} metadata={appMetadata} />
 
-        <HourlyHeatmap data={timeline} />
+        <HourlyBars data={timeline} />
 
       </div>
 

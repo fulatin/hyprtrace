@@ -198,11 +198,45 @@ export default function Settings() {
         page++;
       }
 
-      const header = ['ID', 'Class', 'Title', 'Workspace', 'Started At', 'Ended At', 'Duration (ms)', 'Activity State', 'Focus (ms)'].join(',');
+      // RFC 4180: quote every field and double any quote inside it. The
+      // previous version quoted `title` and `class` but only escaped quotes in
+      // `title`, so a class containing `"` broke the row; every other field was
+      // left bare, so a comma in a workspace name or window title silently
+      // shifted the columns. Quoting also keeps embedded newlines inside a
+      // field instead of starting a new record.
+      //
+      // The leading `'` is formula-injection defence: a field starting with
+      // `=`, `+`, `-` or `@` is evaluated as a formula when the file is opened
+      // in Excel, LibreOffice or Sheets. Window titles are attacker-controlled
+      // — any web page chooses its own — so this is a real path, not hygiene.
+      //
+      // `||` is replaced by `??` throughout: a duration of 0, or a workspace
+      // literally named "0", is data rather than a missing value.
+      const cell = (v: unknown): string => {
+        const raw = v === null || v === undefined ? '' : String(v);
+        const neutralised = /^[=+\-@\t\r]/.test(raw) ? `'${raw}` : raw;
+        return `"${neutralised.replace(/"/g, '""')}"`;
+      };
+      const columns = ['ID', 'Class', 'Title', 'Workspace', 'Started At', 'Ended At', 'Duration (ms)', 'Activity State', 'Focus (ms)'];
       const rows = allSessions.map((s) =>
-        [s.id, `"${s.class}"`, `"${s.title.replace(/"/g, '""')}"`, s.workspace || '', s.started_at, s.ended_at || '', s.duration_ms || '', s.activity_state || '', s.focused_ms || ''].join(',')
+        [
+          s.id,
+          s.class,
+          s.title,
+          s.workspace ?? '',
+          s.started_at,
+          s.ended_at ?? '',
+          s.duration_ms ?? '',
+          s.activity_state ?? '',
+          s.focused_ms ?? '',
+        ]
+          .map(cell)
+          .join(',')
       );
-      const csv = [header, ...rows].join('\n');
+      // CRLF is what RFC 4180 specifies and what Excel expects. The BOM is
+      // what stops Excel from decoding the file as the local codepage, which
+      // turns any non-ASCII window title into mojibake.
+      const csv = '\uFEFF' + [columns.map(cell).join(','), ...rows].join('\r\n');
 
       const blob = new Blob([csv], { type: 'text/csv' });
       const url = URL.createObjectURL(blob);

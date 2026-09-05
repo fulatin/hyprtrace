@@ -176,11 +176,6 @@ export interface AiChatRequest {
   date_range?: string;
 }
 
-export interface AiChatResponse {
-  reply: string;
-  model: string;
-}
-
 export interface AiModelsResponse {
   providers: Record<string, string[]>;
   default: string;
