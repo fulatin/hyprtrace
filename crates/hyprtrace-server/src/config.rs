@@ -250,15 +250,6 @@ impl Config {
         }
     }
 
-    pub fn save_to(&self, path: &std::path::Path) -> anyhow::Result<()> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let toml_str = toml::to_string_pretty(self).context("Failed to serialize config")?;
-        std::fs::write(path, toml_str)?;
-        Ok(())
-    }
-
     pub fn config_path() -> anyhow::Result<PathBuf> {
         let config_dir = dirs_config_dir()?;
         Ok(config_dir.join("config.toml"))
@@ -280,5 +271,145 @@ fn expand_tilde(path: &str) -> PathBuf {
         PathBuf::from(path.replacen('~', &home, 1))
     } else {
         PathBuf::from(path)
+    }
+}
+
+/// Load the raw TOML document from disk as a `toml::Value`.
+///
+/// Unlike `Config::load`, this keeps every key present in the file, including
+/// fields the server does not model (e.g. daemon-only settings such as
+/// `enable_input_monitor`). Returns an empty table if the file doesn't exist.
+pub fn load_toml_document(path: &std::path::Path) -> anyhow::Result<toml::Value> {
+    if path.exists() {
+        let content = std::fs::read_to_string(path)
+            .with_context(|| format!("Failed to read config file: {:?}", path))?;
+        toml::from_str(&content)
+            .with_context(|| format!("Failed to parse config file: {:?}", path))
+    } else {
+        Ok(toml::Value::Table(Default::default()))
+    }
+}
+
+/// Write a `toml::Value` document back to disk.
+pub fn save_toml_document(path: &std::path::Path, doc: &toml::Value) -> anyhow::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let toml_str = toml::to_string_pretty(doc).context("Failed to serialize config")?;
+    std::fs::write(path, toml_str)?;
+    Ok(())
+}
+
+/// Overwrite a single nested key (e.g. `["ai", "ollama", "default_model"]`)
+/// inside a raw TOML document, creating intermediate tables as needed.
+/// All other keys — including unknown ones — are left untouched.
+pub fn set_toml_value(doc: &mut toml::Value, path: &[&str], value: toml::Value) {
+    let Some((last, parents)) = path.split_last() else {
+        return;
+    };
+    if !doc.is_table() {
+        *doc = toml::Value::Table(Default::default());
+    }
+    let mut current = doc.as_table_mut().expect("doc is a table");
+    for key in parents {
+        let needs_table = current.get(*key).map(|v| !v.is_table()).unwrap_or(true);
+        if needs_table {
+            current.insert(key.to_string(), toml::Value::Table(Default::default()));
+        }
+        current = current
+            .get_mut(*key)
+            .and_then(|v| v.as_table_mut())
+            .expect("intermediate value is a table");
+    }
+    current.insert(last.to_string(), value);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn set_toml_value_preserves_unknown_fields() {
+        // Simulates a config file written by the daemon, which has fields the
+        // server does not model (`enable_input_monitor`, `some_future_field`).
+        let src = r#"
+[daemon]
+db_path = "~/.local/share/hyprtrace/hyprtrace.db"
+enable_input_monitor = false
+some_future_field = "keep-me"
+
+[ai.ollama]
+base_url = "http://localhost:11434"
+default_model = "qwen2.5:7b"
+"#;
+        let mut doc: toml::Value = toml::from_str(src).unwrap();
+        set_toml_value(
+            &mut doc,
+            &["ai", "ollama", "default_model"],
+            toml::Value::String("llama3:8b".to_string()),
+        );
+        let out = toml::to_string_pretty(&doc).unwrap();
+
+        // Unknown fields must survive the round-trip untouched.
+        assert!(out.contains("enable_input_monitor = false"));
+        assert!(out.contains("some_future_field = \"keep-me\""));
+        // The requested key is updated.
+        assert!(out.contains("llama3:8b"));
+
+        // The document must still deserialize into the server's Config view.
+        let reparsed: Config = toml::from_str(&out).unwrap();
+        assert_eq!(reparsed.ai.ollama.default_model, "llama3:8b");
+    }
+
+    #[test]
+    fn set_toml_value_creates_missing_sections() {
+        let mut doc = toml::Value::Table(Default::default());
+        set_toml_value(
+            &mut doc,
+            &["ai", "openai", "base_url"],
+            toml::Value::String("https://example.com/v1".to_string()),
+        );
+        let out = toml::to_string(&doc).unwrap();
+        assert!(out.contains("[ai.openai]"));
+        assert!(out.contains("https://example.com/v1"));
+    }
+
+    #[test]
+    fn disk_roundtrip_preserves_unknown_fields() {
+        let dir = std::env::temp_dir().join(format!("hyprtrace-cfg-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        std::fs::write(
+            &path,
+            "[daemon]\nenable_input_monitor = false\n\n[ai.openai]\ndefault_model = \"gpt-4o-mini\"\n",
+        )
+        .unwrap();
+
+        let mut doc = load_toml_document(&path).unwrap();
+        set_toml_value(
+            &mut doc,
+            &["ai", "openai", "default_model"],
+            toml::Value::String("gpt-4o".to_string()),
+        );
+        save_toml_document(&path, &doc).unwrap();
+
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        assert!(on_disk.contains("enable_input_monitor = false"));
+        assert!(on_disk.contains("gpt-4o"));
+        assert!(!on_disk.contains("gpt-4o-mini"));
+
+        let reparsed: Config = toml::from_str(&on_disk).unwrap();
+        assert_eq!(reparsed.ai.openai.default_model, "gpt-4o");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn load_toml_document_missing_file_is_empty_table() {
+        let path = std::env::temp_dir().join(format!(
+            "hyprtrace-cfg-missing-{}.toml",
+            uuid::Uuid::new_v4()
+        ));
+        let doc = load_toml_document(&path).unwrap();
+        assert!(doc.as_table().map(|t| t.is_empty()).unwrap_or(false));
     }
 }
