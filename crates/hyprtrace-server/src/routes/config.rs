@@ -1,10 +1,18 @@
 use crate::ai::AiManager;
-use crate::config::Config;
+use crate::config::{self, Config};
 use crate::routes::AppState;
 use axum::extract::State;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+
+// TOML paths of the config keys this endpoint may update.
+const AI_DEFAULT_PROVIDER: &[&str] = &["ai", "default_provider"];
+const AI_OLLAMA_BASE_URL: &[&str] = &["ai", "ollama", "base_url"];
+const AI_OLLAMA_MODEL: &[&str] = &["ai", "ollama", "default_model"];
+const AI_OPENAI_BASE_URL: &[&str] = &["ai", "openai", "base_url"];
+const AI_OPENAI_API_KEY: &[&str] = &["ai", "openai", "api_key"];
+const AI_OPENAI_MODEL: &[&str] = &["ai", "openai", "default_model"];
 
 #[derive(Serialize)]
 pub struct ConfigResponse {
@@ -66,24 +74,36 @@ pub async fn update_config(
 ) -> Result<Json<serde_json::Value>, Json<serde_json::Value>> {
     let mut config = state.config.lock().await;
 
+    // Collect only the keys touched by this request as (toml path, value)
+    // pairs. They are merged into the on-disk TOML document below so that
+    // unknown fields (daemon-only settings such as `enable_input_monitor`)
+    // survive the save instead of being silently reset.
+    let mut updates: Vec<(&[&str], toml::Value)> = Vec::new();
+
     if let Some(v) = req.openai_url {
+        updates.push((AI_OPENAI_BASE_URL, toml::Value::String(v.clone())));
         config.ai.openai.base_url = v;
     }
     if let Some(v) = req.openai_api_key {
         if !v.is_empty() {
+            updates.push((AI_OPENAI_API_KEY, toml::Value::String(v.clone())));
             config.ai.openai.api_key = v;
         }
     }
     if let Some(v) = req.openai_model {
+        updates.push((AI_OPENAI_MODEL, toml::Value::String(v.clone())));
         config.ai.openai.default_model = v;
     }
     if let Some(v) = req.ollama_url {
+        updates.push((AI_OLLAMA_BASE_URL, toml::Value::String(v.clone())));
         config.ai.ollama.base_url = v;
     }
     if let Some(v) = req.ollama_model {
+        updates.push((AI_OLLAMA_MODEL, toml::Value::String(v.clone())));
         config.ai.ollama.default_model = v;
     }
     if let Some(v) = req.default_provider {
+        updates.push((AI_DEFAULT_PROVIDER, toml::Value::String(v.clone())));
         config.ai.default_provider = v;
     }
     if let Some(v) = req.record_titles {
@@ -109,9 +129,20 @@ pub async fn update_config(
         Json(serde_json::json!({"error": format!("Failed to determine config path: {}", e)}))
     })?;
 
-    config.save_to(&config_path).map_err(|e| {
-        Json(serde_json::json!({"error": format!("Failed to save config: {}", e)}))
-    })?;
+    // Read-modify-write the raw TOML document: only the keys listed in
+    // `updates` are overwritten; everything else on disk (including fields
+    // the server does not model) is preserved as-is.
+    if !updates.is_empty() {
+        let mut doc = config::load_toml_document(&config_path).map_err(|e| {
+            Json(serde_json::json!({"error": format!("Failed to load config: {}", e)}))
+        })?;
+        for (path, value) in &updates {
+            config::set_toml_value(&mut doc, path, value.clone());
+        }
+        config::save_toml_document(&config_path, &doc).map_err(|e| {
+            Json(serde_json::json!({"error": format!("Failed to save config: {}", e)}))
+        })?;
+    }
 
     drop(config);
 
