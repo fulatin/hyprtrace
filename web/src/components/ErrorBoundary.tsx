@@ -3,6 +3,12 @@ import { AlertTriangle } from 'lucide-react';
 
 interface Props {
   children: ReactNode;
+  /**
+   * When any value in this array changes (e.g. the current route path), the
+   * error state is reset. This lets a user recover from a render error by
+   * navigating to another route instead of forcing a full page reload.
+   */
+  resetKeys?: unknown[];
 }
 
 interface State {
@@ -22,6 +28,18 @@ export default class ErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
     console.error('ErrorBoundary caught:', error, errorInfo);
+  }
+
+  componentDidUpdate(prevProps: Props) {
+    // If a reset key changed (e.g. the user navigated to another route), clear
+    // the error so the new view can render instead of showing the fallback.
+    if (
+      this.state.hasError &&
+      prevProps.resetKeys !== this.props.resetKeys &&
+      !shallowEqualKeys(prevProps.resetKeys, this.props.resetKeys)
+    ) {
+      this.setState({ hasError: false, error: null });
+    }
   }
 
   render() {
@@ -50,4 +68,12 @@ export default class ErrorBoundary extends Component<Props, State> {
 
     return this.props.children;
   }
+}
+
+/** Compare two arrays of reset keys by value (shallow). */
+function shallowEqualKeys(a?: unknown[], b?: unknown[]): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  if (a.length !== b.length) return false;
+  return a.every((v, i) => Object.is(v, b[i]));
 }
