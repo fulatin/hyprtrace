@@ -271,18 +271,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn config_dir_respects_xdg_config_home() {
+    fn config_dir_respects_xdg_and_falls_back_to_home() {
         // A user who points XDG_CONFIG_HOME elsewhere must have the config
         // looked up there, not under the hard-coded $HOME/.config.
         let xdg = std::env::temp_dir().join("hyprtrace-xdg-test");
         std::env::set_var("XDG_CONFIG_HOME", &xdg);
         let dir = dirs_config_dir().unwrap();
         assert_eq!(dir, xdg.join("hyprtrace"));
-        std::env::remove_var("XDG_CONFIG_HOME");
-    }
 
-    #[test]
-    fn config_dir_falls_back_to_home_config() {
         // Without XDG_CONFIG_HOME, use $HOME/.config/hyprtrace.
         std::env::remove_var("XDG_CONFIG_HOME");
         let home = std::env::var("HOME").unwrap();

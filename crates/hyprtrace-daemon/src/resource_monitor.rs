@@ -126,37 +126,23 @@ fn compute_cpu_pct(dj: u64, dt: f64, ncpu: f64, clk_tck: f64) -> f64 {
     (cpu_secs / dt / ncpu * 100.0).clamp(0.0, 100.0 * ncpu)
 }
 
-/// /proc/<pid>/stat fields (1-indexed): 14=utime, 15=stime (clock ticks),
-/// 22=starttime (process start in clock ticks since boot, used to detect PID
-/// reuse).
+/// Sample CPU ticks + process start time via procfs. Type-safe `/proc` parsing
+/// (handles a comm field with spaces/parens, and reads fields by name instead
+/// of a hard-coded index). Returns `(jiffies, starttime)`; `starttime` is used
+/// to detect PID reuse.
 fn read_proc_sample(pid: i32) -> Option<(u64, u64)> {
-    let stat = std::fs::read_to_string(format!("/proc/{}/stat", pid)).ok()?;
-    parse_proc_stat(&stat)
-}
-
-fn parse_proc_stat(stat: &str) -> Option<(u64, u64)> {
-    // The comm field (2) can contain spaces/parens; find the last ')' then
-    // skip the following space. Fields after that are reliably indexed.
-    let close = stat.rfind(')')?;
-    let rest = &stat[close + 1..];
-    let fields: Vec<&str> = rest.split_whitespace().collect();
-    // rest starts right after ')', so index 0 here == field 3 in /proc format.
-    let utime: u64 = fields.get(11)?.parse().ok()?; // field 14
-    let stime: u64 = fields.get(12)?.parse().ok()?; // field 15
-    let starttime: u64 = fields.get(19)?.parse().ok()?; // field 22
-    Some((utime + stime, starttime))
+    let proc = procfs::process::Process::new(pid).ok()?;
+    let stat = proc.stat().ok()?;
+    Some((stat.utime + stat.stime, stat.starttime))
 }
 
 /// RSS in KB from /proc/<pid>/status VmRSS.
+/// RSS in KB via procfs. Returns `None` when the process reports no RSS line
+/// (e.g. a kernel thread), which the caller skips rather than recording 0.
 fn read_proc_mem_kb(pid: i32) -> Option<i64> {
-    let status = std::fs::read_to_string(format!("/proc/{}/status", pid)).ok()?;
-    for line in status.lines() {
-        if let Some(rest) = line.strip_prefix("VmRSS:") {
-            let kb: i64 = rest.trim().trim_end_matches("kB").trim().parse().ok()?;
-            return Some(kb);
-        }
-    }
-    None
+    let proc = procfs::process::Process::new(pid).ok()?;
+    let status = proc.status().ok()?;
+    status.vmrss.map(|kb| kb as i64)
 }
 
 #[cfg(test)]
@@ -213,22 +199,18 @@ mod tests {
     }
 
     #[test]
-    fn proc_stat_parsing_handles_comm_with_parens_and_spaces() {
-        // comm contains ')' and spaces; utime=250, stime=50 (fields 14/15),
-        // starttime=12345 (field 22).
-        let stat = "42 (firefox (web content)) R 1 0 0 0 0 0 0 0 0 0 250 50 0 0 0 0 0 0 12345";
-        assert_eq!(parse_proc_stat(stat), Some((300, 12345)));
+    fn read_proc_sample_reads_current_process() {
+        // procfs parses the real /proc/<pid>/stat; sanity-check it returns a
+        // jiffies+starttime pair for this process. CPU ticks may be 0 for a
+        // process that has not been scheduled yet, so only assert on starttime.
+        let pid = std::process::id() as i32;
+        let (_jiffies, starttime) = read_proc_sample(pid).expect("current process is readable");
+        assert!(starttime > 0, "starttime is positive");
     }
 
     #[test]
-    fn proc_stat_parsing_rejects_truncated_or_malformed_input() {
-        assert_eq!(parse_proc_stat(""), None);
-        assert_eq!(parse_proc_stat("42 (vim) R 1 2 3"), None);
-        assert_eq!(parse_proc_stat("no closing paren 1 2 3"), None);
-        // utime (field 14, index 11) is not a number here.
-        assert_eq!(
-            parse_proc_stat("7 (app) R x x x x x x x x x x x 2"),
-            None
-        );
+    fn read_proc_sample_missing_pid_is_none() {
+        // A very unlikely-to-exist pid returns None, not a panic.
+        assert!(read_proc_sample(i32::MAX).is_none());
     }
 }
