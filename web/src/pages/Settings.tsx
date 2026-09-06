@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { format, subDays } from 'date-fns';
 import { api } from '../lib/api';
 import { Wifi, WifiOff, Download, Save, Key, Globe, Cpu, BarChart3, Tags, Plus, Trash2, Target, FileText, FolderKanban } from 'lucide-react';
 import type { AiModelsResponse, CategoryRule, ConfigResponse, Goal, Project, ProjectRule, Session } from '../lib/types';
@@ -53,8 +54,8 @@ export default function Settings() {
   const [titlesMsg, setTitlesMsg] = useState('');
 
   const [retentionDays, setRetentionDays] = useState(0);
-  const days7Ago = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
-  const today = new Date().toISOString().slice(0, 10);
+  const days7Ago = format(subDays(new Date(), 7), 'yyyy-MM-dd');
+  const today = format(new Date(), 'yyyy-MM-dd');
   const [deleteFrom, setDeleteFrom] = useState(days7Ago);
   const [deleteTo, setDeleteTo] = useState(today);
   const [deleteClass, setDeleteClass] = useState('');
@@ -182,8 +183,8 @@ export default function Settings() {
   const handleExport = async () => {
     setExporting(true);
     try {
-      const today = new Date().toISOString().slice(0, 10);
-      const lastMonth = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+      const today = format(new Date(), 'yyyy-MM-dd');
+      const lastMonth = format(subDays(new Date(), 30), 'yyyy-MM-dd');
 
       let allSessions: Session[] = [];
       let page = 1;
@@ -959,8 +960,8 @@ export default function Settings() {
             </button>
             <button
               onClick={async () => {
-                const today = new Date().toISOString().slice(0, 10);
-                const weekAgo = new Date(Date.now() - 6 * 86400000).toISOString().slice(0, 10);
+                const today = format(new Date(), 'yyyy-MM-dd');
+                const weekAgo = format(subDays(new Date(), 6), 'yyyy-MM-dd');
                 try { await api.report(weekAgo, today); }
                 catch (e) { alert('Report failed'); }
               }}
