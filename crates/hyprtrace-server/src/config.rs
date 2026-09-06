@@ -261,8 +261,12 @@ impl Config {
 }
 
 fn dirs_config_dir() -> anyhow::Result<PathBuf> {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
-    Ok(PathBuf::from(home).join(".config/hyprtrace"))
+    // Respect XDG_CONFIG_HOME (falling back to $HOME/.config) via the
+    // `directories` crate instead of hard-coding $HOME/.config, which ignores
+    // a user's XDG override.
+    directories::ProjectDirs::from("", "", "hyprtrace")
+        .map(|d| d.config_dir().to_path_buf())
+        .ok_or_else(|| anyhow::anyhow!("cannot determine config directory (is HOME set?)"))
 }
 
 fn expand_tilde(path: &str) -> PathBuf {
