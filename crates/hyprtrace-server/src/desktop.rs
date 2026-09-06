@@ -58,7 +58,7 @@ impl AppMetadataResolver {
             if path.extension().and_then(|e| e.to_str()) != Some("desktop") {
                 continue;
             }
-            if let Some(entry) = parse_desktop_file(&path) {
+            if let Some(entry) = parse_desktop_file_with_locale(&path, &current_locale()) {
                 self.insert(entry);
             }
         }
@@ -112,31 +112,61 @@ pub fn global() -> &'static AppMetadataResolver {
 }
 
 /// Directories to scan, in order. Missing directories are ignored by the
-/// caller, so constructing the list always succeeds.
+/// caller, so constructing the list always succeeds. Honors `$XDG_DATA_HOME`
+/// and `$XDG_DATA_DIRS` so Flatpak (`~/.local/share/flatpak/exports/share`),
+/// Snap (`/var/lib/snapd/desktop`) and custom XDG setups are found.
 fn scan_directories() -> Vec<PathBuf> {
-    let mut dirs = vec![
-        PathBuf::from("/usr/share/applications"),
-        PathBuf::from("/usr/local/share/applications"),
-    ];
-    if let Some(home) = std::env::var_os("HOME") {
+    let mut dirs = Vec::new();
+
+    // $XDG_DATA_HOME (defaults to ~/.local/share).
+    if let Some(xdg) = std::env::var_os("XDG_DATA_HOME") {
+        dirs.push(PathBuf::from(xdg).join("applications"));
+    } else if let Some(home) = std::env::var_os("HOME") {
         dirs.push(PathBuf::from(home).join(".local/share/applications"));
     }
+
+    // $XDG_DATA_DIRS (defaults to /usr/local/share:/usr/share).
+    let data_dirs = std::env::var("XDG_DATA_DIRS").unwrap_or_else(|_| {
+        "/usr/local/share:/usr/share".to_string()
+    });
+    for d in data_dirs.split(':') {
+        if !d.is_empty() {
+            dirs.push(PathBuf::from(d).join("applications"));
+        }
+    }
+
     dirs
 }
 
 /// Parse one `.desktop` file. Returns `None` when the file is missing,
-/// unreadable, has no plain `Name`, or is marked `NoDisplay=true` /
-/// `Hidden=true`.
+/// unreadable, is not a `Type=Application` entry, has no plain `Name`, or is
+/// marked `NoDisplay=true` / `Hidden=true`.
 ///
-/// Only the values inside the `[Desktop Entry]` group are considered, and
-/// only the plain `Name` key is used (localized `Name[xx]` keys are ignored).
+/// Only the values inside the `[Desktop Entry]` group are considered. The
+/// display name prefers the current locale's `Name[<locale>]` key, falling back
+/// to the plain `Name`. Freedesktop escape sequences (`\s`, `\n`, `\t`, `\r`,
+/// `\\`) are decoded in string values.
 fn parse_desktop_file(path: &Path) -> Option<DesktopEntry> {
+    parse_desktop_file_with_locale(path, &current_locale())
+}
+
+/// Parse one `.desktop` file. Returns `None` when the file is missing,
+/// unreadable, is not a `Type=Application` entry, has no plain `Name`, or is
+/// marked `NoDisplay=true` / `Hidden=true`.
+///
+/// Only the values inside the `[Desktop Entry]` group are considered. The
+/// display name prefers the `Name[<locale>]` key matching `locale`, falling
+/// back to the plain `Name`. Freedesktop escape sequences (`\s`, `\n`, `\t`,
+/// `\r`, `\\`) are decoded in string values.
+fn parse_desktop_file_with_locale(path: &Path, locale: &str) -> Option<DesktopEntry> {
     let content = std::fs::read_to_string(path).ok()?;
 
     let mut in_desktop_entry = false;
     let mut name: Option<String> = None;
+    let mut localized_name: Option<String> = None;
     let mut icon: Option<String> = None;
     let mut startup_wm_class: Option<String> = None;
+    let mut entry_type: Option<String> = None;
     let mut no_display = false;
     let mut hidden = false;
 
@@ -165,20 +195,31 @@ fn parse_desktop_file(path: &Path) -> Option<DesktopEntry> {
         };
 
         match key {
-            // Only the plain `Name`; localized `Name[xx]` never overrides it.
+            "Type" => {
+                if entry_type.is_none() {
+                    entry_type = Some(value.to_string());
+                }
+            }
+            // Localized name wins when it matches the current locale.
             "Name" => {
                 if name.is_none() {
-                    name = Some(value.to_string());
+                    name = Some(unescape(value).to_string());
+                }
+            }
+            k if k.starts_with("Name[") && k.ends_with(']') && name.is_some() => {
+                let lang = &k[5..k.len() - 1];
+                if lang.eq_ignore_ascii_case(&locale) {
+                    localized_name = Some(unescape(value).to_string());
                 }
             }
             "Icon" => {
                 if icon.is_none() {
-                    icon = Some(value.to_string());
+                    icon = Some(unescape(value).to_string());
                 }
             }
             "StartupWMClass" => {
                 if startup_wm_class.is_none() {
-                    startup_wm_class = Some(value.to_string());
+                    startup_wm_class = Some(unescape(value).to_string());
                 }
             }
             "NoDisplay" => {
@@ -198,8 +239,15 @@ fn parse_desktop_file(path: &Path) -> Option<DesktopEntry> {
     if no_display || hidden {
         return None;
     }
+    // Only application entries; Type=Link / Type=Directory are not apps.
+    if let Some(t) = &entry_type {
+        if !t.eq_ignore_ascii_case("Application") {
+            return None;
+        }
+    }
 
     let name = name?;
+    let display_name = localized_name.unwrap_or_else(|| name.clone());
     let icon = icon.unwrap_or_default();
 
     let stem = path
@@ -217,13 +265,46 @@ fn parse_desktop_file(path: &Path) -> Option<DesktopEntry> {
     Some(DesktopEntry {
         metadata: AppMetadata {
             desktop_id,
-            display_name: name.clone(),
+            display_name,
             icon,
         },
         startup_wm_class,
         stem,
         name,
     })
+}
+
+/// Current locale's language tag (e.g. `zh_CN` from `LANG=zh_CN.UTF-8`).
+fn current_locale() -> String {
+    let lang = std::env::var("LANG")
+        .or_else(|_| std::env::var("LC_MESSAGES"))
+        .unwrap_or_default();
+    lang.split(['.', '@']).next().unwrap_or("").to_string()
+}
+
+/// Decode freedesktop escape sequences in a `.desktop` string value.
+fn unescape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some('s') => out.push(' '),
+                Some('n') => out.push('\n'),
+                Some('t') => out.push('\t'),
+                Some('r') => out.push('\r'),
+                Some('\\') => out.push('\\'),
+                Some(other) => {
+                    out.push('\\');
+                    out.push(other);
+                }
+                None => out.push('\\'),
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -307,7 +388,7 @@ mod tests {
     }
 
     #[test]
-    fn stem_match_and_localized_name_ignored() {
+    fn stem_match_and_localized_name_ignored_when_locale_differs() {
         let dir = unique_dir("stem");
         write_file(
             &dir,
@@ -315,12 +396,14 @@ mod tests {
             "[Desktop Entry]\nName=Firefox\nName[zh_CN]=火狐浏览器\nIcon=firefox\n",
         );
 
+        // With a locale that does not match, the plain Name is used.
+        std::env::set_var("LANG", "en_US.UTF-8");
         let resolver = resolver_over(&dir);
         // Stem match.
         let meta = resolver.lookup("firefox").expect("stem should match");
         assert_eq!(
             meta.display_name, "Firefox",
-            "localized Name must not override plain Name"
+            "unmatched localized Name must not override plain Name"
         );
         assert_eq!(meta.icon, "firefox");
 
@@ -329,6 +412,7 @@ mod tests {
             .lookup("FIREFOX")
             .expect("name fallback should match");
         assert_eq!(meta.display_name, "Firefox");
+        std::env::remove_var("LANG");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -348,4 +432,51 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn localized_name_wins_when_locale_matches() {
+        let dir = unique_dir("locale");
+        let path = dir.join("firefox.desktop");
+        write_file(
+            &dir,
+            "firefox.desktop",
+            "[Desktop Entry]\nType=Application\nName=Firefox\nName[zh_CN]=火狐浏览器\nIcon=firefox\n",
+        );
+        // Matching locale uses the localized name.
+        let entry = parse_desktop_file_with_locale(&path, "zh_CN").expect("parsed");
+        assert_eq!(entry.metadata.display_name, "火狐浏览器");
+        // Non-matching locale falls back to the plain Name.
+        let entry = parse_desktop_file_with_locale(&path, "en_US").expect("parsed");
+        assert_eq!(entry.metadata.display_name, "Firefox");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn desktop_entry_decodes_escapes() {
+        let dir = unique_dir("escapes");
+        write_file(
+            &dir,
+            "code.desktop",
+            "[Desktop Entry]\nType=Application\nName=Code\\tEditor\nIcon=code\n",
+        );
+        let resolver = resolver_over(&dir);
+        let meta = resolver.lookup("code").expect("stem match");
+        assert_eq!(meta.display_name, "Code\tEditor");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn non_application_entries_are_skipped() {
+        let dir = unique_dir("nonapp");
+        write_file(
+            &dir,
+            "link.desktop",
+            "[Desktop Entry]\nType=Link\nName=Some Link\nIcon=link\n",
+        );
+        let resolver = resolver_over(&dir);
+        assert!(resolver.lookup("some link").is_none());
+        assert!(resolver.lookup("link").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
 }
