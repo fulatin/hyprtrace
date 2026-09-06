@@ -16,7 +16,7 @@ pub fn spawn_resource_monitor(db: Arc<Mutex<Database>>, interval_secs: u64) {
         let clk_tck = clock_ticks_per_second();
 
         // (pid, utime+stime jiffies, wall time of that reading)
-        let mut last: Option<(i32, u64, std::time::Instant)> = None;
+        let mut last: Option<(i32, u64, u64, std::time::Instant)> = None;
 
         loop {
             std::thread::sleep(interval);
@@ -40,18 +40,32 @@ pub fn spawn_resource_monitor(db: Arc<Mutex<Database>>, interval_secs: u64) {
             };
             let (session_id, class, pid) = current;
 
-            let jiffies = match read_proc_jiffies(pid) {
-                Some(j) => j,
+            // Sample CPU ticks + process start time. The start time lets us
+            // detect a reused PID (the old process exited and a new one took
+            // its id), so we don't attribute the new process's CPU time to the
+            // old sample.
+            let (jiffies, starttime) = match read_proc_sample(pid) {
+                Some(x) => x,
                 None => {
                     last = None;
                     continue;
                 }
             };
-            let mem_kb = read_proc_mem_kb(pid).unwrap_or(0);
+            // A process without an RSS line (e.g. a kernel thread) reports
+            // None; skip it rather than recording a bogus 0 MB.
+            let mem_kb = match read_proc_mem_kb(pid) {
+                Some(kb) => kb,
+                None => {
+                    last = None;
+                    continue;
+                }
+            };
             let now = std::time::Instant::now();
 
             let cpu_pct = match &last {
-                Some((lp, lj, lt)) if *lp == pid => {
+                Some((lp, lstart, lj, lt))
+                    if *lp == pid && *lstart == starttime =>
+                {
                     let dj = jiffies.saturating_sub(*lj);
                     let dt = now.duration_since(*lt).as_secs_f64();
                     compute_cpu_pct(dj, dt, ncpu, clk_tck)
@@ -81,7 +95,7 @@ pub fn spawn_resource_monitor(db: Arc<Mutex<Database>>, interval_secs: u64) {
                 mem_kb
             );
 
-            last = Some((pid, jiffies, now));
+            last = Some((pid, starttime, jiffies, now));
         }
     });
 }
@@ -112,13 +126,15 @@ fn compute_cpu_pct(dj: u64, dt: f64, ncpu: f64, clk_tck: f64) -> f64 {
     (cpu_secs / dt / ncpu * 100.0).clamp(0.0, 100.0 * ncpu)
 }
 
-/// /proc/<pid>/stat fields (1-indexed): 14=utime, 15=stime (clock ticks).
-fn read_proc_jiffies(pid: i32) -> Option<u64> {
+/// /proc/<pid>/stat fields (1-indexed): 14=utime, 15=stime (clock ticks),
+/// 22=starttime (process start in clock ticks since boot, used to detect PID
+/// reuse).
+fn read_proc_sample(pid: i32) -> Option<(u64, u64)> {
     let stat = std::fs::read_to_string(format!("/proc/{}/stat", pid)).ok()?;
-    parse_proc_stat_jiffies(&stat)
+    parse_proc_stat(&stat)
 }
 
-fn parse_proc_stat_jiffies(stat: &str) -> Option<u64> {
+fn parse_proc_stat(stat: &str) -> Option<(u64, u64)> {
     // The comm field (2) can contain spaces/parens; find the last ')' then
     // skip the following space. Fields after that are reliably indexed.
     let close = stat.rfind(')')?;
@@ -127,7 +143,8 @@ fn parse_proc_stat_jiffies(stat: &str) -> Option<u64> {
     // rest starts right after ')', so index 0 here == field 3 in /proc format.
     let utime: u64 = fields.get(11)?.parse().ok()?; // field 14
     let stime: u64 = fields.get(12)?.parse().ok()?; // field 15
-    Some(utime + stime)
+    let starttime: u64 = fields.get(19)?.parse().ok()?; // field 22
+    Some((utime + stime, starttime))
 }
 
 /// RSS in KB from /proc/<pid>/status VmRSS.
@@ -197,19 +214,20 @@ mod tests {
 
     #[test]
     fn proc_stat_parsing_handles_comm_with_parens_and_spaces() {
-        // comm contains ')' and spaces; utime=250, stime=50 (fields 14/15).
-        let stat = "42 (firefox (web content)) R 1 0 0 0 0 0 0 0 0 0 250 50 0 0";
-        assert_eq!(parse_proc_stat_jiffies(stat), Some(300));
+        // comm contains ')' and spaces; utime=250, stime=50 (fields 14/15),
+        // starttime=12345 (field 22).
+        let stat = "42 (firefox (web content)) R 1 0 0 0 0 0 0 0 0 0 250 50 0 0 0 0 0 0 12345";
+        assert_eq!(parse_proc_stat(stat), Some((300, 12345)));
     }
 
     #[test]
     fn proc_stat_parsing_rejects_truncated_or_malformed_input() {
-        assert_eq!(parse_proc_stat_jiffies(""), None);
-        assert_eq!(parse_proc_stat_jiffies("42 (vim) R 1 2 3"), None);
-        assert_eq!(parse_proc_stat_jiffies("no closing paren 1 2 3"), None);
+        assert_eq!(parse_proc_stat(""), None);
+        assert_eq!(parse_proc_stat("42 (vim) R 1 2 3"), None);
+        assert_eq!(parse_proc_stat("no closing paren 1 2 3"), None);
         // utime (field 14, index 11) is not a number here.
         assert_eq!(
-            parse_proc_stat_jiffies("7 (app) R x x x x x x x x x x x 2"),
+            parse_proc_stat("7 (app) R x x x x x x x x x x x 2"),
             None
         );
     }
