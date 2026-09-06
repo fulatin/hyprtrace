@@ -3,7 +3,7 @@ use hyprland::data::Client;
 use hyprland::prelude::HyprDataActiveOptional;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 #[derive(Clone)]
 pub struct ActivityState {
@@ -225,7 +225,7 @@ fn query_loginctl_idle() -> Option<Duration> {
         .args([
             "show-user",
             "--property=IdleHint",
-            "--property=IdleSinceHint",
+            "--property=IdleSinceHintMonotonic",
         ])
         .output()
         .ok()?;
@@ -235,35 +235,55 @@ fn query_loginctl_idle() -> Option<Duration> {
     }
 
     let stdout = String::from_utf8(output.stdout).ok()?;
-    parse_loginctl_idle(&stdout, SystemTime::now())
+    let now_mono_us = monotonic_micros()?;
+    parse_loginctl_idle(&stdout, now_mono_us)
 }
 
 /// Parse `loginctl show-user` output into an idle duration.
 ///
 /// Returns `Some(duration)` only when logind explicitly reports
-/// `IdleHint=yes` AND a parseable `IdleSinceHint`. Anything else
+/// `IdleHint=yes` AND a parseable `IdleSinceHintMonotonic`. Anything else
 /// (`IdleHint=no`, missing/garbled timestamp, empty output) maps to `None`
 /// ("no idle information") so the evdev fallback stays in charge.
-fn parse_loginctl_idle(stdout: &str, now: SystemTime) -> Option<Duration> {
+///
+/// `IdleSinceHintMonotonic` is `CLOCK_MONOTONIC` microseconds since boot, so a
+/// wall-clock jump (NTP correction, manual time change) cannot skew it, and
+/// time spent in suspend is not counted — a 2h lid-close does not turn into a
+/// false 2h idle span.
+fn parse_loginctl_idle(stdout: &str, now_mono_us: u64) -> Option<Duration> {
     let mut idle_hint = false;
-    let mut idle_since: u64 = 0;
+    let mut idle_since_mono: u64 = 0;
 
     for line in stdout.lines() {
         if line == "IdleHint=yes" {
             idle_hint = true;
-        } else if let Some(val) = line.strip_prefix("IdleSinceHint=") {
-            idle_since = val.parse().unwrap_or(0);
+        } else if let Some(val) = line.strip_prefix("IdleSinceHintMonotonic=") {
+            idle_since_mono = val.parse().unwrap_or(0);
         }
     }
 
-    if !idle_hint || idle_since == 0 {
+    if !idle_hint || idle_since_mono == 0 {
         return None;
     }
 
-    let since = UNIX_EPOCH + Duration::from_micros(idle_since);
-    // Clock skew can put IdleSinceHint slightly in the future; treat that
-    // as unknown rather than as a bogus duration.
-    now.duration_since(since).ok()
+    // `checked_sub` treats a (theoretically impossible) future timestamp as
+    // "no information" rather than a bogus duration.
+    Some(Duration::from_micros(now_mono_us.checked_sub(idle_since_mono)?))
+}
+
+/// Current `CLOCK_MONOTONIC` time in microseconds since boot.
+fn monotonic_micros() -> Option<u64> {
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: `ts` is a valid pointer to a `timespec` that clock_gettime fills
+    // in; it returns 0 on success and -1 on error.
+    let ok = unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) };
+    if ok != 0 {
+        return None;
+    }
+    Some((ts.tv_sec as u64) * 1_000_000 + (ts.tv_nsec as u64) / 1_000)
 }
 
 fn resume_session(db: &Arc<Mutex<Database>>) -> anyhow::Result<()> {
@@ -330,46 +350,40 @@ mod tests {
         // IdleHint=no forever. This must map to None ("no information")
         // so the evdev fallback stays in charge — NOT to Some(ZERO),
         // which would disable idle detection entirely (review H2).
-        let out = "IdleHint=no\nIdleSinceHint=0\n";
-        assert!(parse_loginctl_idle(out, SystemTime::now()).is_none());
+        let out = "IdleHint=no\nIdleSinceHintMonotonic=0\n";
+        assert!(parse_loginctl_idle(out, 1_000_000).is_none());
     }
 
     #[test]
     fn loginctl_idle_hint_yes_with_since_is_adopted() {
-        let now = SystemTime::now();
-        let since_us = now.duration_since(UNIX_EPOCH).unwrap().as_micros() as u64
-            - Duration::from_secs(90).as_micros() as u64;
-        let out = format!("IdleHint=yes\nIdleSinceHint={}\n", since_us);
-        let d = parse_loginctl_idle(&out, now).expect("expected a duration");
+        // The idle hint was set 90s (in monotonic microseconds) before "now".
+        let since_mono = 1_000_000u64;
+        let now_mono = since_mono + 90_000_000;
+        let out = format!("IdleHint=yes\nIdleSinceHintMonotonic={}\n", since_mono);
+        let d = parse_loginctl_idle(&out, now_mono).expect("expected a duration");
         assert!((89..=91).contains(&d.as_secs()), "got {}s", d.as_secs());
     }
 
     #[test]
     fn loginctl_idle_hint_yes_without_usable_since_is_unknown() {
         // Missing timestamp or garbage must not be reported as 0s idle.
-        assert!(parse_loginctl_idle("IdleHint=yes\n", SystemTime::now()).is_none());
-        assert!(
-            parse_loginctl_idle("IdleHint=yes\nIdleSinceHint=abc\n", SystemTime::now()).is_none()
-        );
-        assert!(
-            parse_loginctl_idle("IdleHint=yes\nIdleSinceHint=0\n", SystemTime::now()).is_none()
-        );
+        assert!(parse_loginctl_idle("IdleHint=yes\n", 1_000_000).is_none());
+        assert!(parse_loginctl_idle("IdleHint=yes\nIdleSinceHintMonotonic=abc\n", 1_000_000).is_none());
+        assert!(parse_loginctl_idle("IdleHint=yes\nIdleSinceHintMonotonic=0\n", 1_000_000).is_none());
     }
 
     #[test]
     fn loginctl_empty_or_garbage_output_is_unknown() {
-        assert!(parse_loginctl_idle("", SystemTime::now()).is_none());
-        assert!(parse_loginctl_idle("garbage output", SystemTime::now()).is_none());
+        assert!(parse_loginctl_idle("", 1_000_000).is_none());
+        assert!(parse_loginctl_idle("garbage output", 1_000_000).is_none());
     }
 
     #[test]
     fn loginctl_since_in_future_is_unknown() {
-        // Clock skew guard: a future IdleSinceHint yields no duration
-        // instead of a bogus value.
-        let now = SystemTime::now();
-        let since_us = now.duration_since(UNIX_EPOCH).unwrap().as_micros() as u64 + 60_000_000;
-        let out = format!("IdleHint=yes\nIdleSinceHint={}\n", since_us);
-        assert!(parse_loginctl_idle(&out, now).is_none());
+        // A timestamp that is somehow ahead of "now" yields no duration
+        // instead of a bogus value (handled by checked_sub).
+        let out = format!("IdleHint=yes\nIdleSinceHintMonotonic={}\n", 1_000_000u64 + 60_000_000);
+        assert!(parse_loginctl_idle(&out, 1_000_000).is_none());
     }
 
     #[test]
