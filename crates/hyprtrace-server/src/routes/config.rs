@@ -83,10 +83,10 @@ pub async fn update_config(
     // They are merged into the on-disk TOML document below so that unknown
     // fields (daemon-only settings such as `enable_input_monitor`) survive the
     // save instead of being silently reset.
-    let mut updates: Vec<(&[&str], Option<toml::Value>)> = Vec::new();
+    let mut updates: Vec<(&[&str], Option<toml_edit::Value>)> = Vec::new();
 
     if let Some(v) = req.openai_url {
-        updates.push((AI_OPENAI_BASE_URL, Some(toml::Value::String(v.clone()))));
+        updates.push((AI_OPENAI_BASE_URL, Some(toml_edit::Value::from(v.clone()))));
         config.ai.openai.base_url = v;
     }
     if let Some(v) = req.openai_api_key {
@@ -98,48 +98,48 @@ pub async fn update_config(
             updates.push((AI_OPENAI_API_KEY, None));
             config.ai.openai.api_key.clear();
         } else {
-            updates.push((AI_OPENAI_API_KEY, Some(toml::Value::String(v.clone()))));
+            updates.push((AI_OPENAI_API_KEY, Some(toml_edit::Value::from(v.clone()))));
             config.ai.openai.api_key = v;
         }
     }
     if let Some(v) = req.openai_model {
-        updates.push((AI_OPENAI_MODEL, Some(toml::Value::String(v.clone()))));
+        updates.push((AI_OPENAI_MODEL, Some(toml_edit::Value::from(v.clone()))));
         config.ai.openai.default_model = v;
     }
     if let Some(v) = req.ollama_url {
-        updates.push((AI_OLLAMA_BASE_URL, Some(toml::Value::String(v.clone()))));
+        updates.push((AI_OLLAMA_BASE_URL, Some(toml_edit::Value::from(v.clone()))));
         config.ai.ollama.base_url = v;
     }
     if let Some(v) = req.ollama_model {
-        updates.push((AI_OLLAMA_MODEL, Some(toml::Value::String(v.clone()))));
+        updates.push((AI_OLLAMA_MODEL, Some(toml_edit::Value::from(v.clone()))));
         config.ai.ollama.default_model = v;
     }
     if let Some(v) = req.default_provider {
-        updates.push((AI_DEFAULT_PROVIDER, Some(toml::Value::String(v.clone()))));
+        updates.push((AI_DEFAULT_PROVIDER, Some(toml_edit::Value::from(v.clone()))));
         config.ai.default_provider = v;
     }
     if let Some(v) = req.record_titles {
-        updates.push((DAEMON_RECORD_TITLES, Some(toml::Value::Boolean(v))));
+        updates.push((DAEMON_RECORD_TITLES, Some(toml_edit::Value::from(v))));
         config.daemon.record_titles = v;
     }
     if let Some(v) = req.retention_days {
-        updates.push((SERVER_RETENTION_DAYS, Some(toml::Value::Integer(v as i64))));
+        updates.push((SERVER_RETENTION_DAYS, Some(toml_edit::Value::from(v as i64))));
         config.server.retention_days = v;
     }
     if let Some(v) = req.weekly_report_enabled {
-        updates.push((SERVER_WEEKLY_ENABLED, Some(toml::Value::Boolean(v))));
+        updates.push((SERVER_WEEKLY_ENABLED, Some(toml_edit::Value::from(v))));
         config.server.weekly_report_enabled = v;
     }
     if let Some(v) = req.weekly_report_day {
-        updates.push((SERVER_WEEKLY_DAY, Some(toml::Value::Integer(v as i64))));
+        updates.push((SERVER_WEEKLY_DAY, Some(toml_edit::Value::from(v as i64))));
         config.server.weekly_report_day = v;
     }
     if let Some(v) = req.weekly_report_hour {
-        updates.push((SERVER_WEEKLY_HOUR, Some(toml::Value::Integer(v as i64))));
+        updates.push((SERVER_WEEKLY_HOUR, Some(toml_edit::Value::from(v as i64))));
         config.server.weekly_report_hour = v;
     }
     if let Some(v) = req.weekly_report_minute {
-        updates.push((SERVER_WEEKLY_MINUTE, Some(toml::Value::Integer(v as i64))));
+        updates.push((SERVER_WEEKLY_MINUTE, Some(toml_edit::Value::from(v as i64))));
         config.server.weekly_report_minute = v;
     }
 

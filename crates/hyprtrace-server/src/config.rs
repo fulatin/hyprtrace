@@ -278,71 +278,62 @@ fn expand_tilde(path: &str) -> PathBuf {
     }
 }
 
-/// Load the raw TOML document from disk as a `toml::Value`.
-///
-/// Unlike `Config::load`, this keeps every key present in the file, including
-/// fields the server does not model (e.g. daemon-only settings such as
-/// `enable_input_monitor`). Returns an empty table if the file doesn't exist.
-pub fn load_toml_document(path: &std::path::Path) -> anyhow::Result<toml::Value> {
+/// Load the raw TOML document from disk as a `toml_edit::DocumentMut`, which
+/// preserves comments, ordering and formatting so a later save does not mangle
+/// the file. Unlike `Config::load`, this keeps every key present in the file,
+/// including fields the server does not model (e.g. daemon-only settings such
+/// as `enable_input_monitor`). Returns an empty document if the file doesn't
+/// exist.
+pub fn load_toml_document(path: &std::path::Path) -> anyhow::Result<toml_edit::DocumentMut> {
     if path.exists() {
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read config file: {:?}", path))?;
-        toml::from_str(&content).with_context(|| format!("Failed to parse config file: {:?}", path))
+        content
+            .parse::<toml_edit::DocumentMut>()
+            .with_context(|| format!("Failed to parse config file: {:?}", path))
     } else {
-        Ok(toml::Value::Table(Default::default()))
+        Ok(toml_edit::DocumentMut::new())
     }
 }
 
-/// Write a `toml::Value` document back to disk.
-///
-/// The write is atomic (a temp file in the same directory is renamed into
-/// place) so a crash mid-write cannot leave a half-written config, and the
+/// Write a `toml_edit::DocumentMut` back to disk, preserving its formatting and
+/// comments. The write is atomic (a temp file in the same directory is renamed
+/// into place) so a crash mid-write cannot leave a half-written config, and the
 /// file is created with mode 0600 because it may contain an API key.
-pub fn save_toml_document(path: &std::path::Path, doc: &toml::Value) -> anyhow::Result<()> {
+pub fn save_toml_document(
+    path: &std::path::Path,
+    doc: &toml_edit::DocumentMut,
+) -> anyhow::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let toml_str = toml::to_string_pretty(doc).context("Failed to serialize config")?;
+    let toml_str = doc.to_string();
 
-    let tmp = path.with_extension("toml.tmp");
-    {
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&tmp)?;
-        f.write_all(toml_str.as_bytes())?;
-        f.sync_all()?;
-    }
-    std::fs::rename(&tmp, path)?;
+    let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
+    use std::io::Write;
+    tmp.write_all(toml_str.as_bytes())?;
+    tmp.persist(path)?;
     Ok(())
 }
 
 /// Overwrite a single nested key (e.g. `["ai", "ollama", "default_model"]`)
 /// inside a raw TOML document, creating intermediate tables as needed.
-/// All other keys — including unknown ones — are left untouched.
-pub fn set_toml_value(doc: &mut toml::Value, path: &[&str], value: toml::Value) {
+/// All other keys — including unknown ones — are left untouched, and comments
+/// and formatting are preserved (unlike `toml::Value` re-serialization).
+pub fn set_toml_value(doc: &mut toml_edit::DocumentMut, path: &[&str], value: toml_edit::Value) {
     let Some((last, parents)) = path.split_last() else {
         return;
     };
-    if !doc.is_table() {
-        *doc = toml::Value::Table(Default::default());
-    }
-    let mut current = doc.as_table_mut().expect("doc is a table");
+    let mut table = doc.as_table_mut();
     for key in parents {
-        let needs_table = current.get(*key).map(|v| !v.is_table()).unwrap_or(true);
-        if needs_table {
-            current.insert(key.to_string(), toml::Value::Table(Default::default()));
-        }
-        current = current
-            .get_mut(*key)
-            .and_then(|v| v.as_table_mut())
+        table = table
+            .entry(*key)
+            .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
+            .as_table_mut()
             .expect("intermediate value is a table");
     }
-    current.insert(last.to_string(), value);
+    table.insert(*last, toml_edit::Item::Value(value));
 }
 
 /// Remove a single nested key (e.g. `["ai", "openai", "api_key"]`) from a raw
@@ -353,27 +344,21 @@ pub fn set_toml_value(doc: &mut toml::Value, path: &[&str], value: toml::Value) 
 /// defaulted: an absent API key is not the same thing as an empty one, and
 /// storing `api_key = ""` makes the provider look configured while every
 /// request fails authentication.
-pub fn remove_toml_value(doc: &mut toml::Value, path: &[&str]) -> bool {
+pub fn remove_toml_value(doc: &mut toml_edit::DocumentMut, path: &[&str]) -> bool {
     let Some((last, parents)) = path.split_last() else {
         return false;
     };
-    let Some(doc_table) = doc.as_table_mut() else {
-        return false;
-    };
+    let mut table = doc.as_table_mut();
     if parents.is_empty() {
-        return doc_table.remove(*last).is_some();
+        return table.remove(*last).is_some();
     }
-    let mut current = doc_table;
     for key in parents {
-        let Some(next) = current.get_mut(*key).and_then(|v| v.as_table_mut()) else {
+        let Some(next) = table.get_mut(*key).and_then(|v| v.as_table_mut()) else {
             return false;
         };
-        current = next;
+        table = next;
     }
-    match current.remove(*last) {
-        Some(_) => true,
-        None => false,
-    }
+    table.remove(*last).is_some()
 }
 
 #[cfg(test)]
@@ -382,13 +367,13 @@ mod tests {
 
     #[test]
     fn remove_toml_value_deletes_only_the_named_key() {
-        let mut doc: toml::Value = toml::from_str(
-            "[ai.openai]\napi_key = \"sk-123\"\nbase_url = \"https://api.openai.com/v1\"\n\n[daemon]\nrecord_titles = true\n",
-        )
-        .unwrap();
+        let mut doc: toml_edit::DocumentMut =
+            "[ai.openai]\napi_key = \"sk-123\"\nbase_url = \"https://api.openai.com/v1\"\n\n[daemon]\nrecord_titles = true\n"
+                .parse()
+                .unwrap();
 
         assert!(remove_toml_value(&mut doc, &["ai", "openai", "api_key"]));
-        let openai = doc.get("ai").and_then(|v| v.get("openai")).unwrap();
+        let openai = doc["ai"]["openai"].as_table().unwrap();
         assert!(
             openai.get("api_key").is_none(),
             "the key itself must be gone"
@@ -399,9 +384,7 @@ mod tests {
             "siblings must survive"
         );
         assert_eq!(
-            doc.get("daemon")
-                .and_then(|v| v.get("record_titles"))
-                .and_then(|v| v.as_bool()),
+            doc["daemon"]["record_titles"].as_bool(),
             Some(true),
             "unrelated sections must survive"
         );
@@ -411,13 +394,12 @@ mod tests {
 
     #[test]
     fn remove_toml_value_tolerates_missing_paths() {
-        let mut doc: toml::Value = toml::from_str("[ai]\ndefault_provider = \"ollama\"\n").unwrap();
+        let mut doc: toml_edit::DocumentMut =
+            "[ai]\ndefault_provider = \"ollama\"\n".parse().unwrap();
 
         assert!(!remove_toml_value(&mut doc, &["ai", "openai", "api_key"]));
         assert_eq!(
-            doc.get("ai")
-                .and_then(|v| v.get("default_provider"))
-                .and_then(|v| v.as_str()),
+            doc["ai"]["default_provider"].as_str(),
             Some("ollama")
         );
         // An intermediate value that is not a table must not be clobbered.
@@ -425,16 +407,12 @@ mod tests {
             &mut doc,
             &["ai", "default_provider", "nested"]
         ));
-        assert_eq!(
-            doc.get("ai")
-                .and_then(|v| v.get("default_provider"))
-                .and_then(|v| v.as_str()),
-            Some("ollama")
-        );
+        assert_eq!(doc["ai"]["default_provider"].as_str(), Some("ollama"));
         // A top-level key works too.
         assert!(remove_toml_value(&mut doc, &["ai"]));
-        assert!(doc.get("ai").is_none());
+        assert!(doc.as_table().get("ai").is_none());
     }
+
     #[test]
     fn set_toml_value_preserves_unknown_fields() {
         // Simulates a config file written by the daemon, which has fields the
@@ -449,13 +427,13 @@ some_future_field = "keep-me"
 base_url = "http://localhost:11434"
 default_model = "qwen2.5:7b"
 "#;
-        let mut doc: toml::Value = toml::from_str(src).unwrap();
+        let mut doc: toml_edit::DocumentMut = src.parse().unwrap();
         set_toml_value(
             &mut doc,
             &["ai", "ollama", "default_model"],
-            toml::Value::String("llama3:8b".to_string()),
+            toml_edit::Value::from("llama3:8b"),
         );
-        let out = toml::to_string_pretty(&doc).unwrap();
+        let out = doc.to_string();
 
         // Unknown fields must survive the round-trip untouched.
         assert!(out.contains("enable_input_monitor = false"));
@@ -470,15 +448,30 @@ default_model = "qwen2.5:7b"
 
     #[test]
     fn set_toml_value_creates_missing_sections() {
-        let mut doc = toml::Value::Table(Default::default());
+        let mut doc = toml_edit::DocumentMut::new();
         set_toml_value(
             &mut doc,
             &["ai", "openai", "base_url"],
-            toml::Value::String("https://example.com/v1".to_string()),
+            toml_edit::Value::from("https://example.com/v1"),
         );
-        let out = toml::to_string(&doc).unwrap();
+        let out = doc.to_string();
         assert!(out.contains("[ai.openai]"));
         assert!(out.contains("https://example.com/v1"));
+    }
+
+    #[test]
+    fn set_toml_value_preserves_comments() {
+        // A comment attached to a key must survive an unrelated edit.
+        let src = "# 采样间隔\n[daemon]\nidle_timeout_seconds = 300  # 注释\n";
+        let mut doc: toml_edit::DocumentMut = src.parse().unwrap();
+        set_toml_value(
+            &mut doc,
+            &["daemon", "record_titles"],
+            toml_edit::Value::from(false),
+        );
+        let out = doc.to_string();
+        assert!(out.contains("idle_timeout_seconds = 300  # 注释"), "comment lost: {out}");
+        assert!(out.contains("record_titles = false"));
     }
 
     #[test]
@@ -496,7 +489,7 @@ default_model = "qwen2.5:7b"
         set_toml_value(
             &mut doc,
             &["ai", "openai", "default_model"],
-            toml::Value::String("gpt-4o".to_string()),
+            toml_edit::Value::from("gpt-4o"),
         );
         save_toml_document(&path, &doc).unwrap();
 
@@ -511,12 +504,12 @@ default_model = "qwen2.5:7b"
     }
 
     #[test]
-    fn load_toml_document_missing_file_is_empty_table() {
+    fn load_toml_document_missing_file_is_empty() {
         let path = std::env::temp_dir().join(format!(
             "hyprtrace-cfg-missing-{}.toml",
             uuid::Uuid::new_v4()
         ));
         let doc = load_toml_document(&path).unwrap();
-        assert!(doc.as_table().map(|t| t.is_empty()).unwrap_or(false));
+        assert!(doc.as_table().is_empty());
     }
 }
