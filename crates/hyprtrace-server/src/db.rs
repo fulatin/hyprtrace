@@ -81,6 +81,7 @@ impl Database {
         self.migrate_v3()?;
         self.migrate_v4()?;
         self.migrate_v5()?;
+        self.migrate_v6()?;
         self.migrate_v7()?;
         Ok(())
     }
@@ -169,6 +170,43 @@ impl Database {
                 enabled         INTEGER NOT NULL DEFAULT 1
             );",
         )?;
+        Ok(())
+    }
+
+    /// Mirrors the daemon's v6: clamp negative durations left by a wall-clock
+    /// jump and rebuild the summary tables from the repaired sessions. The
+    /// server can start before the daemon has ever run (no ordering guarantee
+    /// in install.sh), so it must run the same repair as the daemon, otherwise
+    /// negative summaries linger when only the server initialised the DB.
+    fn migrate_v6(&self) -> anyhow::Result<()> {
+        let sessions_repaired = self.conn.execute(
+            "UPDATE sessions SET duration_ms = 0, focused_ms = MAX(COALESCE(focused_ms, 0), 0)
+             WHERE duration_ms < 0",
+            [],
+        )?;
+        let events_repaired = self.conn.execute(
+            "UPDATE activity_events SET duration_ms = 0 WHERE duration_ms < 0",
+            [],
+        )?;
+        if sessions_repaired > 0 || events_repaired > 0 {
+            log::warn!(
+                "Clamped {} negative session duration(s) and {} negative activity_event duration(s) to 0",
+                sessions_repaired,
+                events_repaired
+            );
+        }
+
+        let negative_summary_rows: i64 = self.conn.query_row(
+            "SELECT (SELECT COUNT(*) FROM daily_summary WHERE total_ms < 0 OR focused_ms < 0)
+                  + (SELECT COUNT(*) FROM hourly_summary WHERE total_ms < 0 OR focused_ms < 0)",
+            [],
+            |row| row.get(0),
+        )?;
+
+        if sessions_repaired > 0 || events_repaired > 0 || negative_summary_rows > 0 {
+            self.rebuild_daily_summary()?;
+            self.rebuild_hourly_summary()?;
+        }
         Ok(())
     }
 
@@ -2302,6 +2340,53 @@ mod tests {
         db.today_summary("2026-09-05").unwrap();
         db.goals().unwrap();
         db.current_status().unwrap();
+    }
+
+    #[test]
+    fn migrate_v6_repairs_negative_durations() {
+        let db = Database::open(std::path::Path::new(":memory:"), 60).unwrap();
+        db.migrate().unwrap();
+
+        // A wall-clock jump left a negative duration and a polluted summary.
+        db.conn
+            .execute(
+                "INSERT INTO sessions (class, title, started_at, ended_at, duration_ms, activity_state, focused_ms)
+                 VALUES ('kitty', 'x', '2026-09-05T10:00:00+00:00', '2026-09-05T10:05:00+00:00', -300000, 'active', -100)",
+                [],
+            )
+            .unwrap();
+        db.conn
+            .execute(
+                "INSERT INTO daily_summary (date, class, total_ms, session_count, focused_ms)
+                 VALUES ('2026-09-05', 'kitty', -300000, 1, -100)",
+                [],
+            )
+            .unwrap();
+
+        // Re-running migrate() triggers the v6 repair: negative durations are
+        // clamped and the summaries are rebuilt from the (now non-negative)
+        // sessions.
+        db.migrate().unwrap();
+
+        let session_negative: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sessions WHERE duration_ms < 0 OR focused_ms < 0",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(session_negative, 0, "session rows must be clamped");
+
+        let summary_negative: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM daily_summary WHERE total_ms < 0 OR focused_ms < 0",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(summary_negative, 0, "summaries must be rebuilt, not negative");
     }
 
     #[test]
