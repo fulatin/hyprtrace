@@ -294,12 +294,30 @@ pub fn load_toml_document(path: &std::path::Path) -> anyhow::Result<toml::Value>
 }
 
 /// Write a `toml::Value` document back to disk.
+///
+/// The write is atomic (a temp file in the same directory is renamed into
+/// place) so a crash mid-write cannot leave a half-written config, and the
+/// file is created with mode 0600 because it may contain an API key.
 pub fn save_toml_document(path: &std::path::Path, doc: &toml::Value) -> anyhow::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     let toml_str = toml::to_string_pretty(doc).context("Failed to serialize config")?;
-    std::fs::write(path, toml_str)?;
+
+    let tmp = path.with_extension("toml.tmp");
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&tmp)?;
+        f.write_all(toml_str.as_bytes())?;
+        f.sync_all()?;
+    }
+    std::fs::rename(&tmp, path)?;
     Ok(())
 }
 
