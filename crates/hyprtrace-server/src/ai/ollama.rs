@@ -161,6 +161,11 @@ impl AiProvider for OllamaProvider {
                     }
 
                     if json["done"].as_bool().unwrap_or(false) {
+                        let reason = json["done_reason"]
+                            .as_str()
+                            .unwrap_or("stop")
+                            .to_string();
+                        let _ = tx.send(StreamEvent::Done(reason)).await;
                         return Ok(());
                     }
                 }

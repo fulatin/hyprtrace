@@ -550,6 +550,11 @@ async fn run_agent(
     let mut last_save = std::time::Instant::now();
 
     const MAX_ROUNDS: usize = 6;
+    // Cap the number of tool calls a single agent session may make, so a
+    // misbehaving model cannot loop forever or rack up an unbounded bill.
+    const MAX_TOOL_CALLS: usize = 20;
+    let mut total_tool_calls = 0usize;
+    let mut finish_reason = String::new();
 
     for round in 0..MAX_ROUNDS {
         let (ev_tx, mut ev_rx) = tokio::sync::mpsc::channel::<StreamEvent>(64);
@@ -608,6 +613,7 @@ async fn run_agent(
                     }
                 }
                 StreamEvent::ToolCall(tc) => calls.push(tc),
+                StreamEvent::Done(reason) => finish_reason = reason,
             }
         }
 
@@ -668,6 +674,15 @@ async fn run_agent(
         ));
 
         for tc in calls {
+            if total_tool_calls >= MAX_TOOL_CALLS {
+                send!(json!({
+                    "type": "error",
+                    "message": format!("Stopped after {} tool calls (budget reached)", MAX_TOOL_CALLS)
+                }));
+                finalize(&state, msg_id, &full_text, &model_name).await;
+                return;
+            }
+            total_tool_calls += 1;
             log::info!("Agent: executing tool {} ({})", tc.name, tc.id);
             send!(json!({"type": "tool_call", "id": tc.id, "name": tc.name, "args": tc.arguments}));
 
@@ -693,6 +708,16 @@ async fn run_agent(
                     ));
                 }
             }
+        }
+
+        // The provider finished with finish_reason="length", meaning the output
+        // was truncated mid-way (e.g. a tool-call JSON cut off). Surface it so
+        // the user is not left with a silently broken response.
+        if finish_reason == "length" {
+            send!(json!({
+                "type": "error",
+                "message": "The model response was truncated (finish_reason=length). Try again or shorten the request."
+            }));
         }
     }
 

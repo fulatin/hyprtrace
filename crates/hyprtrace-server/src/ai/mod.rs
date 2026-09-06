@@ -83,6 +83,10 @@ pub struct ToolCall {
 pub enum StreamEvent {
     Text(String),
     ToolCall(ToolCall),
+    /// Stream finished; carries the provider's `finish_reason` (e.g. "stop",
+    /// "length"). Used so a truncated response can be surfaced to the user
+    /// instead of silently ending.
+    Done(String),
 }
 
 #[async_trait]

@@ -130,6 +130,7 @@ impl AiProvider for OpenAiProvider {
             std::collections::BTreeMap::new();
 
         let mut result: anyhow::Result<()> = Ok(());
+        let mut finish_reason = String::from("stop");
 
         'outer: while let Some(chunk) = stream.next().await {
             let chunk = match chunk {
@@ -154,11 +155,20 @@ impl AiProvider for OpenAiProvider {
 
                 let data = line[6..].trim().to_string();
                 if data == "[DONE]" {
+                    let _ = tx.send(StreamEvent::Done(finish_reason.clone())).await;
                     break 'outer;
                 }
 
                 if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data) {
                     let delta = &json["choices"][0]["delta"];
+
+                    // The finish_reason is reported on the last chunk before
+                    // [DONE]; capture it so run_agent can detect truncation.
+                    if let Some(r) = json["choices"][0]["finish_reason"].as_str() {
+                        if !r.is_empty() {
+                            finish_reason = r.to_string();
+                        }
+                    }
 
                     // Accumulate streamed tool_call fragments by index.
                     if let Some(calls) = delta["tool_calls"].as_array() {
@@ -223,6 +233,10 @@ impl AiProvider for OpenAiProvider {
                 }))
                 .await;
         }
+
+        // If the stream ended without the [DONE] sentinel, still emit Done so
+        // run_agent gets a finish_reason (e.g. "length") for truncation checks.
+        let _ = tx.send(StreamEvent::Done(finish_reason)).await;
 
         result
     }
