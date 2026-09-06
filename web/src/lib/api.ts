@@ -1,4 +1,4 @@
-import { authHeaders } from './auth';
+import { authHeaders, clearAuthToken } from './auth';
 import type {
   TodaySummary,
   AppRank,
@@ -33,7 +33,17 @@ async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
   for (const [k, v] of Object.entries(authHeaders())) {
     headers.set(k, v);
   }
-  const res = await fetch(url, { ...options, headers });
+  // Timeout a hung request so the UI shows an error instead of staying in a
+  // perpetual loading state. Callers that need a longer window (e.g. the AI
+  // stream) pass their own signal, which takes precedence.
+  const signal = options?.signal ?? AbortSignal.timeout(15_000);
+  const res = await fetch(url, { ...options, headers, signal });
+  if (res.status === 401) {
+    // The token was rejected (e.g. the server's auth_token changed or the
+    // saved token is stale). Clear it so the next request doesn't keep failing
+    // with a secret that is no longer valid.
+    clearAuthToken();
+  }
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`API Error: ${res.status} ${text}`);
