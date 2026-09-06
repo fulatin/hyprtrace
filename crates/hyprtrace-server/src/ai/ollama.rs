@@ -121,6 +121,13 @@ impl AiProvider for OllamaProvider {
                 }
 
                 if let Ok(json) = serde_json::from_str::<serde_json::Value>(&line) {
+                    // Ollama can report an error mid-stream on an HTTP 200
+                    // (e.g. model unloaded, OOM). Surface it instead of
+                    // silently ending the response.
+                    if let Some(err) = json["error"].as_str() {
+                        anyhow::bail!("Ollama stream error: {}", err);
+                    }
+
                     // Ollama emits complete tool_calls in a single chunk.
                     if let Some(calls) = json["message"]["tool_calls"].as_array() {
                         for call in calls {

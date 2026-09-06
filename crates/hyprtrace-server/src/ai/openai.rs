@@ -40,19 +40,39 @@ impl AiProvider for OpenAiProvider {
             "messages": messages,
         });
 
-        let resp = self
-            .client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&body)
-            .send()
-            .await?;
+        // Retry transient 429 / 5xx responses with exponential backoff; a
+        // rate-limited or overloaded endpoint should not surface as a hard
+        // failure on the first attempt.
+        let mut attempt = 0u32;
+        let resp = loop {
+            let resp = self
+                .client
+                .post(&url)
+                .header("Authorization", format!("Bearer {}", self.api_key))
+                .json(&body)
+                .send()
+                .await?;
 
-        if !resp.status().is_success() {
             let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            anyhow::bail!("OpenAI API error {}: {}", status, text);
-        }
+            if !status.is_success() {
+                let retryable = status.is_server_error() || status == 429;
+                let text = resp.text().await.unwrap_or_default();
+                if retryable && attempt < 3 {
+                    attempt += 1;
+                    let delay = std::time::Duration::from_millis(500 * (1 << attempt));
+                    log::warn!(
+                        "OpenAI API {}; retrying in {}ms (attempt {}/3)",
+                        status,
+                        delay.as_millis(),
+                        attempt
+                    );
+                    tokio::time::sleep(delay).await;
+                    continue;
+                }
+                anyhow::bail!("OpenAI API error {}: {}", status, text);
+            }
+            break resp;
+        };
 
         let json: serde_json::Value = resp.json().await?;
         Ok(json["choices"][0]["message"]["content"]
