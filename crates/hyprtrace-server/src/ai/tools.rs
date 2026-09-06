@@ -28,11 +28,16 @@ impl ToolDef {
 }
 
 fn empty_params() -> Value {
-    json!({"type": "object", "properties": {}, "required": []})
+    json!({"type": "object", "properties": {}, "required": [], "additionalProperties": false})
 }
 
 fn obj_params(props: Value, required: &[&str]) -> Value {
-    json!({"type": "object", "properties": props, "required": required})
+    json!({
+        "type": "object",
+        "properties": props,
+        "required": required,
+        "additionalProperties": false,
+    })
 }
 
 /// All available tools: live Hyprland state queries + usage DB queries.
@@ -733,5 +738,39 @@ fn execute_hyprland_tool(name: &str, key: Option<&str>) -> anyhow::Result<Value>
             Ok(json!(out))
         }
         _ => anyhow::bail!("Unknown tool: {}", name),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_tool_schema_rejects_extra_properties() {
+        // Without additionalProperties:false a model can send unknown fields
+        // that the executor silently ignores, masking a mismatch between the
+        // schema and the real parameters.
+        for t in all_tools() {
+            let props = &t.parameters["properties"];
+            let params_obj = t.parameters.as_object().expect("tool parameters are an object");
+            assert_eq!(
+                params_obj.get("additionalProperties").and_then(|v| v.as_bool()),
+                Some(false),
+                "tool {} must set additionalProperties=false",
+                t.name
+            );
+            // Every required key must also exist in properties.
+            if let Some(required) = params_obj.get("required").and_then(|v| v.as_array()) {
+                for key in required {
+                    let key = key.as_str().expect("required key is a string");
+                    assert!(
+                        props.get(key).is_some(),
+                        "tool {}: required key '{}' is missing from properties",
+                        t.name,
+                        key
+                    );
+                }
+            }
+        }
     }
 }
