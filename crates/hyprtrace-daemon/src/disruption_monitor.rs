@@ -43,82 +43,90 @@ impl Drop for DisruptionMonitor {
 }
 
 fn spawn_notification_listener(db: Arc<Mutex<Database>>, running: Arc<AtomicBool>) {
-    // dbus-monitor eavesdrops method calls, unlike `gdbus monitor` which only
-    // surfaces signals/returns. Match only Notify method calls.
-    let mut child = match Command::new("dbus-monitor")
-        .args([
-            "--session",
-            "type=method_call,interface=org.freedesktop.Notifications,member=Notify",
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            log::warn!("Notification monitor unavailable (dbus-monitor): {}", e);
-            return;
-        }
-    };
-
-    log::info!("Notification monitor started (D-Bus via dbus-monitor)");
-    let stdout = match child.stdout.take() {
-        Some(s) => s,
-        None => {
-            let _ = child.kill();
-            return;
-        }
-    };
-    let reader = BufReader::new(stdout);
-
-    // dbus-monitor emits a preamble + the Notify call. We track whether we're
-    // inside the argument block of a Notify call, then extract the app name
-    // (1st string) and the summary (3rd string).
-    //
-    // Notify's signature is (app_name s, replaces_id u, app_icon s, summary s,
-    // body s, ...). Only the `s` arguments are counted here, so the strings are
-    // app_name / app_icon / summary / body in that order — the summary is the
-    // third string (index 2), NOT the fourth. Index 3 is the body, which used
-    // to be stored as the summary and shown as the notification "title".
-    let mut app = String::new();
-    let mut summary = String::new();
-    let mut string_idx = 0usize;
-    let mut in_call = false;
-
-    for line in reader.lines() {
-        if !running.load(Ordering::Relaxed) {
-            break;
-        }
-        let line = match line {
-            Ok(l) => l,
-            Err(_) => break,
+    // Reconnect loop: dbus-daemon can restart or dbus-monitor can exit, which
+    // would otherwise leave notification tracking permanently dead until the
+    // daemon restarts. Re-spawn after a short backoff while still running.
+    while running.load(Ordering::Relaxed) {
+        // dbus-monitor eavesdrops method calls, unlike `gdbus monitor` which
+        // only surfaces signals/returns. Match only Notify method calls.
+        let mut child = match Command::new("dbus-monitor")
+            .args([
+                "--session",
+                "type=method_call,interface=org.freedesktop.Notifications,member=Notify",
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                log::warn!("Notification monitor unavailable (dbus-monitor): {}", e);
+                return;
+            }
         };
-        let line = line.trim();
 
-        if line.starts_with("method call") && line.contains("member=Notify") {
-            in_call = true;
-            app.clear();
-            summary.clear();
-            string_idx = 0;
-            continue;
-        }
-        if in_call {
-            if let Some(s) = line.strip_prefix("string \"") {
-                let value = s.trim_end_matches('"').to_string();
-                match string_idx {
-                    0 => app = value,
-                    2 => summary = value,
-                    _ => {}
-                }
-                string_idx += 1;
-                // After summary come arrays/structs; we have what we need when
-                // we see the first dict entry or closing, so grab summary then
-                // stop parsing this call when app+summary set.
-            } else if line.starts_with("array [")
-                || line.starts_with("dict entry")
-                || line.starts_with("}")
-            {
-                if !app.is_empty() {
+        log::info!("Notification monitor started (D-Bus via dbus-monitor)");
+        let stdout = match child.stdout.take() {
+            Some(s) => s,
+            None => {
+                let _ = child.kill();
+                return;
+            }
+        };
+        let reader = BufReader::new(stdout);
+
+        // dbus-monitor emits a preamble + the Notify call. We track whether
+        // we're inside the argument block of a Notify call, then extract the
+        // app name (1st string) and the summary (3rd string).
+        //
+        // Notify's signature is (app_name s, replaces_id u, app_icon s,
+        // summary s, body s, ...). Only the `s` arguments are counted here, so
+        // the strings are app_name / app_icon / summary / body in that order —
+        // the summary is the third string (index 2), NOT the fourth.
+        let mut app = String::new();
+        let mut summary = String::new();
+        let mut string_idx = 0usize;
+        let mut in_call = false;
+
+        for line in reader.lines() {
+            if !running.load(Ordering::Relaxed) {
+                break;
+            }
+            let line = match line {
+                Ok(l) => l,
+                Err(_) => break,
+            };
+            let line = line.trim();
+
+            if line.starts_with("method call") && line.contains("member=Notify") {
+                in_call = true;
+                app.clear();
+                summary.clear();
+                string_idx = 0;
+                continue;
+            }
+            if in_call {
+                if let Some(s) = line.strip_prefix("string \"") {
+                    // Take everything up to the LAST quote so a value that
+                    // itself contains a quote (or a trailing quote) is parsed
+                    // correctly instead of stripping every trailing quote.
+                    let value = s
+                        .rsplit_once('"')
+                        .map(|(v, _)| v.to_string())
+                        .unwrap_or_else(|| s.to_string());
+                    match string_idx {
+                        0 => app = value,
+                        2 => summary = value,
+                        _ => {}
+                    }
+                    string_idx += 1;
+                } else if line.starts_with("array [")
+                    || line.starts_with("dict entry")
+                    || line.starts_with("}")
+                {
+                    // Record even when app_name is empty (many apps send an
+                    // empty app_name); the `in_call` guard already ensures this
+                    // is a Notify call.
                     let guard = match db.lock() {
                         Ok(g) => g,
                         Err(_) => {
@@ -135,9 +143,16 @@ fn spawn_notification_listener(db: Arc<Mutex<Database>>, running: Arc<AtomicBool
                 }
             }
         }
+
+        let _ = child.kill();
+        // If the monitor exited while we are still supposed to be running,
+        // reconnect after a short backoff instead of silently stopping.
+        if running.load(Ordering::Relaxed) {
+            log::warn!("Notification monitor exited; reconnecting in 5s");
+            std::thread::sleep(Duration::from_secs(5));
+        }
     }
-    log::warn!("Notification monitor stopped");
-    let _ = child.kill();
+    log::info!("Notification monitor stopped");
 }
 
 fn spawn_clipboard_poller(db: Arc<Mutex<Database>>, running: Arc<AtomicBool>) {
