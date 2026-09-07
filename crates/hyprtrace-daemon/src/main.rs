@@ -5,6 +5,7 @@ mod goal_monitor;
 mod idle_monitor;
 mod input_monitor;
 mod listener;
+mod notify;
 mod resource_monitor;
 mod wellbeing_monitor;
 

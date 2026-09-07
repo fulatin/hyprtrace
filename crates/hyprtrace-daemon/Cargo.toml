@@ -18,3 +18,4 @@ libc = "0.2"
 ctrlc = { version = "3", features = ["termination"] }
 evdev = "0.13"
 procfs = "0.16"
+zbus = "4"

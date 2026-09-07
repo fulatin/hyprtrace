@@ -85,11 +85,5 @@ pub fn spawn_wellbeing_monitor(
 }
 
 fn send_notify(summary: &str, body: &str) {
-    log::info!("Wellbeing reminder: {}", body);
-    if let Err(e) = Command::new("notify-send")
-        .args(["-a", "hyprtrace", "-u", "critical", summary, body])
-        .spawn()
-    {
-        log::warn!("notify-send failed: {}", e);
-    }
+    crate::notify::notify(summary, body);
 }

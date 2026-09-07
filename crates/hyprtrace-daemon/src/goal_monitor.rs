@@ -1,6 +1,5 @@
 use crate::db::{Database, Goal};
 use std::collections::HashSet;
-use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -139,13 +138,7 @@ fn fmt_ms(ms: i64) -> String {
 }
 
 fn send_notify(summary: &str, body: &str) {
-    log::info!("Reminder: {} - {}", summary, body);
-    if let Err(e) = Command::new("notify-send")
-        .args(["-a", "hyprtrace", summary, body])
-        .spawn()
-    {
-        log::warn!("notify-send failed: {}", e);
-    }
+    crate::notify::notify(summary, body);
 }
 
 #[cfg(test)]
