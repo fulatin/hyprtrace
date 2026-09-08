@@ -45,13 +45,23 @@ impl AiProvider for OpenAiProvider {
         // failure on the first attempt.
         let mut attempt = 0u32;
         let resp = loop {
-            let resp = self
-                .client
-                .post(&url)
-                .header("Authorization", format!("Bearer {}", self.api_key))
-                .json(&body)
-                .send()
-                .await?;
+            // fix opencode session error
+            let resp = if self.base_url.contains("opencode") {
+                self.client
+                    .post(&url)
+                    .header("Authorization", format!("Bearer {}", self.api_key))
+                    .header("x-opencode-session", "hyprtrace-session")
+                    .json(&body)
+                    .send()
+                    .await?
+            } else {
+                self.client
+                    .post(&url)
+                    .header("Authorization", format!("Bearer {}", self.api_key))
+                    .json(&body)
+                    .send()
+                    .await?
+            };
 
             let status = resp.status();
             if !status.is_success() {
@@ -128,13 +138,21 @@ impl AiProvider for OpenAiProvider {
             }
         }
 
-        let resp = self
-            .client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&body)
-            .send()
-            .await?;
+        let resp = if self.base_url.contains("opencode") {
+            self.client
+                .post(&url)
+                .header("Authorization", format!("Bearer {}", self.api_key))
+                .json(&body)
+                .send()
+                .await?
+        } else {
+            self.client
+                .post(&url)
+                .header("Authorization", format!("Bearer {}", self.api_key))
+                .json(&body)
+                .send()
+                .await?
+        };
 
         if !resp.status().is_success() {
             let status = resp.status();
