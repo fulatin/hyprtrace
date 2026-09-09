@@ -1,94 +1,73 @@
-import { useEffect, useState } from 'react';
-
+import { useEffect, useMemo, useState } from 'react';
 import { format, subDays, addDays } from 'date-fns';
-
-import { Clock, AppWindow, Hash, Moon, BrainCircuit, BellRing, Copy, Gauge, Target, TrendingUp, ChevronLeft, ChevronRight, ArrowUp, ArrowDown, FolderKanban } from 'lucide-react';
-
+import { motion } from 'framer-motion';
+import {
+  Clock,
+  AppWindow,
+  Hash,
+  Moon,
+  BrainCircuit,
+  BellRing,
+  Copy,
+  Gauge,
+  Target,
+  TrendingUp,
+  ChevronLeft,
+  ChevronRight,
+  ArrowUp,
+  ArrowDown,
+  FolderKanban,
+  CalendarDays,
+  Sparkles,
+  Minus,
+} from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
-
-import type { TodaySummary, HourlyBucket, DisruptionEvent, EfficiencyScore, GoalProgress, TrendPrediction, AppMetadata, ProjectStat, DailyActivity } from '../lib/types';
-
+import type {
+  TodaySummary,
+  HourlyBucket,
+  DisruptionEvent,
+  EfficiencyScore,
+  GoalProgress,
+  TrendPrediction,
+  AppMetadata,
+  ProjectStat,
+  DailyActivity,
+} from '../lib/types';
+import { formatDuration, formatDelta } from '../lib/format';
 import StatCard from '../components/StatCard';
-
 import AppUsagePie from '../components/AppUsagePie';
-
 import HourlyBars from '../components/HourlyBars';
-
 import ActivityHeatmap from '../components/ActivityHeatmap';
-
-function formatDuration(ms: number): string {
-
-  const hours = Math.floor(ms / 3600000);
-
-  const mins = Math.floor((ms % 3600000) / 60000);
-
-  if (hours > 0) return `${hours}h ${mins}m`;
-
-  if (mins > 0) return `${mins}m`;
-
-  return `${Math.floor(ms / 1000)}s`;
-
-}
-
-function formatDelta(ms: number): string {
-
-  const sign = ms >= 0 ? '+' : '−';
-
-  const abs = Math.abs(ms);
-
-  const hours = Math.floor(abs / 3600000);
-
-  const mins = Math.floor((abs % 3600000) / 60000);
-
-  if (hours > 0) return `${sign}${hours}h ${mins}m`;
-
-  if (mins > 0) return `${sign}${mins}m`;
-
-  return `${sign}0m`;
-
-}
+import { Panel } from '../components/ui/Card';
+import { Reveal, RevealItem, RevealOnScroll } from '../components/ui/Reveal';
+import { ProgressBar, SkeletonStats, SkeletonPanel, EmptyState } from '../components/ui/Feedback';
 
 interface CompareState {
-
   summary: TodaySummary | null;
-
   efficiency: EfficiencyScore | null;
-
 }
 
 const EMPTY_COMPARE: CompareState = { summary: null, efficiency: null };
 
 export default function Dashboard() {
-
   const today = format(new Date(), 'yyyy-MM-dd');
-
   const [selectedDate, setSelectedDate] = useState(today);
-
   const [summary, setSummary] = useState<TodaySummary | null>(null);
-
   const [timeline, setTimeline] = useState<HourlyBucket[]>([]);
-
   const [disruptions, setDisruptions] = useState<DisruptionEvent[]>([]);
-
   const [efficiency, setEfficiency] = useState<EfficiencyScore | null>(null);
-
   const [goalProgress, setGoalProgress] = useState<GoalProgress[]>([]);
-
   const [prediction, setPrediction] = useState<TrendPrediction | null>(null);
-
   const [compare, setCompare] = useState<CompareState>(EMPTY_COMPARE);
   const [appMetadata, setAppMetadata] = useState<Record<string, AppMetadata>>({});
   const [projectStats, setProjectStats] = useState<ProjectStat[]>([]);
   const [activity, setActivity] = useState<DailyActivity[]>([]);
-
   const [loading, setLoading] = useState(true);
 
   const prevDate = subDays(new Date(selectedDate + 'T00:00:00'), 1);
-
   const prevDateString = format(prevDate, 'yyyy-MM-dd');
-
   const isToday = selectedDate === today;
-
   const isNextDisabled = selectedDate >= today;
 
   // Resolve friendly names/icons for the displayed app classes once.
@@ -107,51 +86,30 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => {
-
     let cancelled = false;
-
     setLoading(true);
-
     setCompare(EMPTY_COMPARE);
 
     Promise.all([
-
       api.summary(selectedDate).catch(() => null),
-
       api.timeline(selectedDate).catch(() => []),
-
       api.disruptions(selectedDate, selectedDate, 30).catch(() => []),
-
       api.efficiency(selectedDate).catch(() => null),
-
       selectedDate === today
-
         ? api.goals().catch(() => ({ goals: [], progress: [] as GoalProgress[] }))
-
         : Promise.resolve({ goals: [], progress: [] as GoalProgress[] }),
-
       api.predict(14).catch(() => null),
       api.projectStats(selectedDate, selectedDate).catch(() => []),
-
     ]).then(([s, t, d, e, g, p, ps]) => {
-
       if (cancelled) return;
-
       setSummary(s);
-
       setTimeline(t);
-
       setDisruptions(d);
-
       setEfficiency(e);
-
       setGoalProgress(g.progress ?? []);
-
       setPrediction(p);
       setProjectStats(ps);
-
       setLoading(false);
-
     });
 
     // Previous-day comparison (errors ignored -> "—").
@@ -164,382 +122,396 @@ export default function Dashboard() {
     });
 
     return () => {
-
       cancelled = true;
-
     };
-
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedDate, today, prevDateString]);
 
   const prevSummary = compare.summary;
-
   const prevEfficiency = compare.efficiency;
 
   const activeDeltaMs = (summary?.total_active_ms ?? 0) - (prevSummary?.total_active_ms ?? 0);
-
   const focusDeltaMs = (summary?.total_focused_ms ?? 0) - (prevSummary?.total_focused_ms ?? 0);
-
   const efficiencyDelta = (efficiency?.score ?? 0) - (prevEfficiency?.score ?? 0);
 
-  if (loading) {
-
-    return (
-
-      <div className="space-y-6 animate-fadeIn">
-
-        <h2 className="text-xl font-bold">Dashboard</h2>
-
-        <div className="grid grid-cols-5 gap-4">
-
-          {[1, 2, 3, 4, 5].map((i) => (
-
-            <div key={i} className="bg-gray-900 border border-gray-800 rounded-lg p-4 h-24 animate-pulse" style={{ animationDelay: `${i * 80}ms` }} />
-
-          ))}
-
-        </div>
-
-      </div>
-
-    );
-
-  }
-
-  return (
-
-    <div className="space-y-6 animate-fadeIn">
-
-      <div className="flex items-center justify-between">
-
-        <h2 className="text-xl font-bold">Dashboard</h2>
-
-        <div className="flex items-center gap-2">
-
-          <button
-
-            type="button"
-
-            onClick={() => setSelectedDate(format(subDays(new Date(selectedDate + 'T00:00:00'), 1), 'yyyy-MM-dd'))}
-
-            className="flex items-center gap-1 bg-gray-800 border border-gray-700 rounded-md px-2.5 py-1.5 text-sm text-gray-200 hover:bg-gray-700 focus:ring-cyan-500 focus:border-cyan-500"
-
-            title="Previous day"
-
-          >
-
-            <ChevronLeft size={14} />
-
-            <span className="hidden sm:inline">Previous day</span>
-
-          </button>
-
-          <input
-
-            type="date"
-
-            value={selectedDate}
-
-            onChange={(e) => setSelectedDate(e.target.value)}
-
-            className="bg-gray-800 border border-gray-700 rounded-md px-3 py-1.5 text-sm text-gray-200 focus:ring-cyan-500 focus:border-cyan-500"
-
-          />
-
-          <button
-
-            type="button"
-
-            onClick={() => setSelectedDate(format(addDays(new Date(selectedDate + 'T00:00:00'), 1), 'yyyy-MM-dd'))}
-
-            disabled={isNextDisabled}
-
-            className="flex items-center gap-1 bg-gray-800 border border-gray-700 rounded-md px-2.5 py-1.5 text-sm text-gray-200 hover:bg-gray-700 focus:ring-cyan-500 focus:border-cyan-500 disabled:opacity-40 disabled:cursor-not-allowed"
-
-            title="Next day"
-
-          >
-
-            <span className="hidden sm:inline">Next day</span>
-
-            <ChevronRight size={14} />
-
-          </button>
-
-        </div>
-
-      </div>
-
-      <div className="grid grid-cols-6 gap-4">
-
-        {[
-
-          { icon: <Clock size={16} />, label: "Active Time", value: formatDuration(summary?.total_active_ms ?? 0) },
-
-          { icon: <BrainCircuit size={16} />, label: "Focus Time", value: formatDuration(summary?.total_focused_ms ?? 0), sub: `${Math.round(((summary?.total_focused_ms ?? 0) / Math.max((summary?.total_active_ms ?? 1), 1)) * 100)}% focused` },
-
-          { icon: <AppWindow size={16} />, label: "Apps", value: String(summary?.app_count ?? 0) },
-
-          { icon: <Hash size={16} />, label: "Sessions", value: String(summary?.session_count ?? 0) },
-
-          { icon: <Moon size={16} />, label: "Idle Time", value: formatDuration(summary?.total_idle_ms ?? 0) },
-
-          { icon: <Gauge size={16} />, label: "Efficiency", value: efficiency ? `${efficiency.score}/100` : "—", sub: efficiency ? `${Math.round(efficiency.focus_ratio * 100)}% focus · ${Math.round(efficiency.avg_session_secs / 60)}m/session` : "" },
-
-        ].map((card, i) => (
-
-          <div key={card.label} className="animate-fadeInUp" style={{ animationDelay: `${i * 80}ms` }}>
-
-            <StatCard icon={card.icon} label={card.label} value={card.value} subtext={card.sub} />
-
-          </div>
-
-        ))}
-
-      </div>
-
-      <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 animate-fadeInUp" style={{ animationDelay: "120ms" }}>
-
-        <div className="flex flex-wrap items-center gap-2">
-
-          <span className="text-sm font-medium text-gray-400 flex items-center gap-2">
-
-            <TrendingUp size={14} className="text-emerald-400" />
-
-            vs previous day
-
-          </span>
-
-          <span className="text-xs text-gray-500">Compared to {prevDateString}</span>
-
-        </div>
-
-        <div className="flex flex-wrap gap-3 mt-3">
-
-          <span className="inline-flex items-center gap-1 text-xs font-medium rounded-full px-3 py-1 border bg-gray-800 text-gray-300 border-gray-700">
-
-            <Clock size={12} />
-
-            Active {formatDelta(activeDeltaMs)}
-
-          </span>
-
-          <span className={`inline-flex items-center gap-1 text-xs font-medium rounded-full px-3 py-1 border ${focusDeltaMs >= 0 ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' : 'bg-red-500/10 text-red-400 border-red-500/30'}`}>
-
-            {focusDeltaMs >= 0 ? <ArrowUp size={12} /> : <ArrowDown size={12} />}
-
-            Focus {formatDelta(focusDeltaMs)}
-
-          </span>
-
-          <span className={`inline-flex items-center gap-1 text-xs font-medium rounded-full px-3 py-1 border ${efficiencyDelta >= 0 ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' : 'bg-red-500/10 text-red-400 border-red-500/30'}`}>
-
-            {efficiencyDelta >= 0 ? <ArrowUp size={12} /> : <ArrowDown size={12} />}
-
-            Efficiency {efficiencyDelta >= 0 ? '+' : '−'}{Math.abs(efficiencyDelta)} pts
-
-          </span>
-
-        </div>
-
-      </div>
-
-      <ActivityHeatmap data={activity} />
-
-      {goalProgress.length > 0 && isToday && (
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 animate-fadeInUp" style={{ animationDelay: "150ms" }}>
-
-          {goalProgress.map((p) => (
-
-            <div key={p.goal.id ?? p.goal.name} className="bg-gray-900 border border-gray-800 rounded-lg p-4">
-
-              <div className="flex items-center justify-between mb-2">
-
-                <span className="text-sm font-medium flex items-center gap-2">
-
-                  <Target size={14} className="text-cyan-400" />
-
-                  {p.goal.name}
-
-                </span>
-
-                <span className="text-xs text-gray-400">{Math.round(p.pct)}%</span>
-
-              </div>
-
-              <div className="w-full h-2 bg-gray-800 rounded-full overflow-hidden">
-
-                <div
-
-                  className={`h-full rounded-full transition-all duration-500 ${p.pct >= 100 ? 'bg-emerald-500' : 'bg-cyan-500'}`}
-
-                  style={{ width: `${Math.min(p.pct, 100)}%` }}
-
-                />
-
-              </div>
-
-              <div className="mt-2 text-xs text-gray-500">
-
-                {Math.round(p.today_ms / 3600000)}h {Math.round((p.today_ms % 3600000) / 60000)}m / {Math.round((p.goal.daily_target_ms || 0) / 3600000)}h
-
-              </div>
-
-            </div>
-
-          ))}
-
-        </div>
-
-      )}
-
-      {prediction && isToday && (
-
-        <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 animate-fadeInUp" style={{ animationDelay: "180ms" }}>
-
-          <h3 className="text-sm font-medium text-gray-400 flex items-center gap-2 mb-2">
-
-            <TrendingUp size={14} className="text-emerald-400" />
-
-            Trend Prediction
-
-            <span className="text-xs text-gray-500">based on last {prediction.window_days} days</span>
-
-          </h3>
-
-          <div className="grid grid-cols-3 gap-4 text-sm">
-
-            <div>
-
-              <div className="text-xs text-gray-500">Today so far</div>
-
-              <div className="text-lg font-semibold text-gray-200">{Math.round(prediction.today_ms / 3600000)}h {Math.round((prediction.today_ms % 3600000) / 60000)}m</div>
-
-            </div>
-
-            <div>
-
-              <div className="text-xs text-gray-500">Today projected</div>
-
-              <div className="text-lg font-semibold text-cyan-400">{Math.round(prediction.predicted_today_ms / 3600000)}h {Math.round((prediction.predicted_today_ms % 3600000) / 60000)}m</div>
-
-            </div>
-
-            <div>
-
-              <div className="text-xs text-gray-500">Tomorrow projected</div>
-
-              <div className="text-lg font-semibold text-emerald-400">{Math.round(prediction.predicted_tomorrow_ms / 3600000)}h {Math.round((prediction.predicted_tomorrow_ms % 3600000) / 60000)}m</div>
-
-            </div>
-
-          </div>
-
-        </div>
-
-      )}
-
-      <div className="grid grid-cols-2 gap-4 animate-fadeInUp" style={{ animationDelay: "200ms" }}>
-
-        <AppUsagePie data={summary?.top_apps ?? []} metadata={appMetadata} />
-
-        <HourlyBars data={timeline} />
-
-      </div>
-
-      <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 animate-fadeInUp" style={{ animationDelay: "250ms" }}>
-        <h3 className="text-sm font-medium text-gray-400 flex items-center gap-2 mb-3">
-          <FolderKanban size={14} className="text-cyan-400" />
-          Projects
-        </h3>
-        {projectStats.length === 0 ? (
-          <p className="text-xs text-gray-600">No projects configured — add them in Settings to track time by project.</p>
-        ) : (
-          <div className="space-y-2">
-            {projectStats.slice(0, 5).map((p) => (
-              <div key={p.project_id ?? 'uncategorized'} className="flex items-center gap-3">
-                <span
-                  className="w-2.5 h-2.5 rounded-full shrink-0"
-                  style={{ backgroundColor: p.color || '#6b7280' }}
-                />
-                <span className="w-32 text-sm text-gray-200 truncate">{p.name}</span>
-                <div className="flex-1 h-2 bg-gray-800 rounded-full overflow-hidden">
-                  <div
-                    className="h-full rounded-full"
-                    style={{ width: `${Math.min(p.percentage, 100)}%`, backgroundColor: p.color || '#6b7280' }}
-                  />
-                </div>
-                <span className="w-20 text-right text-sm text-gray-300">{formatDuration(p.total_ms)}</span>
-                <span className="w-14 text-right text-xs text-gray-500">{Math.round(p.percentage)}%</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {disruptions.length > 0 && (
-
-        <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 animate-fadeInUp" style={{ animationDelay: "300ms" }}>
-
-          <h3 className="text-sm font-medium text-gray-400 flex items-center gap-2 mb-3">
-
-            <BellRing size={14} className="text-amber-400" />
-
-            {isToday ? "Today's" : `${selectedDate}`} Interruptions
-
-            <span className="text-xs text-gray-500">
-
-              {disruptions.filter((d) => d.kind === 'notification').length} notifications · {disruptions.filter((d) => d.kind === 'clipboard').length} copies
-
-            </span>
-
-          </h3>
-
-          <div className="space-y-1.5 max-h-64 overflow-auto">
-
-            {disruptions.slice(0, 12).map((d) => (
-
-              <div key={d.id} className="flex items-center gap-2 text-sm">
-
-                {d.kind === 'notification' ? (
-
-                  <BellRing size={12} className="text-amber-400 shrink-0" />
-
-                ) : (
-
-                  <Copy size={12} className="text-cyan-400 shrink-0" />
-
-                )}
-
-                <span className="text-gray-300 truncate">
-
-                  {d.kind === 'notification'
-
-                    ? `${d.app ?? 'unknown'}: ${d.summary ?? ''}`
-
-                    : 'Clipboard copy'}
-
-                </span>
-
-                <span className="text-xs text-gray-500 ml-auto shrink-0">
-
-                  {new Date(d.occurred_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-
-                </span>
-
-              </div>
-
-            ))}
-
-          </div>
-
-        </div>
-
-      )}
-
-    </div>
-
+  const spark = useMemo(
+    () => activity.slice(-14).map((d) => d.total_ms),
+    [activity],
   );
 
+  const focusRatio = summary
+    ? summary.total_focused_ms / Math.max(summary.total_active_ms, 1)
+    : 0;
+
+  const cards = [
+    {
+      icon: <Clock size={15} />,
+      label: 'Active time',
+      value: summary?.total_active_ms ?? 0,
+      format: formatDuration,
+      delta: { value: activeDeltaMs, format: formatDelta },
+      spark,
+      accent: 'accent' as const,
+    },
+    {
+      icon: <BrainCircuit size={15} />,
+      label: 'Focus time',
+      value: summary?.total_focused_ms ?? 0,
+      format: formatDuration,
+      delta: { value: focusDeltaMs, format: formatDelta },
+      subtext: `${Math.round(focusRatio * 100)}% of active time`,
+      accent: 'good' as const,
+    },
+    {
+      icon: <AppWindow size={15} />,
+      label: 'Apps',
+      value: summary?.app_count ?? 0,
+      format: (n: number) => String(Math.round(n)),
+      subtext: 'used today',
+      accent: 'accent-2' as const,
+    },
+    {
+      icon: <Hash size={15} />,
+      label: 'Sessions',
+      value: summary?.session_count ?? 0,
+      format: (n: number) => String(Math.round(n)),
+      subtext: summary
+        ? `${Math.round((summary.total_active_ms ?? 0) / Math.max(summary.session_count, 1) / 60000)}m average`
+        : undefined,
+      accent: 'accent-2' as const,
+    },
+    {
+      icon: <Moon size={15} />,
+      label: 'Idle time',
+      value: summary?.total_idle_ms ?? 0,
+      format: formatDuration,
+      subtext: 'away from keyboard',
+      accent: 'warn' as const,
+    },
+    {
+      icon: <Gauge size={15} />,
+      label: 'Efficiency',
+      value: efficiency?.score ?? 0,
+      format: (n: number) => `${Math.round(n)}`,
+      delta: { value: efficiencyDelta, format: (n: number) => `${Math.abs(Math.round(n))} pts` },
+      subtext: efficiency
+        ? `${Math.round(efficiency.focus_ratio * 100)}% focus · ${Math.round(efficiency.avg_session_secs / 60)}m/session`
+        : 'no score yet',
+      accent: 'accent' as const,
+    },
+  ];
+
+  return (
+    <div className="space-y-6">
+      {/* Header ------------------------------------------------------------ */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="flex items-center gap-2 text-xl font-bold text-fg">
+            <CalendarDays size={19} className="text-accent" />
+            {isToday ? 'Today' : format(new Date(selectedDate + 'T00:00:00'), 'EEEE, MMM d')}
+          </h2>
+          <p className="mt-1 text-sm text-fg-muted">
+            {isToday
+              ? 'Live view of the current day.'
+              : `Historical view · compared with ${prevDateString}`}
+          </p>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <motion.button
+            type="button"
+            whileTap={{ scale: 0.94 }}
+            onClick={() =>
+              setSelectedDate(
+                format(subDays(new Date(selectedDate + 'T00:00:00'), 1), 'yyyy-MM-dd'),
+              )
+            }
+            className="btn"
+            title="Previous day"
+          >
+            <ChevronLeft size={15} />
+          </motion.button>
+          <input
+            type="date"
+            value={selectedDate}
+            max={today}
+            onChange={(e) => setSelectedDate(e.target.value)}
+            className="input"
+          />
+          <motion.button
+            type="button"
+            whileTap={{ scale: 0.94 }}
+            onClick={() =>
+              setSelectedDate(
+                format(addDays(new Date(selectedDate + 'T00:00:00'), 1), 'yyyy-MM-dd'),
+              )
+            }
+            disabled={isNextDisabled}
+            className="btn disabled:cursor-not-allowed disabled:opacity-40"
+            title="Next day"
+          >
+            <ChevronRight size={15} />
+          </motion.button>
+          {!isToday && (
+            <button type="button" onClick={() => setSelectedDate(today)} className="btn btn-accent">
+              Today
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* KPI grid ---------------------------------------------------------- */}
+      {loading ? (
+        <SkeletonStats count={6} />
+      ) : (
+        <Reveal className="grid grid-cols-2 gap-4 md:grid-cols-3 2xl:grid-cols-6" stagger={0.045}>
+          {cards.map((card) => (
+            <RevealItem key={card.label}>
+              <StatCard
+                icon={card.icon}
+                label={card.label}
+                value={card.value}
+                format={card.format}
+                delta={card.delta}
+                spark={card.spark}
+                subtext={card.subtext}
+                accent={card.accent}
+              />
+            </RevealItem>
+          ))}
+        </Reveal>
+      )}
+
+      {/* Day-over-day comparison ------------------------------------------- */}
+      {!loading && (
+        <Reveal>
+          <RevealItem className="card flex flex-wrap items-center gap-3 p-4">
+            <span className="flex items-center gap-2 text-sm font-medium text-fg-muted">
+              <TrendingUp size={15} className="text-good" />
+              vs {prevDateString}
+            </span>
+            <span className="chip-neutral">
+              <Clock size={11} />
+              Active {formatDelta(activeDeltaMs)}
+            </span>
+            <span className={focusDeltaMs >= 0 ? 'chip-good' : 'chip-bad'}>
+              {focusDeltaMs >= 0 ? <ArrowUp size={11} /> : <ArrowDown size={11} />}
+              Focus {formatDelta(focusDeltaMs)}
+            </span>
+            <span className={efficiencyDelta >= 0 ? 'chip-good' : 'chip-bad'}>
+              {efficiencyDelta === 0 ? (
+                <Minus size={11} />
+              ) : efficiencyDelta > 0 ? (
+                <ArrowUp size={11} />
+              ) : (
+                <ArrowDown size={11} />
+              )}
+              Efficiency {Math.abs(Math.round(efficiencyDelta))} pts
+            </span>
+            <Link to="/insights" className="btn btn-ghost ml-auto">
+              <Sparkles size={13} />
+              Deeper analysis
+            </Link>
+          </RevealItem>
+        </Reveal>
+      )}
+
+      <RevealOnScroll>
+        <ActivityHeatmap data={activity} />
+      </RevealOnScroll>
+
+      {/* Goals ------------------------------------------------------------- */}
+      {!loading && goalProgress.length > 0 && isToday && (
+        <Reveal className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3" stagger={0.06}>
+          {goalProgress.map((p) => {
+            const done = p.pct >= 100;
+            return (
+              <RevealItem key={p.goal.id ?? p.goal.name}>
+                <div className="card p-4">
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="flex items-center gap-2 text-sm font-medium text-fg">
+                      <Target size={14} className={done ? 'text-good' : 'text-accent'} />
+                      {p.goal.name}
+                    </span>
+                    <span className={`chip ${done ? 'chip-good' : 'chip-accent'} tnum`}>
+                      {Math.round(p.pct)}%
+                    </span>
+                  </div>
+                  <ProgressBar
+                    pct={p.pct}
+                    color={done ? 'rgb(var(--c-good))' : 'rgb(var(--c-accent))'}
+                  />
+                  <div className="mt-2 text-xs text-fg-faint tnum">
+                    {formatDuration(p.today_ms)} / {formatDuration(p.goal.daily_target_ms || 0)}
+                  </div>
+                </div>
+              </RevealItem>
+            );
+          })}
+        </Reveal>
+      )}
+
+      {/* Trend prediction --------------------------------------------------- */}
+      {!loading && prediction && isToday && (
+        <RevealOnScroll>
+          <Panel
+            title="Trend prediction"
+            icon={<TrendingUp size={15} className="text-good" />}
+            hint={`based on the last ${prediction.window_days} days`}
+            actions={
+              <Link to="/insights" className="btn btn-ghost">
+                Full forecast
+                <ChevronRight size={13} />
+              </Link>
+            }
+          >
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              {[
+                { label: 'Today so far', value: prediction.today_ms, cls: 'text-fg' },
+                {
+                  label: 'Today projected',
+                  value: prediction.predicted_today_ms,
+                  cls: 'text-accent',
+                },
+                {
+                  label: 'Tomorrow projected',
+                  value: prediction.predicted_tomorrow_ms,
+                  cls: 'text-accent-2',
+                },
+                { label: `Daily average`, value: prediction.daily_avg_ms, cls: 'text-fg-muted' },
+              ].map((s, i) => (
+                <motion.div
+                  key={s.label}
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: i * 0.06 }}
+                  className="rounded-lg border border-line bg-surface-2/60 px-3 py-2"
+                >
+                  <div className="text-[10px] uppercase tracking-wide text-fg-faint">{s.label}</div>
+                  <div className={`text-sm font-semibold tnum ${s.cls}`}>
+                    {formatDuration(s.value)}
+                  </div>
+                </motion.div>
+              ))}
+            </div>
+            <p className="mt-3 text-[11px] text-fg-faint">
+              Linear trend {prediction.slope >= 0 ? 'up' : 'down'}{' '}
+              {formatDuration(Math.abs(prediction.slope))} per day across the window.
+            </p>
+          </Panel>
+        </RevealOnScroll>
+      )}
+
+      {/* Charts ------------------------------------------------------------ */}
+      <RevealOnScroll>
+        <div className="grid gap-4 lg:grid-cols-2">
+          {loading ? (
+            <>
+              <SkeletonPanel height="h-[280px]" />
+              <SkeletonPanel height="h-[280px]" />
+            </>
+          ) : (
+            <>
+              <AppUsagePie data={summary?.top_apps ?? []} metadata={appMetadata} />
+              <HourlyBars data={timeline} />
+            </>
+          )}
+        </div>
+      </RevealOnScroll>
+
+      {/* Projects ---------------------------------------------------------- */}
+      {!loading && (
+        <RevealOnScroll>
+          <Panel
+            title="Projects"
+            icon={<FolderKanban size={15} className="text-accent" />}
+            hint="time grouped by project rules"
+          >
+            {projectStats.length === 0 ? (
+              <EmptyState
+                icon={<FolderKanban size={20} />}
+                title="No projects configured"
+                hint="Add project rules in Settings to track time by project."
+              />
+            ) : (
+              <div className="space-y-2.5">
+                {projectStats.slice(0, 6).map((p, i) => (
+                  <motion.div
+                    key={p.project_id ?? 'uncategorized'}
+                    initial={{ opacity: 0, x: -8 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ delay: i * 0.05 }}
+                    className="flex items-center gap-3"
+                  >
+                    <span
+                      className="h-2.5 w-2.5 shrink-0 rounded-full"
+                      style={{ backgroundColor: p.color || 'rgb(var(--c-fg-faint))' }}
+                    />
+                    <span className="w-28 truncate text-sm text-fg sm:w-36">{p.name}</span>
+                    <div className="h-2 flex-1 overflow-hidden rounded-full bg-surface-3">
+                      <motion.div
+                        className="h-full rounded-full"
+                        style={{ backgroundColor: p.color || 'rgb(var(--c-fg-faint))' }}
+                        initial={{ width: 0 }}
+                        animate={{ width: `${Math.min(p.percentage, 100)}%` }}
+                        transition={{ type: 'spring', stiffness: 110, damping: 20, delay: i * 0.05 }}
+                      />
+                    </div>
+                    <span className="w-16 text-right text-sm tnum text-fg-muted">
+                      {formatDuration(p.total_ms)}
+                    </span>
+                    <span className="w-10 text-right text-xs tnum text-fg-faint">
+                      {Math.round(p.percentage)}%
+                    </span>
+                  </motion.div>
+                ))}
+              </div>
+            )}
+          </Panel>
+        </RevealOnScroll>
+      )}
+
+      {/* Interruptions ------------------------------------------------------ */}
+      {!loading && disruptions.length > 0 && (
+        <RevealOnScroll>
+          <Panel
+            title={isToday ? "Today's interruptions" : `Interruptions · ${selectedDate}`}
+            icon={<BellRing size={15} className="text-warn" />}
+            hint={`${disruptions.filter((d) => d.kind === 'notification').length} notifications · ${
+              disruptions.filter((d) => d.kind === 'clipboard').length
+            } copies`}
+          >
+            <div className="max-h-64 space-y-1 overflow-auto pr-1">
+              {disruptions.slice(0, 14).map((d, i) => (
+                <motion.div
+                  key={d.id}
+                  initial={{ opacity: 0, x: -6 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: Math.min(0.3, i * 0.03) }}
+                  className="flex items-center gap-2 rounded-md px-1 py-1 text-sm hover:bg-surface-2"
+                >
+                  {d.kind === 'notification' ? (
+                    <BellRing size={12} className="shrink-0 text-warn" />
+                  ) : (
+                    <Copy size={12} className="shrink-0 text-accent" />
+                  )}
+                  <span className="truncate text-fg-muted">
+                    {d.kind === 'notification'
+                      ? `${d.app ?? 'unknown'}: ${d.summary ?? ''}`
+                      : 'Clipboard copy'}
+                  </span>
+                  <span className="ml-auto shrink-0 text-xs tnum text-fg-faint">
+                    {new Date(d.occurred_at).toLocaleTimeString([], {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
+                  </span>
+                </motion.div>
+              ))}
+            </div>
+          </Panel>
+        </RevealOnScroll>
+      )}
+    </div>
+  );
 }

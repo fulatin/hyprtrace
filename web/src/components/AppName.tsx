@@ -5,18 +5,19 @@ interface AppNameProps {
   metadata?: AppMetadata | null;
 }
 
-// Deterministic color derived from a simple hash of the class, clamped to a
-// palette that fits the dark UI.
-function colorForClass(cls: string): string {
-  const colors = [
-    '#22d3ee', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444',
-    '#3b82f6', '#ec4899', '#14b8a6', '#f97316', '#6366f1',
-  ];
+/** Token-backed badge palettes — picked deterministically so a class keeps its hue. */
+const PALETTES = [
+  { badge: 'bg-accent/15 text-accent', ring: 'ring-accent/25' },
+  { badge: 'bg-accent-2/15 text-accent-2', ring: 'ring-accent-2/25' },
+  { badge: 'bg-accent-3/15 text-accent-3', ring: 'ring-accent-3/25' },
+];
+
+function paletteForClass(cls: string) {
   let h = 0;
   for (let i = 0; i < cls.length; i++) {
     h = (h * 31 + cls.charCodeAt(i)) >>> 0;
   }
-  return colors[h % colors.length];
+  return PALETTES[h % PALETTES.length];
 }
 
 export default function AppName({ cls, metadata }: AppNameProps) {
@@ -24,16 +25,17 @@ export default function AppName({ cls, metadata }: AppNameProps) {
     ? metadata.display_name
     : cls;
   const initial = displayName.charAt(0).toUpperCase();
+  const palette = paletteForClass(cls);
 
   return (
-    <span className="inline-flex items-center gap-2">
+    <span className="inline-flex min-w-0 items-center gap-2">
       <span
-        className="inline-flex items-center justify-center w-5 h-5 rounded text-[11px] font-semibold shrink-0"
-        style={{ backgroundColor: `${colorForClass(cls)}33`, color: colorForClass(cls) }}
+        aria-hidden
+        className={`inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-[11px] font-semibold ring-1 ring-inset ${palette.badge} ${palette.ring}`}
       >
         {initial}
       </span>
-      <span className="truncate">{displayName}</span>
+      <span className="min-w-0 truncate text-sm font-medium text-fg">{displayName}</span>
     </span>
   );
 }

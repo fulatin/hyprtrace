@@ -1,23 +1,57 @@
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
+import {
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  CartesianGrid,
+} from 'recharts';
+import type { TooltipProps } from 'recharts';
 import type { DailyTrend } from '../lib/types';
+import { formatDuration } from '../lib/format';
+
+/**
+ * Recharts writes colours straight into SVG attributes, so tokens are passed as
+ * CSS variables — the chart then re-themes with the rest of the app.
+ */
+const token = (name: string) => `rgb(var(--c-${name}))`;
+
+const FILL_ID = 'app-trend-fill';
+const STROKE_ID = 'app-trend-stroke';
 
 interface AppTrendChartProps {
   data: DailyTrend[];
   range?: 'today' | 'week' | 'month';
 }
 
-function formatDuration(ms: number): string {
-  const hours = Math.floor(ms / 3600000);
-  const mins = Math.floor((ms % 3600000) / 60000);
-  if (hours > 0) return `${hours}h ${mins}m`;
-  return `${mins}m`;
+interface TrendTooltipProps extends TooltipProps<number, string> {
+  /** Carried on the chart data so the tooltip can show the real date. */
+  date?: string;
+  minutes?: number;
+  sessions?: number;
+}
+
+function TrendTooltip({ active, payload }: TrendTooltipProps) {
+  const point = payload?.[0]?.payload as TrendTooltipProps | undefined;
+  if (!active || !point) return null;
+  return (
+    <div className="rounded-lg border border-line bg-surface-2 px-3 py-2 text-xs text-fg shadow-soft">
+      <p className="mb-1 font-medium">{point.date}</p>
+      <p className="text-fg-muted">
+        <span className="tnum text-accent">
+          {formatDuration((point.minutes ?? 0) * 60000)}
+        </span>{' '}
+        active
+      </p>
+      <p className="text-fg-faint tnum">{point.sessions} sessions</p>
+    </div>
+  );
 }
 
 export default function AppTrendChart({ data, range }: AppTrendChartProps) {
   if (data.length === 0) {
-    return (
-      <div className="text-gray-400 text-sm p-4">No trend data available</div>
-    );
+    return <p className="p-4 text-sm text-fg-muted">No trend data available</p>;
   }
 
   const formatXLabel = (dateStr: string) => {
@@ -33,31 +67,57 @@ export default function AppTrendChart({ data, range }: AppTrendChartProps) {
   }));
 
   return (
-    <div className="mt-4 bg-gray-900 border border-gray-800 rounded-lg p-4">
-      <div className="flex items-center gap-2 mb-2">
-        <h4 className="text-sm font-medium text-gray-400">
-          {range === 'today' ? 'Hourly Trend' : 'Daily Trend'}
-        </h4>
-        {range === 'week' && <span className="text-xs text-gray-500">(past 7 days)</span>}
-        {range === 'month' && <span className="text-xs text-gray-500">(past 30 days)</span>}
+    <div className="card mt-4 p-4">
+      <div className="mb-2 flex items-center gap-2">
+        <h4 className="panel-title">{range === 'today' ? 'Hourly Trend' : 'Daily Trend'}</h4>
+        {range === 'week' && <span className="panel-sub">(past 7 days)</span>}
+        {range === 'month' && <span className="panel-sub">(past 30 days)</span>}
       </div>
       <ResponsiveContainer width="100%" height={180}>
-        <LineChart data={chartData}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
-          <XAxis dataKey="label" tick={{ fill: '#6b7280', fontSize: 10 }} />
-          <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} />
-          <Tooltip
-            contentStyle={{ backgroundColor: '#1f2937', border: '1px solid #374151', borderRadius: '8px', color: '#e5e7eb' }}
-            itemStyle={{ color: '#e5e7eb' }}
-            labelStyle={{ color: '#e5e7eb' }}
-            labelFormatter={(label, payload) => {
-              if (payload?.[0]) return (payload[0] as any).payload.date;
-              return label;
-            }}
-            formatter={(value: number) => [formatDuration(value * 60000), 'Active Time']}
+        <AreaChart data={chartData}>
+          <defs>
+            <linearGradient id={FILL_ID} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={token('accent')} stopOpacity={0.35} />
+              <stop offset="55%" stopColor={token('accent')} stopOpacity={0.12} />
+              <stop offset="100%" stopColor={token('accent')} stopOpacity={0} />
+            </linearGradient>
+            {/* Vertical fade makes the single-hue line read as a gradient. */}
+            <linearGradient id={STROKE_ID} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={token('accent')} stopOpacity={1} />
+              <stop offset="100%" stopColor={token('accent-2')} stopOpacity={0.9} />
+            </linearGradient>
+          </defs>
+          <CartesianGrid strokeDasharray="2 6" stroke={token('line')} vertical={false} />
+          <XAxis
+            dataKey="label"
+            tick={{ fill: token('fg-faint'), fontSize: 10 }}
+            axisLine={{ stroke: token('line') }}
+            tickLine={false}
           />
-          <Line type="monotone" dataKey="minutes" stroke="#22d3ee" strokeWidth={2} dot={{ fill: '#22d3ee', r: 3 }} />
-        </LineChart>
+          <YAxis
+            tick={{ fill: token('fg-faint'), fontSize: 10 }}
+            axisLine={false}
+            tickLine={false}
+            width={34}
+            tickFormatter={(value: number) => `${value}m`}
+          />
+          <Tooltip
+            cursor={{ stroke: token('line-strong'), strokeDasharray: '3 3' }}
+            content={<TrendTooltip />}
+          />
+          <Area
+            type="monotone"
+            dataKey="minutes"
+            stroke={`url(#${STROKE_ID})`}
+            strokeWidth={2}
+            fill={`url(#${FILL_ID})`}
+            dot={{ fill: token('surface'), stroke: token('accent'), strokeWidth: 1.5, r: 2.5 }}
+            activeDot={{ r: 4, fill: token('accent'), stroke: token('surface'), strokeWidth: 2 }}
+            isAnimationActive
+            animationDuration={900}
+            animationEasing="ease-out"
+          />
+        </AreaChart>
       </ResponsiveContainer>
     </div>
   );

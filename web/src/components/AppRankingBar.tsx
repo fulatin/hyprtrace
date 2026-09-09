@@ -1,28 +1,76 @@
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell } from 'recharts';
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  CartesianGrid,
+  Cell,
+} from 'recharts';
+import type { TooltipProps } from 'recharts';
 import type { AppRank } from '../lib/types';
+import { formatDuration } from '../lib/format';
+import { EmptyState } from './ui/Feedback';
 
+/**
+ * Recharts only accepts concrete colour values (it writes them into SVG
+ * attributes), so tokens are referenced as CSS variables instead of hex — the
+ * palette then follows the active theme.
+ */
+const token = (name: string) => `rgb(var(--c-${name}))`;
+
+/** Per-bar palette, in rank order. Top bar gets the accent gradient below. */
 const COLORS = [
-  '#22d3ee', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444',
-  '#3b82f6', '#ec4899', '#14b8a6', '#f97316', '#6366f1',
+  token('accent'),
+  token('accent-2'),
+  token('good'),
+  token('warn'),
+  token('bad'),
+  token('accent'),
+  token('accent-2'),
+  token('good'),
+  token('warn'),
+  token('bad'),
 ];
+
+const GRADIENT_ID = 'app-ranking-bar-accent';
 
 interface AppRankingBarProps {
   data: AppRank[];
 }
 
-function formatDuration(ms: number): string {
-  const hours = Math.floor(ms / 3600000);
-  const mins = Math.floor((ms % 3600000) / 60000);
-  if (hours > 0) return `${hours}h ${mins}m`;
-  return `${mins}m`;
+interface RankTooltipProps extends TooltipProps<number, string> {
+  /** Set on the chart data, so the tooltip can show share as well as time. */
+  name?: string;
+  percentage?: number;
+  display?: string;
+}
+
+function RankTooltip({ active, payload }: RankTooltipProps) {
+  const point = payload?.[0]?.payload as RankTooltipProps | undefined;
+  if (!active || !point) return null;
+  return (
+    <div className="rounded-lg border border-line bg-surface-2 px-3 py-2 text-xs text-fg shadow-soft">
+      <p className="mb-1 font-medium">{point.name}</p>
+      <p className="text-fg-muted">
+        <span className="tnum text-fg">{point.display}</span> active
+      </p>
+      <p className="text-fg-muted">
+        <span className="tnum text-accent">{point.percentage?.toFixed(1)}%</span> of tracked time
+      </p>
+    </div>
+  );
 }
 
 export default function AppRankingBar({ data }: AppRankingBarProps) {
   if (data.length === 0) {
     return (
-      <div className="bg-gray-900 border border-gray-800 rounded-lg p-6 flex items-center justify-center h-48 text-gray-400">
-        No data available
-      </div>
+      <EmptyState
+        className="h-48"
+        title="No app activity in this range"
+        hint="Pick a wider range, or start tracking to populate the ranking."
+      />
     );
   }
 
@@ -34,26 +82,48 @@ export default function AppRankingBar({ data }: AppRankingBarProps) {
   }));
 
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
+    <div className="card p-4">
       <ResponsiveContainer width="100%" height={data.length * 40 + 40}>
         <BarChart data={chartData} layout="vertical" margin={{ left: 80, right: 40 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" horizontal={false} />
-          <XAxis type="number" tick={{ fill: '#6b7280', fontSize: 10 }} />
+          <defs>
+            {/* Subtle accent wash reserved for the #1 app. */}
+            <linearGradient id={GRADIENT_ID} x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0%" stopColor={token('accent')} stopOpacity={1} />
+              <stop offset="100%" stopColor={token('accent')} stopOpacity={0.55} />
+            </linearGradient>
+          </defs>
+          <CartesianGrid strokeDasharray="2 6" stroke={token('line')} horizontal={false} />
+          <XAxis
+            type="number"
+            tick={{ fill: token('fg-faint'), fontSize: 10 }}
+            axisLine={{ stroke: token('line') }}
+            tickLine={false}
+            tickFormatter={(value: number) => `${value}m`}
+          />
           <YAxis
             type="category"
             dataKey="name"
-            tick={{ fill: '#d1d5db', fontSize: 12 }}
+            tick={{ fill: token('fg-muted'), fontSize: 12 }}
+            axisLine={false}
+            tickLine={false}
             width={70}
           />
           <Tooltip
-            contentStyle={{ backgroundColor: '#1f2937', border: '1px solid #374151', borderRadius: '8px', color: '#e5e7eb' }}
-            itemStyle={{ color: '#e5e7eb' }}
-            labelStyle={{ color: '#e5e7eb' }}
-            formatter={(value: number) => [`${value} min`, 'Active Time']}
+            cursor={{ fill: token('surface-2'), fillOpacity: 0.6 }}
+            content={<RankTooltip />}
           />
-          <Bar dataKey="minutes" radius={[0, 4, 4, 0]}>
+          <Bar
+            dataKey="minutes"
+            radius={[0, 6, 6, 0]}
+            isAnimationActive
+            animationDuration={800}
+            animationEasing="ease-out"
+          >
             {chartData.map((_entry, index) => (
-              <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+              <Cell
+                key={`cell-${index}`}
+                fill={index === 0 ? `url(#${GRADIENT_ID})` : COLORS[index % COLORS.length]}
+              />
             ))}
           </Bar>
         </BarChart>

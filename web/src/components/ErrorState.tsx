@@ -1,26 +1,55 @@
+import { motion } from 'framer-motion';
 import { AlertTriangle } from 'lucide-react';
+import { useState } from 'react';
 
 interface Props {
   message: string;
   onRetry?: () => void;
 }
 
+/** Consistent failure state: explains what broke and offers a retry. */
 export default function ErrorState({ message, onRetry }: Props) {
+  const [expanded, setExpanded] = useState(false);
+  const long = message.length > 140;
+
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 min-h-[16rem] flex flex-col items-center justify-center text-center space-y-3">
-      <AlertTriangle size={28} className="text-red-400" />
+    <motion.div
+      initial={{ opacity: 0, scale: 0.98 }}
+      animate={{ opacity: 1, scale: 1 }}
+      className="card flex min-h-[16rem] flex-col items-center justify-center gap-3 p-6 text-center"
+    >
+      <span className="grid h-11 w-11 place-items-center rounded-xl bg-bad/10 text-bad">
+        <AlertTriangle size={22} />
+      </span>
       <div>
-        <p className="text-sm font-medium text-red-400">Failed to load data</p>
-        <p className="text-xs text-gray-500 mt-1 break-all">{message}</p>
+        <p className="text-sm font-medium text-bad">Failed to load data</p>
+        <p
+          className={`mx-auto mt-1 max-w-md text-xs text-fg-faint ${
+            long && !expanded ? 'line-clamp-2' : 'break-all'
+          }`}
+        >
+          {message}
+        </p>
+        {long && (
+          <button
+            type="button"
+            onClick={() => setExpanded((e) => !e)}
+            className="mt-1 text-[11px] text-accent hover:underline"
+          >
+            {expanded ? 'Show less' : 'Show details'}
+          </button>
+        )}
       </div>
       {onRetry && (
-        <button
+        <motion.button
+          type="button"
           onClick={onRetry}
-          className="bg-cyan-600 hover:bg-cyan-700 text-white rounded-lg px-4 py-1.5 text-sm transition-colors"
+          whileTap={{ scale: 0.96 }}
+          className="btn btn-accent"
         >
           Retry
-        </button>
+        </motion.button>
       )}
-    </div>
+    </motion.div>
   );
 }

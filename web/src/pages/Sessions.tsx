@@ -1,19 +1,14 @@
 import { useEffect, useState } from 'react';
 import { format, subDays } from 'date-fns';
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
+import { ChevronLeft, ChevronRight, Filter, List, ListX, X } from 'lucide-react';
 import { api } from '../lib/api';
 import type { Session, PaginatedResponse, AppMetadata } from '../lib/types';
 import AppName from '../components/AppName';
 import ErrorState from '../components/ErrorState';
-
-function formatDuration(ms: number | null): string {
-  if (ms === null || ms === 0) return '-';
-  const hours = Math.floor(ms / 3600000);
-  const mins = Math.floor((ms % 3600000) / 60000);
-  const secs = Math.floor((ms % 60000) / 1000);
-  if (hours > 0) return `${hours}h ${mins}m`;
-  if (mins > 0) return `${mins}m ${secs}s`;
-  return `${secs}s`;
-}
+import { EmptyState, ProgressBar, Skeleton } from '../components/ui/Feedback';
+import { formatDurationFine } from '../lib/format';
+import { listItem, spring } from '../lib/motion';
 
 function formatTime(iso: string): string {
   try {
@@ -23,10 +18,40 @@ function formatTime(iso: string): string {
   }
 }
 
+// Per-app series palette (matches AppName so dots stay consistent app-wide).
 const COLORS = [
   '#22d3ee', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444',
   '#3b82f6', '#ec4899', '#14b8a6', '#f97316', '#6366f1',
 ];
+
+// Activity state → semantic chip token.
+const STATE_CHIP: Record<string, string> = {
+  active: 'chip-accent',
+  focused: 'chip-good',
+  idle: 'chip-neutral',
+  away: 'chip-bad',
+};
+
+const PER_PAGE = 50;
+
+/** Loading placeholder shaped like the real table, so nothing jumps on load. */
+function SkeletonTable() {
+  return (
+    <div className="card p-4">
+      <Skeleton className="mb-4 h-4 w-32" />
+      <div className="space-y-2">
+        {Array.from({ length: 8 }).map((_, i) => (
+          <div key={i} className="flex items-center gap-4">
+            <Skeleton className="h-4 w-32" />
+            <Skeleton className="h-4 flex-1" />
+            <Skeleton className="h-4 w-20" />
+            <Skeleton className="h-4 w-16" />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 export default function Sessions() {
   const today = format(new Date(), 'yyyy-MM-dd');
@@ -39,6 +64,7 @@ export default function Sessions() {
   const [classes, setClasses] = useState<string[]>([]);
   const [appMetadata, setAppMetadata] = useState<Record<string, AppMetadata>>({});
   const [reloadKey, setReloadKey] = useState(0);
+  const reduced = useReducedMotion();
 
   useEffect(() => {
     api.appClasses(weekAgo, today).then(setClasses).catch(() => {});
@@ -65,7 +91,7 @@ export default function Sessions() {
   useEffect(() => {
     setLoading(true);
     setError(null);
-    api.sessions(weekAgo, today, page, 50, filter || undefined).then((d) => {
+    api.sessions(weekAgo, today, page, PER_PAGE, filter || undefined).then((d) => {
       setData(d);
       setLoading(false);
     }).catch((e) => {
@@ -73,99 +99,216 @@ export default function Sessions() {
       setLoading(false);
     });
   }, [page, filter, reloadKey]);
+
   const getColor = (cls: string) => {
     const idx = classes.indexOf(cls);
     return COLORS[idx % COLORS.length];
   };
 
+  const rows = data?.data ?? [];
+  const totalPages = Math.max(1, Math.ceil((data?.total ?? 0) / PER_PAGE));
+  // Longest session on this page: the reference for every duration bar.
+  const maxDuration = rows.reduce((m, s) => Math.max(m, s.duration_ms ?? 0), 0);
+
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h2 className="text-xl font-bold">Sessions</h2>
-        <select
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-          className="bg-gray-800 border border-gray-700 rounded-md px-3 py-1.5 text-sm text-gray-200 focus:ring-cyan-500"
-        >
-          <option value="">All Apps</option>
-          {classes.map((c) => (
-            <option key={c} value={c}>{c}</option>
-          ))}
-        </select>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="flex items-center gap-2 text-xl font-bold">
+            <List size={20} className="text-accent" />
+            Sessions
+          </h2>
+          <p className="mt-1 text-xs text-fg-muted">
+            {data
+              ? `${data.total} session${data.total === 1 ? '' : 's'} · last 7 days`
+              : 'Last 7 days'}
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <AnimatePresence initial={false}>
+            {filter && (
+              <motion.button
+                type="button"
+                onClick={() => setFilter('')}
+                className="chip-accent"
+                title="Clear filter"
+                initial={reduced ? false : { opacity: 0, scale: 0.9 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.9 }}
+                whileTap={{ scale: 0.95 }}
+              >
+                <Filter size={11} />
+                {filter}
+                <X size={11} />
+              </motion.button>
+            )}
+          </AnimatePresence>
+
+          <label className="flex items-center gap-2 text-xs text-fg-muted">
+            App
+            <select
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              className="input"
+            >
+              <option value="">All Apps</option>
+              {classes.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+          </label>
+        </div>
       </div>
 
       {loading ? (
-        <div className="bg-gray-900 border border-gray-800 rounded-lg p-6 animate-pulse h-64" />
+        <SkeletonTable />
       ) : error ? (
         <ErrorState message={error} onRetry={() => setReloadKey((k) => k + 1)} />
       ) : (
-        <div className="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-gray-800">
-                <th className="text-left px-4 py-3 text-gray-400 font-medium">App</th>
-                <th className="text-left px-4 py-3 text-gray-400 font-medium">Title</th>
-                <th className="text-left px-4 py-3 text-gray-400 font-medium">Start</th>
-                <th className="text-left px-4 py-3 text-gray-400 font-medium">End</th>
-                <th className="text-left px-4 py-3 text-gray-400 font-medium">State</th>
-                <th className="text-right px-4 py-3 text-gray-400 font-medium">Duration</th>
-                <th className="text-right px-4 py-3 text-gray-400 font-medium">Focus</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data?.data.map((s) => {
-                const stateColors: Record<string, string> = {
-                  active: 'bg-blue-500/20 text-blue-300 border-blue-500/30',
-                  focused: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30',
-                  idle: 'bg-gray-500/20 text-gray-300 border-gray-500/30',
-                  away: 'bg-red-500/20 text-red-300 border-red-500/30',
-                };
-                return (
-                <tr key={s.id} className="border-b border-gray-800/50 hover:bg-gray-800/50 transition-colors">
-                  <td className="px-4 py-2.5">
-                    <span
-                      className="inline-block w-2 h-2 rounded-full mr-2"
-                      style={{ backgroundColor: getColor(s.class) }}
-                    />
-                    <AppName cls={s.class} metadata={appMetadata[s.class] ?? null} />
-                  </td>
-                  <td className="px-4 py-2.5 text-gray-400 truncate max-w-[160px]">{s.title || '-'}</td>
-                  <td className="px-4 py-2.5 text-gray-400">{formatTime(s.started_at)}</td>
-                  <td className="px-4 py-2.5 text-gray-400">{s.ended_at ? formatTime(s.ended_at) : 'Active'}</td>
-                  <td className="px-4 py-2.5">
-                    {s.activity_state && (
-                      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs border ${stateColors[s.activity_state] || 'bg-gray-500/20 text-gray-300'}`}>
-                        {s.activity_state}
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-4 py-2.5 text-right text-cyan-400">{formatDuration(s.duration_ms)}</td>
-                  <td className="px-4 py-2.5 text-right text-gray-400 text-xs">{formatDuration(s.focused_ms)}</td>
+        <div className="card">
+          {rows.length === 0 ? (
+            <EmptyState
+              className="m-4"
+              icon={<ListX size={22} />}
+              title="No sessions in this window"
+              hint={filter
+                ? `Nothing was recorded for ${filter} in the last 7 days.`
+                : 'The last 7 days have no recorded sessions.'}
+            />
+          ) : (
+            /* Horizontal scroll container: the table needs ~880px for all
+               seven columns, and the sticky header still works inside it. */
+            <div className="overflow-x-auto">
+            <table className="w-full min-w-[760px] table-fixed text-sm">
+              {/* Fixed widths keep the seven columns stable while the title
+                  column absorbs the remaining space and truncates. */}
+              <colgroup>
+                <col className="w-[26%]" />
+                <col />
+                <col className="w-[9%]" />
+                <col className="w-[9%]" />
+                <col className="w-[11%]" />
+                <col className="w-[15%]" />
+                <col className="hidden w-[9%] 2xl:table-column" />
+              </colgroup>
+              <thead className="sticky top-0 z-10 bg-surface/95 backdrop-blur shadow-[0_1px_0_0_rgb(var(--c-line))]">
+                <tr className="border-b border-line">
+                  <th className="px-3 py-3 text-left font-medium text-fg-muted first:rounded-tl-xl">App</th>
+                  <th className="px-3 py-3 text-left font-medium text-fg-muted">Title</th>
+                  <th className="px-3 py-3 text-left font-medium text-fg-muted">Start</th>
+                  <th className="px-3 py-3 text-left font-medium text-fg-muted">End</th>
+                  <th className="px-3 py-3 text-left font-medium text-fg-muted">State</th>
+                  <th className="px-3 py-3 text-right font-medium text-fg-muted">Duration</th>
+                  <th className="hidden px-3 py-3 text-right font-medium text-fg-muted last:rounded-tr-xl 2xl:table-cell">Focus</th>
                 </tr>
-              )})}
-            </tbody>
-          </table>
+              </thead>
+
+              {/* Cross-fade the whole page of rows when the page or filter changes. */}
+              <AnimatePresence mode="wait" initial={false}>
+                <motion.tbody
+                  key={`${page}:${filter}`}
+                  initial={reduced ? false : { opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.22 }}
+                >
+                  {rows.map((s, i) => {
+                    const color = getColor(s.class);
+                    const pct = maxDuration > 0 ? ((s.duration_ms ?? 0) / maxDuration) * 100 : 0;
+                    return (
+                      <motion.tr
+                        key={s.id}
+                        variants={listItem}
+                        initial={reduced ? false : 'hidden'}
+                        animate="show"
+                        transition={{ delay: reduced ? 0 : Math.min(i * 0.015, 0.3) }}
+                        className="border-b border-line/60 transition-colors hover:bg-surface-2/60"
+                      >
+                        <td className="px-3 py-2.5">
+                          {/* min-w-0 + overflow-hidden let the long class names
+                              truncate inside the fixed-width column instead of
+                              bleeding into the Title cell. */}
+                          <div className="flex min-w-0 items-center gap-2 overflow-hidden">
+                            <span
+                              className="h-2 w-2 shrink-0 rounded-full"
+                              style={{ backgroundColor: color }}
+                            />
+                            <AppName cls={s.class} metadata={appMetadata[s.class] ?? null} />
+                          </div>
+                        </td>
+                        <td className="max-w-[160px] truncate px-4 py-2.5 text-fg-muted" title={s.title || undefined}>
+                          {s.title || '-'}
+                        </td>
+                        <td className="px-3 py-2.5 tnum text-fg-muted">{formatTime(s.started_at)}</td>
+                        <td className="px-3 py-2.5 tnum text-fg-muted">
+                          {s.ended_at ? formatTime(s.ended_at) : 'Active'}
+                        </td>
+                        <td className="px-3 py-2.5">
+                          {s.activity_state && (
+                            <span className={STATE_CHIP[s.activity_state] ?? 'chip-neutral'}>
+                              {s.activity_state}
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <div className="flex items-center justify-end gap-2">
+                            <span className="tnum text-accent">{formatDurationFine(s.duration_ms)}</span>
+                            <div className="w-16 shrink-0">
+                              <ProgressBar pct={pct} color={color} height={5} />
+                            </div>
+                          </div>
+                        </td>
+                        <td className="hidden px-3 py-2.5 text-right text-xs tnum text-fg-faint 2xl:table-cell">
+                          {formatDurationFine(s.focused_ms)}
+                        </td>
+                      </motion.tr>
+                    );
+                  })}
+                </motion.tbody>
+              </AnimatePresence>
+            </table>
+            </div>
+          )}
 
           {data && (
-            <div className="flex items-center justify-between px-4 py-3 border-t border-gray-800">
-              <span className="text-xs text-gray-400">
-                Page {page} of {Math.max(1, Math.ceil(data.total / 50))}
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line px-4 py-3">
+              <span className="text-xs text-fg-muted">
+                Page{' '}
+                <AnimatePresence mode="wait" initial={false}>
+                  <motion.span
+                    key={page}
+                    className="inline-block tnum text-fg"
+                    initial={reduced ? false : { opacity: 0, y: 6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -6 }}
+                    transition={{ duration: 0.2 }}
+                  >
+                    {page}
+                  </motion.span>
+                </AnimatePresence>{' '}
+                of {totalPages}
+                <span className="text-fg-faint"> · {data.total} sessions</span>
               </span>
               <div className="flex gap-2">
-                <button
+                <motion.button
                   onClick={() => setPage((p) => Math.max(1, p - 1))}
                   disabled={page <= 1}
-                  className="px-3 py-1 bg-gray-800 rounded text-xs text-gray-300 disabled:opacity-50"
+                  className="btn"
+                  whileTap={page <= 1 ? undefined : { scale: 0.94, transition: spring }}
                 >
+                  <ChevronLeft size={14} />
                   Previous
-                </button>
-                <button
+                </motion.button>
+                <motion.button
                   onClick={() => setPage((p) => p + 1)}
-                  disabled={page >= Math.ceil(data.total / 50)}
-                  className="px-3 py-1 bg-gray-800 rounded text-xs text-gray-300 disabled:opacity-50"
+                  disabled={page >= totalPages}
+                  className="btn"
+                  whileTap={page >= totalPages ? undefined : { scale: 0.94, transition: spring }}
                 >
                   Next
-                </button>
+                  <ChevronRight size={14} />
+                </motion.button>
               </div>
             </div>
           )}

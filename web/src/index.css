@@ -2,40 +2,279 @@
 @tailwind components;
 @tailwind utilities;
 
-body {
-  @apply bg-gray-950 text-gray-100 antialiased;
+/* ==========================================================================
+   Theme tokens
+   --------------------------------------------------------------------------
+   Colours are stored as raw RGB triplets so Tailwind can compose them with
+   arbitrary opacity (`bg-surface/60`). `.dark` / `.light` on <html> swaps the
+   whole palette; every semantic utility (bg-surface, text-fg-muted,
+   border-line, ...) therefore follows the active theme automatically.
+   ========================================================================== */
+@layer base {
+  :root,
+  .dark {
+    --c-bg: 10 15 22;
+    --c-bg-soft: 15 22 31;
+    --c-surface: 18 26 36;
+    --c-surface-2: 25 35 47;
+    --c-surface-3: 33 45 59;
+    --c-line: 33 45 58;
+    --c-line-strong: 48 64 82;
+    --c-fg: 232 238 245;
+    --c-fg-muted: 148 164 181;
+    --c-fg-faint: 100 118 137;
+    --c-accent: 34 211 238;
+    --c-accent-2: 167 139 250;
+    --c-accent-3: 52 211 153;
+    --c-good: 52 211 153;
+    --c-warn: 251 191 36;
+    --c-bad: 248 113 113;
+    --c-shadow: 0 0 0;
+    --shadow-strength: 0.5;
+    --glow-opacity: 0.14;
+    color-scheme: dark;
+  }
+
+  .light {
+    --c-bg: 246 248 251;
+    --c-bg-soft: 241 245 249;
+    --c-surface: 255 255 255;
+    --c-surface-2: 248 250 252;
+    --c-surface-3: 241 245 249;
+    --c-line: 226 232 240;
+    --c-line-strong: 203 213 225;
+    --c-fg: 15 23 42;
+    --c-fg-muted: 82 102 125;
+    --c-fg-faint: 125 143 163;
+    --c-accent: 8 145 178;
+    --c-accent-2: 124 58 237;
+    --c-accent-3: 5 150 105;
+    --c-good: 5 150 105;
+    --c-warn: 217 119 6;
+    --c-bad: 220 38 38;
+    --c-shadow: 15 23 42;
+    --shadow-strength: 0.1;
+    --glow-opacity: 0.1;
+    color-scheme: light;
+  }
+
+  html {
+    scrollbar-gutter: stable;
+  }
+
+  body {
+    @apply bg-bg text-fg antialiased;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+    transition: background-color 0.35s ease, color 0.35s ease;
+  }
+
+  /* Numbers in stat tiles must not jitter while animating. */
+  .tnum {
+    font-variant-numeric: tabular-nums;
+  }
+
+  ::selection {
+    background: rgb(var(--c-accent) / 0.3);
+  }
+
+  :focus-visible {
+    @apply outline-none ring-2 ring-accent/60 ring-offset-2;
+    ring-offset-color: rgb(var(--c-bg));
+  }
+
+  /* Scrollbars ------------------------------------------------------------ */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(var(--c-line-strong)) transparent;
+  }
+
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply rounded-full;
+    background: rgb(var(--c-line-strong));
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgb(var(--c-fg-faint));
+  }
+
+  /* Native date/time pickers in dark mode -------------------------------- */
+  input[type='date']::-webkit-calendar-picker-indicator,
+  input[type='time']::-webkit-calendar-picker-indicator {
+    filter: invert(var(--picker-invert, 0.65));
+    cursor: pointer;
+  }
+
+  .light input[type='date']::-webkit-calendar-picker-indicator,
+  .light input[type='time']::-webkit-calendar-picker-indicator {
+    --picker-invert: 0.25;
+  }
 }
 
-::-webkit-scrollbar {
-  width: 6px;
+/* ==========================================================================
+   Components
+   ========================================================================== */
+@layer components {
+  .card {
+    @apply rounded-xl border border-line bg-surface;
+    box-shadow: 0 1px 2px rgb(var(--c-shadow) / calc(var(--shadow-strength) * 0.4)),
+      0 8px 24px -12px rgb(var(--c-shadow) / calc(var(--shadow-strength) * 0.8));
+  }
+
+  .card-pad {
+    @apply card p-5;
+  }
+
+  .card-interactive {
+    @apply card transition-[border-color,box-shadow,transform] duration-200;
+  }
+
+  .card-interactive:hover {
+    @apply border-accent/40;
+    box-shadow: 0 0 0 1px rgb(var(--c-accent) / 0.08),
+      0 12px 32px -16px rgb(var(--c-accent) / 0.35);
+  }
+
+  .panel-title {
+    @apply flex items-center gap-2 text-sm font-medium text-fg-muted;
+  }
+
+  .panel-sub {
+    @apply text-xs text-fg-faint;
+  }
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-lg border border-line bg-surface-2
+           px-3 py-1.5 text-sm font-medium text-fg transition-colors
+           hover:border-line-strong hover:bg-surface-3 disabled:cursor-not-allowed disabled:opacity-40;
+  }
+
+  .btn-accent {
+    @apply border-transparent bg-accent/15 text-accent hover:border-accent/40 hover:bg-accent/25;
+  }
+
+  .btn-ghost {
+    @apply border-transparent bg-transparent text-fg-muted hover:bg-surface-2 hover:text-fg;
+  }
+
+  .input {
+    @apply rounded-lg border border-line bg-surface-2 px-3 py-1.5 text-sm text-fg
+           placeholder:text-fg-faint transition-colors
+           focus:border-accent/60 focus:outline-none focus:ring-2 focus:ring-accent/25;
+  }
+
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium;
+  }
+
+  .chip-neutral {
+    @apply chip border-line bg-surface-2 text-fg-muted;
+  }
+
+  .chip-accent {
+    @apply chip border-accent/30 bg-accent/10 text-accent;
+  }
+
+  .chip-good {
+    @apply chip border-good/30 bg-good/10 text-good;
+  }
+
+  .chip-bad {
+    @apply chip border-bad/30 bg-bad/10 text-bad;
+  }
+
+  .chip-warn {
+    @apply chip border-warn/30 bg-warn/10 text-warn;
+  }
+
+  .divider {
+    @apply h-px w-full bg-line;
+  }
+
+  /* Faint dot-grid backdrop used behind hero areas. */
+  .dot-grid {
+    background-image: radial-gradient(
+      rgb(var(--c-line-strong) / 0.55) 1px,
+      transparent 1px
+    );
+    background-size: 22px 22px;
+  }
+
+  .glow-accent {
+    box-shadow: 0 0 24px -4px rgb(var(--c-accent) / var(--glow-opacity));
+  }
+
+  .text-gradient {
+    @apply bg-gradient-to-r from-accent via-accent to-accent-2 bg-clip-text text-transparent;
+  }
+
+  /* Skeleton shimmer (replaces plain animate-pulse in loaders). */
+  .skeleton {
+    @apply relative overflow-hidden rounded-lg bg-surface-2;
+  }
+
+  .skeleton::after {
+    content: '';
+    @apply absolute inset-0;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      rgb(var(--c-line-strong) / 0.5),
+      transparent
+    );
+    animation: shimmer 1.6s infinite;
+  }
+
+  /* Markdown (AI chat) inherits the active theme instead of Tailwind's
+     fixed light-mode prose palette. */
+  .prose {
+    --tw-prose-body: rgb(var(--c-fg));
+    --tw-prose-headings: rgb(var(--c-fg));
+    --tw-prose-lead: rgb(var(--c-fg-muted));
+    --tw-prose-links: rgb(var(--c-accent));
+    --tw-prose-bold: rgb(var(--c-fg));
+    --tw-prose-counters: rgb(var(--c-fg-muted));
+    --tw-prose-bullets: rgb(var(--c-line-strong));
+    --tw-prose-hr: rgb(var(--c-line));
+    --tw-prose-quotes: rgb(var(--c-fg-muted));
+    --tw-prose-quote-borders: rgb(var(--c-accent) / 0.4);
+    --tw-prose-captions: rgb(var(--c-fg-faint));
+    --tw-prose-code: rgb(var(--c-accent));
+    --tw-prose-pre-code: rgb(var(--c-fg));
+    --tw-prose-pre-bg: rgb(var(--c-surface-3));
+    --tw-prose-th-borders: rgb(var(--c-line-strong));
+    --tw-prose-td-borders: rgb(var(--c-line));
+  }
+
+  .prose pre {
+    @apply border border-line;
+  }
+
+  .prose :where(code):not(:where([class~='not-prose'] *))::before,
+  .prose :where(code):not(:where([class~='not-prose'] *))::after {
+    content: '';
+  }
 }
 
-::-webkit-scrollbar-track {
-  @apply bg-gray-900;
-}
-
-::-webkit-scrollbar-thumb {
-  @apply bg-gray-700 rounded-full;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  @apply bg-gray-600;
-}
-
+/* ==========================================================================
+   Keyframes
+   ========================================================================== */
 @keyframes fadeIn {
   from { opacity: 0; }
   to { opacity: 1; }
 }
 
 @keyframes fadeInUp {
-  from {
-    opacity: 0;
-    transform: translateY(12px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 @keyframes blink {
@@ -44,50 +283,57 @@ body {
 }
 
 @keyframes pulse-glow {
-  0%, 100% {
-    box-shadow: 0 0 0 0 rgba(34, 211, 238, 0.15);
-  }
-  50% {
-    box-shadow: 0 0 12px 4px rgba(34, 211, 238, 0.1);
-  }
+  0%, 100% { box-shadow: 0 0 0 0 rgb(var(--c-accent) / 0.15); }
+  50% { box-shadow: 0 0 16px 4px rgb(var(--c-accent) / 0.12); }
 }
 
 @keyframes scaleIn {
-  from {
-    opacity: 0;
-    transform: scale(0.95);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
 }
 
-.animate-fadeIn {
-  animation: fadeIn 0.3s ease-out;
+@keyframes shimmer {
+  100% { transform: translateX(100%); }
 }
 
-.animate-fadeInUp {
-  animation: fadeInUp 0.35s ease-out both;
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
 }
 
-.animate-blink {
-  animation: blink 0.8s ease-in-out infinite;
+@keyframes ring-pulse {
+  0% { transform: scale(0.9); opacity: 0.7; }
+  70% { transform: scale(1.6); opacity: 0; }
+  100% { transform: scale(1.6); opacity: 0; }
 }
 
-.animate-pulse-glow {
-  animation: pulse-glow 2s ease-in-out infinite;
+@keyframes dash {
+  to { stroke-dashoffset: 0; }
 }
 
-.animate-scaleIn {
-  animation: scaleIn 0.2s ease-out;
-}
+.animate-fadeIn { animation: fadeIn 0.3s ease-out; }
+.animate-fadeInUp { animation: fadeInUp 0.35s ease-out both; }
+.animate-blink { animation: blink 0.8s ease-in-out infinite; }
+.animate-pulse-glow { animation: pulse-glow 2.4s ease-in-out infinite; }
+.animate-scaleIn { animation: scaleIn 0.2s ease-out; }
+.animate-float { animation: float 3s ease-in-out infinite; }
 
 .stat-card-hover {
   @apply transition-all duration-200;
 }
 
 .stat-card-hover:hover {
-  @apply border-cyan-500/20 shadow-lg shadow-cyan-500/5;
-  transform: translateY(-1px);
+  @apply border-accent/30;
+  transform: translateY(-2px);
+}
+
+/* Users who ask the OS to reduce motion get the layout without the movement. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
 }

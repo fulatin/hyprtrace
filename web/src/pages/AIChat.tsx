@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
   AlertTriangle,
   Bot,
@@ -14,16 +15,17 @@ import { NdjsonChatTransport } from "../lib/transport";
 import { api } from "../lib/api";
 import { authHeaders } from "../lib/auth";
 import type { AiMessage, AiModelsResponse } from "../lib/types";
+import { easeOut, spring } from "../lib/motion";
 import ChatInput from "../components/ChatInput";
 import ToolCallCard from "../components/ToolCallCard";
+import { EmptyState, Skeleton } from "../components/ui/Feedback";
+import { Reveal, RevealItem } from "../components/ui/Reveal";
 
 const QUICK_QUESTIONS = [
   "Analyze today's usage data and give me insights",
-  "What window am I using right now?",
   "Which apps did I use the most today?",
-  "How many workspaces do I have and what's on them?",
+  "What window am I using right now?",
   "Analyze my efficiency this week",
-  "Show my Hyprland version and monitors",
 ];
 
 const FOLLOW_UP_QUESTIONS: Record<string, string[]> = {
@@ -41,6 +43,42 @@ function extractText(message: any): string {
       ?.filter((p: any) => p.type === "text")
       .map((p: any) => p.text)
       .join("") ?? ""
+  );
+}
+
+/**
+ * Three-dot typing pulse shown while an assistant message is still streaming.
+ * Purely decorative: it never touches the transport or the message stream.
+ */
+function TypingDots({ className = "" }: { className?: string }) {
+  const reduced = useReducedMotion();
+  return (
+    <span
+      className={`inline-flex items-center gap-1 ${className}`}
+      aria-label="Assistant is typing"
+    >
+      {[0, 1, 2].map((i) => (
+        <motion.span
+          key={i}
+          className="h-1.5 w-1.5 rounded-full bg-accent"
+          animate={
+            reduced
+              ? { opacity: 0.65 }
+              : { opacity: [0.25, 1, 0.25], y: [0, -2, 0] }
+          }
+          transition={
+            reduced
+              ? { duration: 0 }
+              : {
+                  duration: 1,
+                  repeat: Infinity,
+                  ease: "easeInOut",
+                  delay: i * 0.15,
+                }
+          }
+        />
+      ))}
+    </span>
   );
 }
 
@@ -105,8 +143,11 @@ export default function AIChat() {
   const [dateRange, setDateRange] = useState("today");
   const [incompleteId, setIncompleteId] = useState<number | null>(null);
   const [pollTimedOut, setPollTimedOut] = useState(false);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const dbIdToUiId = useRef(new Map<number, string>());
+  const reduced = useReducedMotion();
+
+  const models = providers[selectedProvider] ?? [];
 
   const transport = useMemo(
     () =>
@@ -262,9 +303,16 @@ export default function AIChat() {
     return () => clearInterval(timer);
   }, [incompleteId, setMessages]);
 
+  // Follow the newest content. `scrollTo` on the container keeps the smooth
+  // animation even when the list is taller than the viewport.
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTo({
+      top: el.scrollHeight,
+      behavior: reduced ? "auto" : "smooth",
+    });
+  }, [messages, status, reduced]);
 
   const handleClearContext = async () => {
     setMessages([]);
@@ -293,191 +341,340 @@ export default function AIChat() {
 
   const stillGenerating = incompleteId !== null;
 
+  // `submitted` means the request is out but no assistant bubble exists yet, so
+  // the typing pulse lives in a placeholder bubble; once the assistant message
+  // arrives the pulse moves inside it (and never shows twice).
+  const awaitingFirstChunk =
+    isLoading && messages[messages.length - 1]?.role !== "assistant";
+
+  const bubbleTransition = reduced ? { duration: 0 } : spring;
+
   return (
-    <div className="flex flex-col h-[calc(100vh-3rem)] animate-fadeIn">
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-xl font-bold flex items-center gap-2">
-          <Bot size={20} className="text-cyan-400" />
-          AI Analysis
-        </h2>
-        <div className="flex items-center gap-3">
-          <button
-            onClick={handleWeeklyReport}
-            disabled={reportLoading}
-            className="flex items-center gap-1.5 bg-gray-800 border border-gray-700 rounded-md px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-700 transition-colors disabled:opacity-50"
+    <div className="flex h-[calc(100vh-3rem)] flex-col">
+      <Reveal className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <RevealItem className="flex flex-wrap items-center gap-2">
+          <h2 className="flex items-center gap-2 text-xl font-bold text-fg">
+            <Bot size={20} className="text-accent" />
+            AI Analysis
+          </h2>
+
+          {/* Compact status: active provider (+ live pulse while streaming). */}
+          <span className="chip-accent" title={`Active provider: ${selectedProvider}`}>
+            <span className="relative flex h-1.5 w-1.5">
+              {isLoading && !reduced && (
+                <motion.span
+                  className="absolute inline-flex h-full w-full rounded-full bg-accent/70"
+                  animate={{ scale: [1, 2.2], opacity: [0.6, 0] }}
+                  transition={{ duration: 1.2, repeat: Infinity, ease: "easeOut" }}
+                />
+              )}
+              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-accent" />
+            </span>
+            {selectedProvider}
+          </span>
+
+          <AnimatePresence initial={false}>
+            {isLoading && (
+              <motion.span
+                key="streaming-chip"
+                className="chip-warn"
+                initial={{ opacity: 0, scale: 0.9 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.9 }}
+                transition={easeOut}
+              >
+                streaming
+              </motion.span>
+            )}
+          </AnimatePresence>
+        </RevealItem>
+
+        <RevealItem className="flex flex-wrap items-center gap-2">
+          <select
+            value={selectedProvider}
+            onChange={(e) => handleProviderChange(e.target.value)}
+            aria-label="Provider"
+            title="Provider"
+            className="input text-xs"
           >
-            <Sparkles size={12} className="text-cyan-400" />
-            {reportLoading ? 'Generating...' : 'Weekly Report'}
-          </button>
+            {Object.keys(providers).map((p) => (
+              <option key={p} value={p}>
+                {p}
+              </option>
+            ))}
+          </select>
+
+          {models.length > 0 && (
+            <select
+              value={selectedModel}
+              onChange={(e) => handleModelChange(e.target.value)}
+              aria-label="Model"
+              title="Model"
+              className="input max-w-[220px] text-xs"
+            >
+              {models.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+          )}
+
           <select
             value={dateRange}
             onChange={(e) => setDateRange(e.target.value)}
-            className="bg-gray-800 border border-gray-700 rounded-md px-3 py-1.5 text-xs text-gray-300 focus:ring-cyan-500"
+            aria-label="Date range"
+            title="Date range"
+            className="input text-xs"
           >
             <option value="today">Today</option>
             <option value="week">This Week</option>
             <option value="month">This Month</option>
           </select>
-          {messages.length > 0 && (
-            <button
-              onClick={handleClearContext}
-              className="flex items-center gap-1.5 bg-gray-800 border border-gray-700 rounded-md px-3 py-1.5 text-xs text-gray-400 hover:text-red-400 hover:border-red-800 transition-colors"
-            >
-              <Trash2 size={12} />
-              Clear
-            </button>
-          )}
-        </div>
-      </div>
 
-      <div className="flex-1 overflow-auto bg-gray-900 border border-gray-800 rounded-t-lg p-4 space-y-4">
+          <motion.button
+            onClick={handleWeeklyReport}
+            disabled={reportLoading}
+            whileHover={reduced ? undefined : { y: -1 }}
+            whileTap={reduced ? undefined : { scale: 0.97 }}
+            transition={spring}
+            className="btn text-xs"
+          >
+            <motion.span
+              className="text-accent"
+              animate={reportLoading && !reduced ? { rotate: 360 } : { rotate: 0 }}
+              transition={
+                reportLoading
+                  ? { duration: 1.4, repeat: Infinity, ease: "linear" }
+                  : { duration: 0.2 }
+              }
+            >
+              <Sparkles size={12} />
+            </motion.span>
+            {reportLoading ? 'Generating...' : 'Weekly Report'}
+          </motion.button>
+
+          <AnimatePresence initial={false}>
+            {messages.length > 0 && (
+              <motion.button
+                key="clear"
+                onClick={handleClearContext}
+                initial={{ opacity: 0, scale: 0.9 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.9 }}
+                whileHover={reduced ? undefined : { y: -1 }}
+                whileTap={reduced ? undefined : { scale: 0.97 }}
+                transition={spring}
+                className="btn text-xs hover:border-bad/40 hover:text-bad"
+              >
+                <Trash2 size={12} />
+                Clear
+              </motion.button>
+            )}
+          </AnimatePresence>
+        </RevealItem>
+      </Reveal>
+
+      <div
+        ref={scrollRef}
+        className="min-h-0 flex-1 space-y-4 overflow-y-auto rounded-t-2xl border border-b-0 border-line bg-surface/40 p-4"
+      >
         {!historyLoaded ? (
-          <div className="text-center py-12">
-            <Loader2
-              size={24}
-              className="animate-spin text-gray-500 mx-auto"
-            />
+          <div className="space-y-3">
+            <Skeleton className="h-12 w-1/2" />
+            <Skeleton className="ml-auto h-16 w-2/3" />
+            <Skeleton className="h-24 w-3/4" />
           </div>
         ) : messages.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-center py-12 animate-fadeInUp">
-            <div className="relative mb-6">
-              <Bot size={56} className="text-cyan-400/30 mx-auto" />
-              <Sparkles
-                size={20}
-                className="text-cyan-400 absolute -top-1 -right-1 animate-pulse"
-              />
-            </div>
-            <p className="text-gray-400 mb-2 text-lg">
-              AI Analysis Assistant
-            </p>
-            <p className="text-gray-500 text-sm mb-8">
-              Ask anything about your usage data
-              <span className="block text-gray-600 text-xs mt-2">
-                Nothing is sent until you ask — every question is a request to
-                the configured model.
-              </span>
-            </p>
-            <div className="flex flex-wrap justify-center gap-2 max-w-lg">
-              {QUICK_QUESTIONS.map((q, i) => (
-                <button
-                  key={q}
-                  onClick={() => handleSend(q)}
-                  className="bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-sm text-gray-300 
-                    hover:bg-gray-700 hover:border-cyan-500/30 hover:text-cyan-100 
-                    transition-all duration-200"
-                  style={{ animationDelay: `${i * 80}ms` }}
-                >
-                  {q}
-                </button>
-              ))}
-            </div>
+          <div className="flex h-full items-center justify-center">
+            <EmptyState
+              className="w-full max-w-2xl"
+              icon={
+                <div className="relative">
+                  <Bot size={44} className="text-accent/40" />
+                  <motion.span
+                    className="absolute -right-1 -top-1 text-accent"
+                    animate={reduced ? { opacity: 0.8 } : { opacity: [0.45, 1, 0.45] }}
+                    transition={
+                      reduced
+                        ? { duration: 0 }
+                        : { duration: 2.2, repeat: Infinity, ease: "easeInOut" }
+                    }
+                  >
+                    <Sparkles size={18} />
+                  </motion.span>
+                </div>
+              }
+              title="AI Analysis Assistant"
+              hint="Ask anything about your usage data. Nothing is sent until you ask — every question is a request to the configured model."
+              action={
+                <Reveal className="mt-4 flex flex-wrap justify-center gap-2" stagger={0.06}>
+                  {QUICK_QUESTIONS.map((q) => (
+                    <RevealItem key={q}>
+                      <motion.button
+                        onClick={() => handleSend(q)}
+                        whileHover={reduced ? undefined : { y: -3, scale: 1.02 }}
+                        whileTap={reduced ? undefined : { scale: 0.98 }}
+                        transition={spring}
+                        className="card-interactive px-4 py-2.5 text-sm text-fg-muted hover:text-fg"
+                      >
+                        {q}
+                      </motion.button>
+                    </RevealItem>
+                  ))}
+                </Reveal>
+              }
+            />
           </div>
         ) : null}
 
-        {messages.map((message, idx) => {
-          const text = extractText(message);
-          const isLast = idx === messages.length - 1;
-          return (
-            <div
-              key={message.id}
-              className={
-                message.role === "user"
-                  ? "flex justify-end animate-fadeInUp"
-                  : "flex justify-start animate-fadeInUp"
-              }
-              style={{ animationDelay: "0ms" }}
-            >
-              <div
-                className={
-                  message.role === "user"
-                    ? "max-w-[80%] rounded-lg px-4 py-3 text-sm bg-cyan-600/20 text-cyan-100 border border-cyan-500/30"
-                    : "max-w-[80%] rounded-lg px-4 py-3 text-sm bg-gray-800 text-gray-200 border border-gray-700"
-                }
+        <AnimatePresence initial={false}>
+          {messages.map((message, idx) => {
+            const text = extractText(message);
+            const isLast = idx === messages.length - 1;
+            const isUser = message.role === "user";
+            return (
+              <motion.div
+                key={message.id}
+                initial={reduced ? { opacity: 0 } : { opacity: 0, y: 12, scale: 0.98 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={reduced ? { opacity: 0 } : { opacity: 0, scale: 0.98, y: -6 }}
+                transition={bubbleTransition}
+                className={isUser ? "flex justify-end" : "flex justify-start"}
               >
-                {message.role === "user" ? (
-                  <p className="whitespace-pre-wrap">{text}</p>
-                ) : (
-                  <>
-                    {(message as any).parts?.map((part: any, i: number) => {
-                      if (part.type === "text") {
-                        return (
-                          <Streamdown key={i} isAnimating={isLoading && isLast}>
-                            {part.text}
-                          </Streamdown>
-                        );
-                      }
-                      if (
-                        typeof part.type === "string" &&
-                        part.type.startsWith("tool-")
-                      ) {
-                        return <ToolCallCard key={part.toolCallId ?? i} part={part} />;
-                      }
-                      return null;
-                    })}
-                    {isLast && isLoading && (
-                      <span className="inline-block w-2 h-4 bg-cyan-400 ml-1 animate-blink" />
-                    )}
-                  </>
-                )}
-                {isLast && stillGenerating && (
-                  <div className="mt-2 flex items-center gap-1.5 text-xs text-cyan-400/80">
-                    <Loader2 size={12} className="animate-spin" />
-                    Still generating server-side…
-                  </div>
-                )}
-                {isLast && pollTimedOut && (
-                  <div className="mt-2 flex items-center gap-1.5 text-xs text-amber-400">
-                    <AlertTriangle size={12} />
-                    Generation was interrupted — send a message to continue
-                  </div>
-                )}
-              </div>
-            </div>
-          );
-        })}
-
-        {isLoading && (
-          <div className="flex justify-start">
-            <div className="bg-gray-800/50 border border-gray-700/50 rounded-lg px-4 py-3 flex items-center gap-2 text-sm text-gray-400">
-              <Loader2 size={14} className="animate-spin" />
-              <button
-                onClick={stop}
-                className="ml-1 p-1 rounded hover:bg-gray-700 transition-colors"
-                title="Stop generating"
-              >
-                <Square size={12} />
-              </button>
-            </div>
-          </div>
-        )}
-
-        {error && !isLoading && (
-          <div className="text-center text-red-400 text-xs mb-4 bg-red-900/20 border border-red-800/30 rounded-lg px-4 py-3">
-            {error.message}
-          </div>
-        )}
-
-        {!isLoading &&
-          !stillGenerating &&
-          !pollTimedOut &&
-          lastAssistantText &&
-          messages[messages.length - 1]?.role === "assistant" && (
-            <div className="flex flex-wrap gap-2 pt-2 animate-fadeInUp">
-              {FOLLOW_UP_QUESTIONS.default.map((q) => (
-                <button
-                  key={q}
-                  onClick={() => handleSend(q)}
-                  className="bg-gray-800/60 border border-gray-700/60 rounded-md px-3 py-1.5 text-xs text-gray-400 
-                    hover:bg-gray-700 hover:border-cyan-500/30 hover:text-cyan-100 
-                    transition-all duration-200"
+                <div
+                  className={
+                    isUser
+                      ? "max-w-[80%] rounded-2xl rounded-br-md border border-accent/25 bg-accent/10 px-4 py-3 text-sm text-fg"
+                      : "max-w-[80%] rounded-2xl rounded-bl-md border border-line bg-surface-2 px-4 py-3 text-sm text-fg"
+                  }
                 >
-                  {q}
-                </button>
-              ))}
-            </div>
-          )}
+                  {isUser ? (
+                    <p className="whitespace-pre-wrap">{text}</p>
+                  ) : (
+                    <>
+                      {(message as any).parts?.map((part: any, i: number) => {
+                        if (part.type === "text") {
+                          return (
+                            <Streamdown
+                              key={i}
+                              isAnimating={isLoading && isLast}
+                              className="text-fg"
+                            >
+                              {part.text}
+                            </Streamdown>
+                          );
+                        }
+                        if (
+                          typeof part.type === "string" &&
+                          part.type.startsWith("tool-")
+                        ) {
+                          return <ToolCallCard key={part.toolCallId ?? i} part={part} />;
+                        }
+                        return null;
+                      })}
+                      {isLast && isLoading && (
+                        <span className="mt-2 flex items-center gap-2">
+                          <TypingDots />
+                          <button
+                            onClick={stop}
+                            title="Stop generating"
+                            aria-label="Stop generating"
+                            className="btn btn-ghost px-1.5 py-0.5"
+                          >
+                            <Square size={11} />
+                          </button>
+                        </span>
+                      )}
+                    </>
+                  )}
+                  {isLast && stillGenerating && (
+                    <div className="mt-2 flex items-center gap-1.5 text-xs text-accent">
+                      <Loader2 size={12} className="animate-spin" />
+                      Still generating server-side…
+                    </div>
+                  )}
+                  {isLast && pollTimedOut && (
+                    <div className="mt-2 flex items-center gap-1.5 text-xs text-warn">
+                      <AlertTriangle size={12} />
+                      Generation was interrupted — send a message to continue
+                    </div>
+                  )}
+                </div>
+              </motion.div>
+            );
+          })}
+        </AnimatePresence>
 
-        <div ref={messagesEndRef} />
+        <AnimatePresence initial={false}>
+          {awaitingFirstChunk && (
+            <motion.div
+              key="pending-bubble"
+              initial={reduced ? { opacity: 0 } : { opacity: 0, y: 12, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={reduced ? { opacity: 0 } : { opacity: 0, scale: 0.98, y: -6 }}
+              transition={bubbleTransition}
+              className="flex justify-start"
+            >
+              <div className="flex items-center gap-2 rounded-2xl rounded-bl-md border border-line bg-surface-2/70 px-4 py-3 text-sm text-fg-muted">
+                <TypingDots />
+                <button
+                  onClick={stop}
+                  title="Stop generating"
+                  aria-label="Stop generating"
+                  className="btn btn-ghost ml-1 px-2 py-1"
+                >
+                  <Square size={12} />
+                </button>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence initial={false}>
+          {error && !isLoading && (
+            <motion.div
+              key="error"
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={easeOut}
+              className="rounded-lg border border-bad/30 bg-bad/10 px-4 py-3 text-center text-xs text-bad"
+            >
+              {error.message}
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence initial={false}>
+          {!isLoading &&
+            !stillGenerating &&
+            !pollTimedOut &&
+            lastAssistantText &&
+            messages[messages.length - 1]?.role === "assistant" && (
+              <motion.div
+                key="follow-ups"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -6 }}
+                transition={easeOut}
+                className="flex flex-wrap gap-2 pt-2"
+              >
+                {FOLLOW_UP_QUESTIONS.default.map((q) => (
+                  <motion.button
+                    key={q}
+                    onClick={() => handleSend(q)}
+                    whileHover={reduced ? undefined : { y: -2 }}
+                    whileTap={reduced ? undefined : { scale: 0.97 }}
+                    transition={spring}
+                    className="btn btn-ghost text-xs hover:border-accent/30 hover:text-accent"
+                  >
+                    {q}
+                  </motion.button>
+                ))}
+              </motion.div>
+            )}
+        </AnimatePresence>
       </div>
 
       <ChatInput
@@ -485,11 +682,6 @@ export default function AIChat() {
         disabled={isLoading}
         includeData={includeData}
         onToggleData={() => setIncludeData(!includeData)}
-        selectedProvider={selectedProvider}
-        onProviderChange={handleProviderChange}
-        providers={providers}
-        selectedModel={selectedModel}
-        onModelChange={handleModelChange}
       />
     </div>
   );

@@ -26,6 +26,13 @@ import type {
   AppsMetadataResponse,
   DailyActivity,
   TitleStat,
+  TransitionsResponse,
+  ForecastResponse,
+  RhythmResponse,
+  FragmentationResponse,
+  CooccurrenceResponse,
+  DisruptionImpactResponse,
+  AnomaliesResponse,
 } from './types';
 
 async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
@@ -176,6 +183,48 @@ export const api = {
 
   predict: (window = 14) =>
     fetchJSON<TrendPrediction>(`/api/predict?window=${window}`),
+
+  /* ------------------------------------------------------------------------
+     Insights: deeper analysis endpoints (Markov transitions, regression
+     forecasts, rhythm, fragmentation, co-occurrence, disruption impact,
+     anomaly detection).
+     ---------------------------------------------------------------------- */
+  insights: {
+    transitions: (from: string, to: string, minMs = 3000, limit = 12) =>
+      fetchJSON<TransitionsResponse>(
+        `/api/insights/transitions?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&min_ms=${minMs}&limit=${limit}`
+      ),
+
+    forecast: (cls?: string, days = 30, horizon = 7) =>
+      fetchJSON<ForecastResponse>(
+        `/api/insights/forecast?class=${encodeURIComponent(cls ?? '')}&days=${days}&horizon=${horizon}`
+      ),
+
+    rhythm: (from: string, to: string) =>
+      fetchJSON<RhythmResponse>(
+        `/api/insights/rhythm?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
+      ),
+
+    fragmentation: (from: string, to: string) =>
+      fetchJSON<FragmentationResponse>(
+        `/api/insights/fragmentation?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
+      ),
+
+    cooccurrence: (from: string, to: string, windowMinutes = 30, limit = 10) =>
+      fetchJSON<CooccurrenceResponse>(
+        `/api/insights/cooccurrence?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&window_minutes=${windowMinutes}&limit=${limit}`
+      ),
+
+    disruptionImpact: (from: string, to: string) =>
+      fetchJSON<DisruptionImpactResponse>(
+        `/api/insights/disruption-impact?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
+      ),
+
+    anomalies: (from: string, to: string, window = 14, threshold = 2) =>
+      fetchJSON<AnomaliesResponse>(
+        `/api/insights/anomalies?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&window=${window}&threshold=${threshold}`
+      ),
+  },
 
   report: async (from: string, to: string): Promise<void> => {
     const res = await fetch(`/api/report?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`, {

@@ -45,11 +45,13 @@ export default class ErrorBoundary extends Component<Props, State> {
   render() {
     if (this.state.hasError) {
       return (
-        <div className="min-h-screen bg-gray-950 flex items-center justify-center p-8">
-          <div className="bg-gray-900 border border-gray-800 rounded-lg p-8 max-w-md text-center space-y-4">
-            <AlertTriangle size={48} className="text-red-400 mx-auto" />
-            <h2 className="text-lg font-bold text-red-400">Something went wrong</h2>
-            <p className="text-sm text-gray-400">
+        <div className="flex min-h-screen items-center justify-center bg-bg p-8">
+          <div className="card max-w-md space-y-4 p-8 text-center">
+            <span className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-bad/10 text-bad">
+              <AlertTriangle size={28} />
+            </span>
+            <h2 className="text-lg font-bold text-bad">Something went wrong</h2>
+            <p className="break-words text-sm text-fg-muted">
               {this.state.error?.message || 'An unexpected error occurred.'}
             </p>
             <button
@@ -57,9 +59,9 @@ export default class ErrorBoundary extends Component<Props, State> {
                 this.setState({ hasError: false, error: null });
                 window.location.reload();
               }}
-              className="bg-cyan-600 hover:bg-cyan-700 text-white rounded-md px-4 py-2 text-sm transition-colors"
+              className="btn btn-accent"
             >
-              Reload Page
+              Reload page
             </button>
           </div>
         </div>

@@ -1,5 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { Send, Mic, MicOff } from 'lucide-react';
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
+import { Mic, MicOff, Send } from 'lucide-react';
+import { spring } from '../lib/motion';
 
 declare global {
   interface Window {
@@ -13,11 +15,6 @@ interface ChatInputProps {
   disabled?: boolean;
   includeData: boolean;
   onToggleData: () => void;
-  selectedProvider: string;
-  onProviderChange: (provider: string) => void;
-  providers: Record<string, string[]>;
-  selectedModel: string;
-  onModelChange: (model: string) => void;
 }
 
 export default function ChatInput({
@@ -25,17 +22,11 @@ export default function ChatInput({
   disabled,
   includeData,
   onToggleData,
-  selectedProvider,
-  onProviderChange,
-  providers,
-  selectedModel,
-  onModelChange,
 }: ChatInputProps) {
   const [message, setMessage] = useState('');
   const [listening, setListening] = useState(false);
   const recognitionRef = useRef<any>(null);
-
-  const models = providers[selectedProvider] ?? [];
+  const reduced = useReducedMotion();
 
   const speechSupported = typeof window !== 'undefined' && !!(
     window.SpeechRecognition || window.webkitSpeechRecognition
@@ -92,78 +83,104 @@ export default function ChatInput({
     }
   };
 
+  const canSend = message.trim().length > 0 && !disabled;
+
   return (
-    <form onSubmit={handleSubmit} className="border-t border-gray-800 p-4">
-      <div className="flex items-center gap-3 mb-2 flex-wrap">
-        <label className="flex items-center gap-2 text-xs text-gray-400 cursor-pointer">
+    <form onSubmit={handleSubmit} className="border-t border-line bg-surface/60 p-4 backdrop-blur-xl">
+      <div className="mb-2 flex flex-wrap items-center gap-3">
+        <label className="flex cursor-pointer items-center gap-2 text-xs text-fg-muted transition-colors hover:text-fg">
           <input
             type="checkbox"
             checked={includeData}
             onChange={onToggleData}
-            className="rounded border-gray-600 bg-gray-800 text-cyan-500 focus:ring-cyan-500"
+            className="h-3.5 w-3.5 rounded border-line bg-surface-3 accent-accent focus:ring-2 focus:ring-accent/25"
           />
           Include usage data
         </label>
 
-        <select
-          value={selectedProvider}
-          onChange={(e) => onProviderChange(e.target.value)}
-          className="text-xs bg-gray-800 border border-gray-700 rounded px-2 py-1 text-gray-300 focus:ring-cyan-500 focus:border-cyan-500"
-        >
-          {Object.keys(providers).map((p) => (
-            <option key={p} value={p}>
-              {p}
-            </option>
-          ))}
-        </select>
+        <AnimatePresence initial={false}>
+          {listening && (
+            <motion.span
+              key="listening"
+              className="chip-bad"
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.9 }}
+              transition={spring}
+            >
+              <motion.span
+                className="h-1.5 w-1.5 rounded-full bg-bad"
+                animate={reduced ? { opacity: 0.8 } : { opacity: [0.3, 1, 0.3] }}
+                transition={reduced ? { duration: 0 } : { duration: 1.1, repeat: Infinity, ease: 'easeInOut' }}
+              />
+              Listening…
+            </motion.span>
+          )}
+        </AnimatePresence>
 
-        {models.length > 0 && (
-          <select
-            value={selectedModel}
-            onChange={(e) => onModelChange(e.target.value)}
-            className="text-xs bg-gray-800 border border-gray-700 rounded px-2 py-1 text-gray-300 focus:ring-cyan-500 focus:border-cyan-500 max-w-[220px]"
-            title="Model"
-          >
-            {models.map((m) => (
-              <option key={m} value={m}>
-                {m}
-              </option>
-            ))}
-          </select>
-        )}
+        <span className="ml-auto hidden text-[11px] text-fg-faint sm:block">Enter to send</span>
       </div>
 
-      <div className="flex gap-2">
-        <input
-          type="text"
-          value={message}
-          onChange={(e) => setMessage(e.target.value)}
-          placeholder="Ask about your usage data or live system state..."
-          disabled={disabled}
-          className="flex-1 bg-gray-800 border border-gray-700 rounded-md px-4 py-2 text-sm text-gray-200 placeholder-gray-500 focus:ring-cyan-500 focus:border-cyan-500 disabled:opacity-50"
-        />
+      <div className="flex items-stretch gap-2">
+        {/* A <label> wrapper so a click anywhere in the field focuses the input. */}
+        <label className="input flex min-w-0 flex-1 cursor-text items-center gap-2 px-3 py-2 focus-within:border-accent/60 focus-within:ring-2 focus-within:ring-accent/25">
+          <input
+            type="text"
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            placeholder="Ask about your usage data or live system state..."
+            disabled={disabled}
+            aria-label="Message"
+            className="min-w-0 flex-1 bg-transparent text-sm text-fg placeholder:text-fg-faint focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+          />
+        </label>
+
         {speechSupported && (
-          <button
+          <motion.button
             type="button"
             onClick={toggleListening}
             disabled={disabled}
             title={listening ? 'Stop listening' : 'Voice input'}
-            className={`rounded-md px-3 py-2 text-sm transition-colors border ${
-              listening
-                ? 'bg-red-600/20 border-red-500/40 text-red-400 animate-pulse'
-                : 'bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700'
-            } disabled:opacity-50`}
+            aria-label={listening ? 'Stop listening' : 'Voice input'}
+            whileTap={reduced ? undefined : { scale: 0.94 }}
+            className={`btn relative px-3 py-2 ${
+              listening ? 'border-bad/40 bg-bad/10 text-bad' : ''
+            }`}
           >
-            {listening ? <MicOff size={16} /> : <Mic size={16} />}
-          </button>
+            {listening && !reduced && (
+              <motion.span
+                className="pointer-events-none absolute inset-0 rounded-lg border border-bad/60"
+                initial={{ opacity: 0.6, scale: 1 }}
+                animate={{ opacity: 0, scale: 1.5 }}
+                transition={{ duration: 1.4, repeat: Infinity, ease: 'easeOut' }}
+              />
+            )}
+            <AnimatePresence mode="wait" initial={false}>
+              <motion.span
+                key={listening ? 'mic-off' : 'mic-on'}
+                initial={{ opacity: 0, scale: 0.7 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.7 }}
+                transition={reduced ? { duration: 0 } : spring}
+              >
+                {listening ? <MicOff size={16} /> : <Mic size={16} />}
+              </motion.span>
+            </AnimatePresence>
+          </motion.button>
         )}
-        <button
+
+        <motion.button
           type="submit"
-          disabled={disabled || !message.trim()}
-          className="bg-cyan-600 hover:bg-cyan-500 disabled:bg-gray-700 disabled:opacity-50 text-white rounded-md px-4 py-2 text-sm transition-colors"
+          disabled={!canSend}
+          aria-label="Send message"
+          whileHover={canSend && !reduced ? { y: -1 } : undefined}
+          whileTap={canSend && !reduced ? { scale: 0.94 } : undefined}
+          animate={{ scale: canSend ? 1 : 0.97 }}
+          transition={reduced ? { duration: 0 } : spring}
+          className={`btn px-4 py-2 ${canSend ? 'btn-accent glow-accent' : 'text-fg-faint'}`}
         >
           <Send size={16} />
-        </button>
+        </motion.button>
       </div>
     </form>
   );

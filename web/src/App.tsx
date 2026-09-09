@@ -1,7 +1,9 @@
 import { BrowserRouter, Routes, Route, useLocation } from 'react-router-dom';
 import Layout from './components/Layout';
 import ErrorBoundary from './components/ErrorBoundary';
+import { ThemeProvider } from './lib/theme';
 import Dashboard from './pages/Dashboard';
+import Insights from './pages/Insights';
 import Apps from './pages/Apps';
 import Timeline from './pages/Timeline';
 import Sessions from './pages/Sessions';
@@ -11,9 +13,11 @@ import Settings from './pages/Settings';
 
 export default function App() {
   return (
-    <BrowserRouter>
-      <AppErrorBoundary />
-    </BrowserRouter>
+    <ThemeProvider>
+      <BrowserRouter>
+        <AppErrorBoundary />
+      </BrowserRouter>
+    </ThemeProvider>
   );
 }
 
@@ -25,6 +29,7 @@ function AppErrorBoundary() {
       <Routes>
         <Route element={<Layout />}>
           <Route path="/" element={<Dashboard />} />
+          <Route path="/insights" element={<Insights />} />
           <Route path="/apps" element={<Apps />} />
           <Route path="/timeline" element={<Timeline />} />
           <Route path="/sessions" element={<Sessions />} />
