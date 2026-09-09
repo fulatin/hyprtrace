@@ -3,6 +3,7 @@ mod auth;
 mod config;
 mod db;
 mod desktop;
+mod insights;
 mod models;
 mod proactive;
 mod retention;

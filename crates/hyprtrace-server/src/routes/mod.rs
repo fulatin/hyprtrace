@@ -1,6 +1,7 @@
 mod ai;
 mod config;
 mod data;
+mod insights;
 
 use crate::ai::AiManager;
 use crate::config::Config;
@@ -79,6 +80,33 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         )
         .route("/config", axum::routing::get(config::get_config))
         .route("/config", axum::routing::put(config::update_config))
+        // Read-only analytics. Kept under /insights/* so the existing endpoints
+        // above keep their exact paths and JSON.
+        .route(
+            "/insights/transitions",
+            axum::routing::get(insights::transitions),
+        )
+        .route(
+            "/insights/forecast",
+            axum::routing::get(insights::forecast),
+        )
+        .route("/insights/rhythm", axum::routing::get(insights::rhythm))
+        .route(
+            "/insights/fragmentation",
+            axum::routing::get(insights::fragmentation),
+        )
+        .route(
+            "/insights/cooccurrence",
+            axum::routing::get(insights::cooccurrence),
+        )
+        .route(
+            "/insights/disruption-impact",
+            axum::routing::get(insights::disruption_impact),
+        )
+        .route(
+            "/insights/anomalies",
+            axum::routing::get(insights::anomalies),
+        )
         // Explicit 404 for unmatched /api/* paths. Without this, axum's nest
         // falls through to the outer SPA fallback and would serve index.html
         // (with a 200) for unknown API paths.
