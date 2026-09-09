@@ -6,9 +6,13 @@ HyprTrace 是一个 Hyprland 窗口时间追踪系统，持续记录你在每个
 
 ## 预览
 
-| Dashboard | Apps |
+| Dashboard | Insights |
 |---|---|
-| ![Dashboard](imgs/Dashiboard.png) | ![Apps](imgs/apps.png) |
+| ![Dashboard](imgs/Dashiboard.png) | ![Insights](imgs/insights.png) |
+
+| Apps | Timeline |
+|---|---|
+| ![Apps](imgs/apps.png) | ![Timeline](imgs/timeline.png) |
 
 | AI Chat | Sessions |
 |---|---|
@@ -38,7 +42,7 @@ Hyprland IPC Socket
 
 - **`hyprtrace-daemon`** — Rust 后台守护进程，监听 Hyprland 事件记录窗口焦点会话，同时运行空闲检测（loginctl + 可选的 evdev 输入监控）、资源采样、目标/作息提醒、通知与剪贴板打断采集
 - **`hyprtrace-server`** — Rust Axum HTTP API 服务器，读取 SQLite 数据，暴露 REST 接口（数据查询 + AI agent 对话），提供前端静态文件服务，并运行 AI 主动监控后台任务
-- **`hyprtrace-web`** — React + TypeScript + Tailwind CSS + Recharts 前端 SPA，包含仪表盘、应用排行、时间线、会话浏览、目标管理和 AI 分析面板
+- **`hyprtrace-web`** — React + TypeScript + Tailwind CSS + Recharts + framer-motion 前端 SPA，包含仪表盘、洞察分析、应用排行、时间线、会话浏览、目标管理和 AI 分析面板，支持深色/浅色/跟随系统主题
 
 ## 功能
 
@@ -54,6 +58,15 @@ Hyprland IPC Socket
 - **打断监控** — 通过 D-Bus 捕获桌面通知、轮询剪贴板，量化一天中的干扰次数
 - **每日目标** — 设定每日活跃时长目标，达到 50%/100% 时桌面通知提醒，并支持连续聚焦休息提醒
 - **趋势预测** — 基于历史数据线性回归预测今日和明日使用量
+- **洞察分析（Insights）** — 独立的深度分析页，包含以下 7 类分析：
+  - **应用转移概率** — 马尔可夫转移矩阵 + 流向图，回答"打开 A 之后下一个最可能打开什么"，可调节会话时长阈值过滤抖动
+  - **使用时长回归预测** — 最小二乘趋势 + 周内效应 + 95% 置信区间，支持按应用查看今日/明日预测与拟合优度（R²、MAE）
+  - **周 × 小时作息热力图** — 按星期与小时聚合的平均使用强度，一眼看出作息规律与深夜时段
+  - **焦点与上下文切换** — 平均会话时长、每小时切换次数、一分钟内会话占比、估算的重建上下文成本
+  - **应用共现分析** — 30 分钟窗口内一起使用的应用对，用 lift 判断是否高于随机
+  - **打断与效率关联** — 每日打断数与效率分的相关性、最安静与最嘈杂 25% 日子的对比
+  - **异常日检测** — 基于中位数 + MAD 的稳健基线，标出偏离日常习惯的日子及原因
+- **主题与动效** — 深色/浅色/跟随系统三种主题（CSS 变量驱动，切换无需刷新），页面切换、卡片入场、数字滚动、图表绘制等动画均遵循 `prefers-reduced-motion`
 - **周报导出** — 一键导出 Markdown 格式周报，或让 AI 生成带洞察的分析报告
 - **AI 分析** — 集成 Ollama 本地模型和 OpenAI 兼容 API，AI agent 可实时查询 Hyprland 状态与历史数据
 - **AI 主动监控** — 后台任务定时分析使用模式，发现异常（熬夜、游戏超时、目标告急）时主动推送建议
@@ -206,6 +219,28 @@ npm run dev        # 开发服务器 (localhost:5173)
 npm run build      # 生产构建
 ```
 
+开发时若要指向另一台实例（例如用数据库副本起的临时服务），设置 `VITE_API_TARGET`：
+
+```bash
+VITE_API_TARGET=http://127.0.0.1:9421 npm run dev
+```
+
+### 洞察分析 API
+
+`/api/insights/*` 为只读分析接口，前端洞察页直接调用：
+
+| 端点 | 说明 |
+|---|---|
+| `/api/insights/transitions` | 应用转移概率矩阵、流向边、自转移概率 |
+| `/api/insights/forecast` | 单应用或总体时长的回归预测（含置信区间与周内因子） |
+| `/api/insights/rhythm` | 星期 × 小时的平均使用强度 |
+| `/api/insights/fragmentation` | 会话碎片化与上下文切换成本 |
+| `/api/insights/cooccurrence` | 应用共现对（lift / jaccard / 支持度） |
+| `/api/insights/disruption-impact` | 打断与效率的相关性分析 |
+| `/api/insights/anomalies` | 稳健基线下的异常日检测 |
+
+前端设计系统（颜色 token、组件类、动效约定）见 [`web/DESIGN.md`](web/DESIGN.md)。
+
 ## CI
 
 GitHub Actions 在每次 push / pull request 时运行 `cargo check`、`cargo test` 与 `npm run build`。
@@ -216,7 +251,7 @@ GitHub Actions 在每次 push / pull request 时运行 `cargo check`、`cargo te
 |---|---|
 | 守护进程 | Rust, hyprland-rs, rusqlite, evdev, dbus-monitor |
 | API 服务器 | Rust, Axum, tokio, reqwest |
-| 前端 | React 18, TypeScript, Vite, Tailwind CSS 3, Recharts, Lucide Icons |
+| 前端 | React 18, TypeScript, Vite, Tailwind CSS 3, Recharts, framer-motion, Lucide Icons |
 | AI 前端 | @ai-sdk/react, streamdown, Web Speech API |
 | 数据库 | SQLite (WAL mode) |
 | AI 后端 | Ollama (本地 NDJSON 流), OpenAI 兼容 API (云端 SSE 流), agent 工具调用 |

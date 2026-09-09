@@ -29,3 +29,6 @@ Thumbs.db
 .workbuddy/
 
 .aur/
+
+# DSH harness diagnostics (generated in the workspace, not project code)
+.dsh-diag/
