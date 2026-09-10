@@ -59,6 +59,28 @@ async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
   return res.json();
 }
 
+/**
+ * Extract a human-readable message from an API error thrown by fetchJSON,
+ * which formats failures as "API Error: <status> <body>".
+ */
+export function extractApiError(e: unknown): string {
+  if (e instanceof Error) {
+    const idx = e.message.indexOf('{');
+    if (idx >= 0) {
+      try {
+        const parsed = JSON.parse(e.message.slice(idx));
+        if (parsed && typeof parsed.error === 'string') {
+          return parsed.error;
+        }
+      } catch {
+        /* fall through */
+      }
+    }
+    return e.message;
+  }
+  return 'Unknown error';
+}
+
 export const api = {
   health: () =>
     fetchJSON<{ status: string; version: string }>('/api/health'),
