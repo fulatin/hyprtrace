@@ -2,7 +2,7 @@
 
 > 状态：执行中。分支 `refactor/decouple`。每完成一步勾选，并在同一 commit 内更新本文件。
 > 全部改动遵守 `AGENTS.md` 的不可协商约束：不碰运行中的 9420 实例、不对同一数据库起第二个 daemon、
-> 不打印 `config.toml` 里的 API key、schema 改动两侧同步、前端只用语义 token。
+> 不打印 `config.toml` 里的 API key、schema 只在 `schema/hyprtrace.sql` 定义一次、前端只用语义 token。
 
 ## 已批准的决策（2026-09-10）
 
@@ -11,7 +11,7 @@
 | 主线顺序 | **解耦先行**：先纯移动拆分，再做语义与新功能 |
 | schema 单源化 | **共享 `schema/*.sql` + 两处 `include_str!`**（不新建 crate、不引依赖） |
 | 允许的新依赖 | `rusqlite` 开启 `bundled`、`ts-rs`（Rust→TS 类型）、`@tanstack/react-query`（前端数据层） |
-| focus 语义 | **允许改语义并重建历史汇总** |
+| focus 语义 | **允许改语义并重建历史汇总**；落地方式追加选定为 **A 方案（查询侧派生）**：服务端纯函数按需算，daemon 不改、零 schema 变更、不新建 crate |
 
 ## 基线（Phase 0 记录，用作每步回归的对照）
 
@@ -53,23 +53,30 @@
 ### Phase 1 — 解耦（纯移动，零行为变化）
 - [x] 1a `schema/hyprtrace.sql` 单源化：两份 DDL 合并为一个文件 + 两处 `include_str!`
       （fresh-DB schema 逐字节比对通过；新增 3 个守卫测试/crate；快照 `schema/expected-columns.txt`）
-- [ ] 1b `server/db.rs`(3412) → `server/db/*.rs`（按域拆 14 个模块 + `tests.rs`）
-- [ ] 1c `server/insights.rs`(2075) → `server/insights/*.rs`（10 个域模块，测试随域下放）
-- [ ] 1d `daemon/db.rs`(1469) → `daemon/db/*.rs`
-- [ ] 1e `web/src/pages/Settings.tsx`(1525) → `pages/settings/*`，`Toggle/SaveButton/Spinner/AnimatedRow`
-      上提到 `components/ui/`
+- [ ] 1b `server/db.rs` → `server/db/*.rs`（按域拆 14 个模块 + `tests.rs`）
+- [x] 1c `server/insights.rs`(2075) → `server/insights/*.rs`（10 个域模块，测试随域下放；字面量指纹 `73850b2f…` 不变）
+- [x] 1d `daemon/db.rs`(1507) → `daemon/db/*.rs`（7 个文件；字面量指纹 `c8525c83…` 不变；行多重集差异只有 mod/use/impl 包装/一处签名放宽）
+- [ ] 1e `web/src/pages/Settings.tsx`(1525) → 与 4c 的 react-query 合并成一次改动（**不能当纯移动做**：
+      44 个 `useState` 与取数逻辑都在父组件里，切分必然是真正的重构，需按仓库习惯做浏览器视觉核对）
 - [ ] 1f `daemon/config.rs` 与 `server/config.rs` 的共享部分（158 行）单源化
+      —— 不新建 crate：沿用 schema 的做法（共享快照文件 + 两端断言），让漂移变成测试失败
 
 ### Phase 2 — 正确性欠债（各配回归测试，各自独立 commit）
 - [ ] 2a `rebuild_*` 事务化
-- [ ] 2b `resume_session` 尊重 `record_titles`
+- [x] 2b `resume_session` 尊重 `record_titles`（`9ba0639`：抽出 `privacy::recorded_title`，两条写 title 的路径统一走它）
 - [ ] 2c `disruptions` / `app_resources` 纳入保留策略
 - [ ] 2d 收敛 `migrate_v6` 的重建分歧（三处实现统一语义 + 迁移测试）
+- [ ] 2e **`finalize_orphaned_sessions` 关闭孤儿会话后不维护汇总表**（本轮新发现）：
+      它只用一条 UPDATE 写 `sessions`，既不碰 `daily_summary`/`hourly_summary`，也不算 `focused_ms`。
+      daemon 崩溃/断电后重启时，这些会话在「会话列表」里可见，却**不计入**任何总量——直到有人手动重建。
+      修法：把 `rebuild_summaries_from_sessions` 泛化为可按日期范围重建，收尾时只重算受影响的那些日期。
 
-### Phase 3 — 语义统一（需重建历史汇总）
-- [ ] 3a `focused_ms` 改为连续专注块累计（复用 `insights` 现有块检测），daemon/server/脚本三处一致
-- [ ] 3b daemon 侧会话合并/debounce（同 class 且间隔 < N 秒不新建会话），消掉 1.1 秒中位会话
-- [ ] 3c 提供重建入口与一次性迁移，保证新旧数据语义一致
+### Phase 3 — 语义统一（**已定 A 方案：查询侧派生**）
+用户已选定：专注时长改为**由服务端用纯函数按需派生**，daemon 一行不改、零 schema 变更、不新建 crate。
+- [ ] 3a 把 `insights` 的专注块检测（同类会话连续成串、累计 ≥ 15 分钟）扩成「按日给出成员会话」的纯函数
+- [ ] 3b Dashboard / 效率分 / 目标 / Insights 全部改用它——全应用只剩一个「专注」定义
+- [ ] 3c `daily_summary.focused_ms` 降级为 legacy（保留列供兼容，文档与代码注释明确标注，不再作为权威来源）
+- [ ] 3d 会话合并/debounce 暂缓：A 方案下既非必需，也能避免改动 daemon 写入路径
 
 ### Phase 4 — 新功能
 - [ ] 4a 全局搜索（SQLite FTS5 + `bm25()`/`snippet()`，零新依赖）
