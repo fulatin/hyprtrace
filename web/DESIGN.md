@@ -42,6 +42,8 @@ import { Reveal, RevealItem, RevealOnScroll } from '../components/ui/Reveal';
 import { ProgressBar, EmptyState, Skeleton, SkeletonPanel, SkeletonStats } from '../components/ui/Feedback';
 import Sparkline from '../components/ui/Sparkline';
 import ThemeToggle from '../components/ui/ThemeToggle';
+import { Spinner, Toggle, SaveButton } from '../components/ui/Controls'; // switch, save state machine
+import { AnimatedRow } from '../components/ui/AnimatedRow';   // editable list row (layout + enter/exit)
 ```
 
 ### StatCard
@@ -82,3 +84,18 @@ Rules of thumb:
 `formatDuration` (coarse), `formatDurationFine` (with seconds), `formatDelta`
 (signed), `formatPercent`, `formatMemKb`, `formatHour`, `formatShortDate`,
 `formatRelativeDate`.
+
+## Data layer (`src/lib/queries.ts`)
+
+react-query owns every request the Settings sections make; new pages should
+follow it rather than adding `useEffect` fetches.
+
+- One key per endpoint (`queryKeys`), and **one shared `['config']` key** for
+  the sections that own different keys of the same `/api/config` object — a save
+  in one section must stay visible in another. `PUT /api/config` is a partial
+  merge, so each section sends only its own slice and invalidates that key.
+- Defaults: `retry: false`, `staleTime: 30s`, no refetch on focus/reconnect.
+  A save is what refreshes data, not a tab switch.
+- A mutation invalidates the key it wrote (or writes the response into the
+  cache when the endpoint returns the resource, e.g. `PUT /api/projects`).
+  `refetchType: 'none'` is for lists that must keep the user's edited draft.
