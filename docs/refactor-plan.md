@@ -111,7 +111,11 @@
       架构技能的不变量 1 全部改写）：仍由 daemon 写入、由重建维护，但**没有任何权威数字来自它们**。
 - [ ] 3d 会话合并/debounce 暂缓：A 方案下既非必需，也能避免改动 daemon 写入路径
 
-### Phase 4 — 新功能
+### Phase 4 — 前端与新功能
+- [ ] 1e **`Settings.tsx`(1525) 拆分 + `@tanstack/react-query` 接管数据层**（不能当纯移动做：44 个 `useState` 与取数都在父组件里）
+- [ ] 4f **Sessions 页的 "Focus" 列（宽屏 2xl 才显示）仍在展示已死的每会话值**（3c 收尾时发现）：
+      它渲染 `Session.focused_ms`，也就是阈值公式的值（对几乎每个会话都是 0），与 Dashboard 的专注卡**直接矛盾**。
+      二选一：改成显示「该会话是否属于某个专注块」的标记，或去掉该列。属前端改动，必须按仓库习惯做浏览器视觉核对。
 - [ ] 4a 全局搜索（SQLite FTS5 + `bm25()`/`snippet()`，零新依赖）
 - [ ] 4b `ts-rs` 由 Rust models 生成 `web/src/lib/types.ts`
 - [ ] 4c `@tanstack/react-query` 接管前端数据层
