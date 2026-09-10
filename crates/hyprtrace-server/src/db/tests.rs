@@ -1144,6 +1144,27 @@
         assert!(score.score > 30, "the focus component must not be dead");
     }
 
+    /// One definition of the efficiency score, on a day with no data at all.
+    ///
+    /// `efficiency_score` used to repeat the formula instead of calling
+    /// `insights::efficiency_subscore`, and the copies disagreed here: the
+    /// late-night and disruption components hand an empty day 15 points each, so
+    /// the dashboard said 30/100 while the insights page (which averages the
+    /// sub-score) said 0 for the same day.
+    #[test]
+    fn an_empty_day_scores_zero_on_both_paths() {
+        let db = test_db();
+        let score = db.efficiency_score("2025-03-04").unwrap();
+        assert_eq!(score.total_active_ms, 0, "the fixture day is empty");
+        assert_eq!(score.score, 0, "a day with no activity is not a 30/100 day");
+
+        let subscore = crate::insights::efficiency_subscore(0, 0, 0, 0, 0);
+        assert_eq!(
+            subscore, score.score as f64,
+            "the dashboard and the insights page must agree"
+        );
+    }
+
     #[test]
     fn projects_and_rules_roundtrip_and_match() {
         let db = project_test_db();

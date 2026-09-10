@@ -75,22 +75,22 @@ impl super::Database {
             0.0
         };
 
-        let focus_score = (focus_ratio * 40.0).clamp(0.0, 40.0);
-        // Ideal avg session 15-90 min → full fragmentation score.
-        let frag_score = if avg_session_secs >= 15.0 * 60.0 && avg_session_secs <= 90.0 * 60.0 {
-            30.0
-        } else if avg_session_secs < 15.0 * 60.0 {
-            // Very fragmented: scale from 0 (0s) to 30 (15min).
-            (avg_session_secs / (15.0 * 60.0)) * 30.0
-        } else {
-            // Long sessions: gently taper.
-            30.0_f64 - ((avg_session_secs - 90.0 * 60.0) / (180.0 * 60.0)) * 10.0
-        };
-        let late_score = (15.0 * (1.0 - late_night_pct / 100.0)).clamp(0.0, 15.0);
-        let disruption_score = (15.0 * (1.0 - (disruption_count as f64) / 20.0)).clamp(0.0, 15.0);
-
-        let score =
-            (focus_score + frag_score.max(0.0) + late_score + disruption_score).round() as i64;
+        // The formula itself lives in `insights::efficiency_subscore` and is
+        // called, not repeated: this function used to carry a character-for-
+        // character copy of it, and the two disagreed on the one case that
+        // matters — a day with no activity at all scored 30 here (the late-night
+        // and disruption components award full marks to an empty day) and 0
+        // there. `insight_disruption_impact` averages the sub-score, so the
+        // dashboard and the insights page reported different numbers for the
+        // same day. A day with no data is not a 30/100 day.
+        let score = crate::insights::efficiency_subscore(
+            total_active_ms,
+            total_focused_ms,
+            session_count,
+            late_night_ms,
+            disruption_count,
+        )
+        .round() as i64;
 
         Ok(EfficiencyScore {
             date: date.to_string(),
