@@ -1,11 +1,14 @@
 use anyhow::Context;
-use rusqlite::{params, Connection};
+use rusqlite::Connection;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Mutex;
 use std::time::Instant;
 
+mod disruptions;
+mod goals;
 mod migrations;
+mod resources;
 mod sessions;
 
 pub struct Database {
@@ -47,136 +50,12 @@ impl Database {
             monotonic_starts: Mutex::new(HashMap::new()),
         })
     }
-
-    /// Current open session's (id, class, pid), for resource sampling.
-    pub fn current_session_resources(&self) -> anyhow::Result<Option<(i64, String, i32)>> {
-        let result = self.conn.query_row(
-            "SELECT id, class, pid FROM sessions
-             WHERE ended_at IS NULL AND pid IS NOT NULL
-             ORDER BY started_at DESC LIMIT 1",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        );
-        match result {
-            Ok(val) => Ok(Some(val)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(e.into()),
-        }
-    }
-
-    /// Record a CPU/memory sample for a session.
-    pub fn save_resource_sample(
-        &self,
-        session_id: i64,
-        class: &str,
-        cpu_pct: f64,
-        mem_kb: i64,
-    ) -> anyhow::Result<()> {
-        let now = chrono::Utc::now();
-        let date_local = now
-            .with_timezone(&chrono::Local)
-            .format("%Y-%m-%d")
-            .to_string();
-        self.conn.execute(
-            "INSERT INTO app_resources (session_id, class, sampled_at, cpu_pct, mem_kb, date_local)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![
-                session_id,
-                class,
-                now.to_rfc3339(),
-                cpu_pct,
-                mem_kb,
-                date_local
-            ],
-        )?;
-        Ok(())
-    }
-
-    /// Record a desktop notification (an interruption).
-    pub fn save_notification(&self, app: &str, summary: &str) -> anyhow::Result<()> {
-        let now = chrono::Utc::now();
-        let date_local = now
-            .with_timezone(&chrono::Local)
-            .format("%Y-%m-%d")
-            .to_string();
-        self.conn.execute(
-            "INSERT INTO disruptions (kind, app, summary, occurred_at, date_local) VALUES ('notification', ?1, ?2, ?3, ?4)",
-            params![app, summary, now.to_rfc3339(), date_local],
-        )?;
-        Ok(())
-    }
-
-    /// Record a clipboard copy event.
-    pub fn save_clipboard(&self) -> anyhow::Result<()> {
-        let now = chrono::Utc::now();
-        let date_local = now
-            .with_timezone(&chrono::Local)
-            .format("%Y-%m-%d")
-            .to_string();
-        self.conn.execute(
-            "INSERT INTO disruptions (kind, occurred_at, date_local) VALUES ('clipboard', ?1, ?2)",
-            params![now.to_rfc3339(), date_local],
-        )?;
-        Ok(())
-    }
-
-    pub fn goals(&self) -> anyhow::Result<Vec<Goal>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, name, target_type, target_key, daily_target_ms, enabled FROM goals",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            Ok(Goal {
-                id: Some(row.get(0)?),
-                name: row.get(1)?,
-                target_type: row.get(2)?,
-                target_key: row.get(3)?,
-                daily_target_ms: row.get(4)?,
-                enabled: row.get::<_, i64>(5)? != 0,
-            })
-        })?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
-    }
-
-    /// Today's active milliseconds for a goal. "all" = total across classes.
-    pub fn today_active_for_goal(&self, goal: &Goal) -> i64 {
-        // LOCAL today: must match the local-date buckets end_session writes,
-        // otherwise goal progress misses same-day rows (or reads stale ones).
-        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-        let sql = if goal.target_type == "class" {
-            "SELECT COALESCE(SUM(total_ms), 0) FROM daily_summary WHERE date = ?1 AND class = ?2"
-        } else {
-            "SELECT COALESCE(SUM(total_ms), 0) FROM daily_summary WHERE date = ?1"
-        };
-        let params = if goal.target_type == "class" {
-            params![today, goal.target_key.as_deref().unwrap_or("")]
-        } else {
-            params![today]
-        };
-        self.conn
-            .query_row(sql, params, |row| row.get(0))
-            .unwrap_or(0)
-    }
-
-    /// Duration (ms) the current focused session has been running.
-    pub fn current_focused_duration_ms(&self) -> i64 {
-        let result: rusqlite::Result<(i64, String)> = self.conn.query_row(
-            "SELECT id, activity_state FROM sessions
-             WHERE ended_at IS NULL ORDER BY started_at DESC LIMIT 1",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        );
-        match result {
-            Ok((session_id, state)) if state == "focused" => {
-                self.session_elapsed_ms(session_id).unwrap_or(0).max(0)
-            }
-            _ => 0,
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusqlite::params;
     use chrono::Timelike;
 
     /// Stable textual dump of every table column and index in `conn`, in the
