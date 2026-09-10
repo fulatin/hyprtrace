@@ -1,6 +1,7 @@
 use crate::config::Config;
 use crate::db::Database;
 use crate::idle_monitor::ActivityState;
+use crate::privacy;
 use anyhow::Context;
 use hyprland::data::Client;
 use hyprland::event_listener::EventListener;
@@ -51,9 +52,8 @@ impl WindowTracker {
             match data {
                 Some(win_data) => {
                     let class = win_data.class.to_lowercase();
-                    // Respect the privacy toggle: record window titles only when
-                    // enabled, otherwise store an empty title (class still tracked).
-                    let title: &str = if record_titles { &win_data.title } else { "" };
+                    // Privacy switch: empty unless the user records titles.
+                    let title: &str = privacy::recorded_title(&win_data.title, record_titles);
 
                     // Re-querying the active window here races with a fast
                     // alt-tab: by the time this handler runs, Hyprland may

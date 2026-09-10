@@ -6,6 +6,7 @@ mod idle_monitor;
 mod input_monitor;
 mod listener;
 mod notify;
+mod privacy;
 mod resource_monitor;
 mod schema;
 mod wellbeing_monitor;
@@ -121,6 +122,7 @@ fn main() -> anyhow::Result<()> {
         activity.clone(),
         cfg.daemon.idle_timeout_seconds,
         cfg.daemon.focused_threshold_seconds,
+        cfg.daemon.record_titles,
     );
 
     if cfg.daemon.enable_input_monitor {

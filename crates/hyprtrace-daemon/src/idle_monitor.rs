@@ -1,4 +1,5 @@
 use crate::db::Database;
+use crate::privacy;
 use hyprland::data::Client;
 use hyprland::prelude::HyprDataActiveOptional;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -57,6 +58,7 @@ pub fn spawn_idle_monitor(
     activity: ActivityState,
     idle_timeout_seconds: u64,
     focused_threshold_seconds: u64,
+    record_titles: bool,
 ) {
     let away_timeout_seconds = idle_timeout_seconds * 2;
     let timeout = Duration::from_secs(idle_timeout_seconds);
@@ -85,6 +87,7 @@ pub fn spawn_idle_monitor(
                 timeout,
                 away_timeout,
                 focused_threshold_seconds,
+                record_titles,
                 &mut last_idle_ended,
             ) {
                 log::error!("Idle monitor tick error: {}", e);
@@ -99,6 +102,7 @@ fn tick(
     timeout: Duration,
     away_timeout: Duration,
     focused_threshold_seconds: u64,
+    record_titles: bool,
     last_idle_ended: &mut Option<i64>,
 ) -> anyhow::Result<()> {
     let idle_duration = match get_idle_duration(activity) {
@@ -111,7 +115,7 @@ fn tick(
             log::info!("User activity resumed");
             activity.is_idle.store(false, Ordering::Release);
             *last_idle_ended = None;
-            resume_session(db)?;
+            resume_session(db, record_titles)?;
         } else if idle_duration >= away_timeout {
             // Session already ended at the idle timeout; if the user is STILL
             // absent past the away threshold, retroactively mark it "away".
@@ -286,15 +290,17 @@ fn monotonic_micros() -> Option<u64> {
     Some((ts.tv_sec as u64) * 1_000_000 + (ts.tv_nsec as u64) / 1_000)
 }
 
-fn resume_session(db: &Arc<Mutex<Database>>) -> anyhow::Result<()> {
+fn resume_session(db: &Arc<Mutex<Database>>, record_titles: bool) -> anyhow::Result<()> {
     match Client::get_active() {
         Ok(Some(client)) => {
             let class = client.class.to_lowercase();
-            let title = client.title;
+            // Goes through the same privacy switch as `listener.rs`; this path
+            // used to store the real title unconditionally.
+            let title = privacy::recorded_title(&client.title, record_titles);
             let workspace = client.workspace.name;
 
             let guard = db.lock().map_err(|e| anyhow::anyhow!("DB lock: {}", e))?;
-            match guard.start_session(&class, &title, &workspace, Some(client.pid)) {
+            match guard.start_session(&class, title, &workspace, Some(client.pid)) {
                 Ok(id) => {
                     log::info!(
                         "Resumed session {}: class={}, workspace={}",
