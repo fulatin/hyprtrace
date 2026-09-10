@@ -75,8 +75,14 @@ impl super::Database {
         self.delete_matching_sessions(&where_clause, &params)
     }
 
+    /// Rewrite `daily_summary` from `sessions`.
+    ///
+    /// The DELETE and the INSERT must land together. Without a transaction an
+    /// interruption between them leaves the table EMPTY, and `hourly_breakdown`
+    /// (and the dashboard) trust `daily_summary`/`hourly_summary` as soon as a
+    /// date has one row — so the charts would show nothing at all rather than
+    /// something stale, with no error anywhere.
     pub fn rebuild_daily_summary(&self) -> anyhow::Result<()> {
-        self.conn.execute("DELETE FROM daily_summary", [])?;
         let threshold = self.focused_threshold_ms;
         let sql = format!(
             "INSERT INTO daily_summary (date, class, total_ms, session_count, focused_ms, focused_session_count)
@@ -91,13 +97,21 @@ impl super::Database {
              GROUP BY date_local, class",
             threshold, threshold,
         );
-        self.conn.execute_batch(&sql)?;
+
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
+        tx.execute("DELETE FROM daily_summary", [])?;
+        tx.execute_batch(&sql)?;
+        tx.commit()?;
         Ok(())
     }
 
+    /// Rewrite `hourly_summary` from `sessions`. Transactional for the same
+    /// reason as `rebuild_daily_summary` — and here it matters more, because the
+    /// rows are inserted one at a time from the Rust-side aggregation.
     pub fn rebuild_hourly_summary(&self) -> anyhow::Result<()> {
-        self.conn.execute("DELETE FROM hourly_summary", [])?;
-
         // Aggregate in Rust so we can bucket by LOCAL hour (chrono::Local),
         // consistent with the sessions-based fallback and the daemon's incremental upsert.
         let mut stmt = self.conn.prepare(
@@ -129,14 +143,21 @@ impl super::Database {
             entry.1 += 1;
             entry.2 += focused_ms;
         }
+        drop(stmt);
 
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
+        tx.execute("DELETE FROM hourly_summary", [])?;
         for ((date, hour, class), (total_ms, session_count, focused_ms)) in agg {
-            self.conn.execute(
+            tx.execute(
                 "INSERT INTO hourly_summary (date, hour, class, total_ms, session_count, focused_ms)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![date, hour as i64, class, total_ms, session_count, focused_ms],
             )?;
         }
+        tx.commit()?;
 
         Ok(())
     }

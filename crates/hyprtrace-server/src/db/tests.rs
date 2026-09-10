@@ -582,6 +582,103 @@
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// Rebuilding a summary must not be separable from clearing it.
+    ///
+    /// The DELETE used to run outside a transaction: anything that interrupted
+    /// the rebuild in between left the table empty, and every reader treats a
+    /// date with one row in `hourly_summary` as authoritative — so the charts
+    /// would go blank instead of showing something stale, with no error raised.
+    /// The failure is injected with a trigger, the same way the daemon proves
+    /// `end_session` is atomic.
+    #[test]
+    fn rebuild_daily_summary_is_atomic() {
+        let db = test_db();
+        insert_session(
+            &db,
+            "boomclass",
+            "2025-01-10T09:00:00Z",
+            Some("2025-01-10T09:10:00Z"),
+        );
+        insert_session(
+            &db,
+            "kitty",
+            "2025-01-10T10:00:00Z",
+            Some("2025-01-10T10:10:00Z"),
+        );
+
+        // A first, successful rebuild so there is a populated table to protect.
+        db.rebuild_daily_summary().unwrap();
+        let before: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM daily_summary", [], |r| r.get(0))
+            .unwrap();
+        assert!(before > 0, "the fixture needs summary rows to lose");
+
+        db.conn
+            .execute_batch(
+                "CREATE TRIGGER fail_boom_daily BEFORE INSERT ON daily_summary
+                 WHEN NEW.class = 'boomclass'
+                 BEGIN SELECT RAISE(ABORT, 'injected failure'); END;",
+            )
+            .unwrap();
+
+        assert!(
+            db.rebuild_daily_summary().is_err(),
+            "the injected trigger must fail the rebuild"
+        );
+
+        let after: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM daily_summary", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            after, before,
+            "a failed rebuild must roll back, leaving the previous summary intact"
+        );
+    }
+
+    /// Same guarantee for the hourly table, where the rows are inserted one at a
+    /// time from the Rust-side aggregation and a partial rebuild is easy to hit.
+    #[test]
+    fn rebuild_hourly_summary_is_atomic() {
+        let db = test_db();
+        insert_session(
+            &db,
+            "boomclass",
+            "2025-01-10T09:00:00Z",
+            Some("2025-01-10T09:10:00Z"),
+        );
+        insert_session(
+            &db,
+            "kitty",
+            "2025-01-10T10:00:00Z",
+            Some("2025-01-10T10:10:00Z"),
+        );
+
+        db.rebuild_hourly_summary().unwrap();
+        let before: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM hourly_summary", [], |r| r.get(0))
+            .unwrap();
+        assert!(before > 0, "the fixture needs summary rows to lose");
+
+        db.conn
+            .execute_batch(
+                "CREATE TRIGGER fail_boom_hourly BEFORE INSERT ON hourly_summary
+                 WHEN NEW.class = 'boomclass'
+                 BEGIN SELECT RAISE(ABORT, 'injected failure'); END;",
+            )
+            .unwrap();
+
+        assert!(db.rebuild_hourly_summary().is_err());
+
+        let after: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM hourly_summary", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(after, before, "a failed rebuild must roll back");
+    }
+
     #[test]
     fn delete_sessions_between_removes_children_and_sessions() {
         let db = test_db();
