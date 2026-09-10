@@ -53,9 +53,13 @@
 ### Phase 1 — 解耦（纯移动，零行为变化）
 - [x] 1a `schema/hyprtrace.sql` 单源化：两份 DDL 合并为一个文件 + 两处 `include_str!`
       （fresh-DB schema 逐字节比对通过；新增 3 个守卫测试/crate；快照 `schema/expected-columns.txt`）
-- [ ] 1b `server/db.rs` → `server/db/*.rs`（按域拆 14 个模块 + `tests.rs`）
-- [x] 1c `server/insights.rs`(2075) → `server/insights/*.rs`（10 个域模块，测试随域下放；字面量指纹 `73850b2f…` 不变）
+- [x] 1b `server/db.rs`(3445) → `server/db/*.rs`（20 个域模块 + `tests.rs` + `test_support.rs`；
+      字面量指纹 `94189d41…`（486 个）不变；67 行多重集差异里筛掉脚手架后只剩 7 行，全是测试辅助函数与 `like_match`
+      因跨模块而加 `pub(crate)` 的签名行）
+- [x] 1c `server/insights.rs`(2075) → `server/insights/*.rs`（11 个域模块，测试随域下放；字面量指纹 `73850b2f…` 不变）
 - [x] 1d `daemon/db.rs`(1507) → `daemon/db/*.rs`（7 个文件；字面量指纹 `c8525c83…` 不变；行多重集差异只有 mod/use/impl 包装/一处签名放宽）
+- [x] 1g 顺带修掉 1a 自己引入的一处回归：`EXPECTED_SCHEMA` 只在测试里用，非测试构建下是 dead-code warning
+      （测试构建看不到，只有真 `cargo build` 才暴露）→ 改为 `#[cfg(test)]`，server 告警 6 → 5、daemon 回到基线
 - [ ] 1e `web/src/pages/Settings.tsx`(1525) → 与 4c 的 react-query 合并成一次改动（**不能当纯移动做**：
       44 个 `useState` 与取数逻辑都在父组件里，切分必然是真正的重构，需按仓库习惯做浏览器视觉核对）
 - [ ] 1f `daemon/config.rs` 与 `server/config.rs` 的共享部分（158 行）单源化
@@ -65,11 +69,25 @@
 - [ ] 2a `rebuild_*` 事务化
 - [x] 2b `resume_session` 尊重 `record_titles`（`9ba0639`：抽出 `privacy::recorded_title`，两条写 title 的路径统一走它）
 - [ ] 2c `disruptions` / `app_resources` 纳入保留策略
-- [ ] 2d 收敛 `migrate_v6` 的重建分歧（三处实现统一语义 + 迁移测试）
-- [ ] 2e **`finalize_orphaned_sessions` 关闭孤儿会话后不维护汇总表**（本轮新发现）：
-      它只用一条 UPDATE 写 `sessions`，既不碰 `daily_summary`/`hourly_summary`，也不算 `focused_ms`。
-      daemon 崩溃/断电后重启时，这些会话在「会话列表」里可见，却**不计入**任何总量——直到有人手动重建。
-      修法：把 `rebuild_summaries_from_sessions` 泛化为可按日期范围重建，收尾时只重算受影响的那些日期。
+- [ ] 2d 收敛重建口径分歧。已知**四处**，不止最初看到的一处：
+      ① `migrate_v6` 的重建路径两侧不同（daemon `rebuild_summaries_from_sessions` vs server `rebuild_daily/hourly_summary`），
+      在 `duration_ms = 0` 行、`date_local = ''` 行、`focused_ms` 来源三处不同；
+      ② `end_session` 增量写的 `focused_session_count` 用 `activity_state == "focused"`，
+      而重建路径用 `focused_ms > 0` 计数——同一个字段两种口径；
+      ③ server 的 `migrate_v6` 跑在 `migrate_v7` 之前，此时 `date_local` 可能还是空串，
+      而 `rebuild_daily_summary` 正是按 `date_local <> ''` 过滤 → 会重建出一张**空表**；
+      ④ `repair-negative-durations.sh` 是第三份实现。
+- [x] 2e `finalize_orphaned_sessions` 关闭孤儿会话后不维护汇总表（`56b03ac`）：
+      改为在同一事务内按 LOCAL 开始日期**作用域重建**（`write_summaries` 被抽出，`migrate_v6` 仍走全量路径），
+      并补齐 `focused_ms`/`date_local`。回归测试已验证「撤掉修复即变红」。
+- [ ] 2f **`sessions_paginated` 的 `(page-1) * per_page` 未做受检乘法**（拆分时发现）：
+      `page` 巨大时 `usize` 溢出 → 转 `i64` 变负 → SQLite 把负 LIMIT 当**无限制**（架构技能不变量 5 的原型）。
+      handler 侧也没有钳制。修法：两侧都 clamp，并加一个 `page = usize::MAX` 的回归测试。
+- [ ] 2g **`db/test_support.rs` 手写 8 条 `CREATE TABLE`**（拆分时发现）：与 `schema/hyprtrace.sql` 单源规则冲突，
+      夹具会静默漂移（其中 `sessions` 已被声明两次）。修法：夹具改为从共享 schema 建表。
+- [ ] 2h **效率分在空日有两个定义**：`efficiency_score` 返回 30（late 15 + disruption 15），
+      而 `insights::efficiency_subscore` 对同一天返回 0，`insight_disruption_impact` 用的是后者。
+      与 Phase 3 的「全应用只有一个定义」是同一主题，建议并入 3 一起做。
 
 ### Phase 3 — 语义统一（**已定 A 方案：查询侧派生**）
 用户已选定：专注时长改为**由服务端用纯函数按需派生**，daemon 一行不改、零 schema 变更、不新建 crate。
@@ -84,6 +102,42 @@
 - [ ] 4c `@tanstack/react-query` 接管前端数据层
 - [ ] 4d 周期对比 / 复盘页
 - [ ] 4e 应用级预算 + 预测式提醒（复用 `insights` 的 OLS）
+
+## 已验证的证据（可复现，不是断言）
+
+**1. 纯移动（每次拆分都跑）**
+
+```bash
+# 字面量多重集指纹：抓任何 SQL / 格式串改动
+cat <新目录>/*.rs | grep -o '"[^"]*"' | sort | md5sum   # 必须等于拆分前单文件的指纹
+# 行多重集：抓任何逻辑/数字/注释改动（差异只允许是 mod/use/impl 包装/pub(crate) 放宽）
+git show <拆分前>:<旧文件> | sed 's/[[:space:]]*$//' | sort | uniq -c > /tmp/a
+cat <新目录>/*.rs | sed 's/[[:space:]]*$//' | sort | uniq -c > /tmp/b ; diff /tmp/a /tmp/b
+```
+
+| 目标 | 指纹 | 结果 |
+|---|---|---|
+| `server/db.rs` → `db/*.rs` | `94189d41…`（486 个字面量） | 一致；67 行差异筛掉脚手架后只剩 7 行签名放宽 |
+| `server/insights.rs` → `insights/*.rs` | `73850b2f…`（199） | 一致；105 行差异全是脚手架 |
+| `daemon/db.rs` → `db/*.rs` | `c8525c83…`（214） | 一致；差异只有 mod/use/impl 包装 + 一处 `pub(super)` |
+| `schema/hyprtrace.sql` | 全新库 `sqlite_master`+`pragma table_info` 转储 | 与改动前**逐字节相同**（含列顺序、可空性、默认值） |
+
+**2. 新模块是否真的被编译**：`db` 20/20、`insights` 11/11 个文件都有 `mod` 声明；并各注入过一次语法错误确认构建会失败（防「文件写了但没声明 = 静默不编译」）。
+
+**3. 回归测试是否真的有效**：2e 的测试在撤掉修复后报 `the finalised session must appear in daily_summary: QueryReturnedNoRows`，装回修复才通过。
+
+**4. 真实数据端到端等价（本轮做的集成验证）**
+
+按 `hyprtrace-ops` 的隔离流程：`sqlite3 <真实库> ".backup"` 取 WAL 一致性快照（21,519 会话 / 242 汇总日 / 8,935 资源行 / 14,621 打断），
+手写一份**不含任何 api_key** 且指向副本的配置，用隔离 `HOME`+`XDG_CONFIG_HOME` 起 9421 实例跑重构后的 binary，
+与线上 9420（旧代码）**逐字节对比历史日期响应**：
+
+- 13 个端点（summary/apps/efficiency/sessions 分页/titles/timeline/resources/disruptions/classes/categories/projects/project stats/report）**完全一致**
+- 4 个端点的差异**全部定位在「今天」这一仍在写入的尾部**：`activity/daily` 前 29 天完全一致，只有今天不同；
+  `activity/events` 对齐 200 行后**身份字段（id/session_id/state/started_at）0 处不一致**，仅 1 行的 `ended_at`/`duration_ms` 不同——
+  即快照时仍未闭合、之后被线上 daemon 闭合的那一条；`goals` 与 `workspace/recommendations` 的差异同源于今日总量
+
+收尾确认：9421 端口释放、线上 9420 与 systemd 服务未受影响、工作区干净。
 
 ## git 约定
 
@@ -101,6 +155,8 @@
 - 用显式 `pub use` 而非 glob re-export（避免未来同名符号静默遮蔽）
 - 测试辅助函数（`test_db`/`insert_session`/`project_test_db`/`tracked_session`）构造 `Database` 字面量，
   只能在 `db` 的后代模块里编译 → 放 `db/test_support.rs`
+- **告警只在真构建里出现**：`pub` 但只有测试读的常量，`cargo test` 不报警、`cargo build`/`cargo check -p` 才报（1g 就是这么漏掉的）。
+  比告警集合时要用同一种构建方式，别拿 `cargo test` 的输出当基线。
 - CRLF 文件：`daemon/config.rs`、`daemon/main.rs`、两个 `Cargo.toml`、`scripts/*.service`、`web/src/lib/api.ts`
   （朴素 diff/patch 会被行尾噪声干扰）
 - 文档里的路径引用会过期：`AGENTS.md`、`.dsh/skills/hyprtrace-{architecture,server}/SKILL.md`
