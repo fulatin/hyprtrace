@@ -7,6 +7,7 @@ mod input_monitor;
 mod listener;
 mod notify;
 mod resource_monitor;
+mod schema;
 mod wellbeing_monitor;
 
 use anyhow::Context;

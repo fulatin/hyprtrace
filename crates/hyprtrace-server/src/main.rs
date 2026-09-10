@@ -8,6 +8,7 @@ mod models;
 mod proactive;
 mod retention;
 mod routes;
+mod schema;
 mod weekly_report;
 
 use anyhow::Context;

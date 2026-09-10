@@ -53,7 +53,7 @@ whenToUse: 修改守护进程、排查"时长/专注时间/空闲状态不对"�
 
 `migrate()` **无版本闸门，每次启动全跑**，所有步骤必须幂等。v1 基础表；v2 `activity_state`/`focused_ms`/`activity_events`/`hourly_summary`/`ai_conversations.complete`；v3 `pid`/`app_resources`；v4 `disruptions`；v5 `goals`；v6 负时长修复 + 按需重建汇总；v7 四个 `date_local` 列 + 回填（只处理 `date_local=''` 的行，时间戳无法解析的行**永远**留空）。
 
-server 侧有一份**手工副本**，加列必须两处同时改。
+DDL 本身已不在本 crate 的 `db.rs` 里：唯一权威是仓库根的 `schema/hyprtrace.sql`，本 crate 用 `src/schema.rs` 的 `include_str!` 嵌入并在 `migrate()` 开头执行（server 嵌的是同一个文件）。v2/v3/v7 保留的只是**旧库列升级**（`add_column_if_missing`），v4/v5 的建表已并入共享文件。
 
 ## 会破坏数据的不变量
 

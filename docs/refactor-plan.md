@@ -51,7 +51,8 @@
 - [x] 本规划落盘
 
 ### Phase 1 — 解耦（纯移动，零行为变化）
-- [ ] 1a `schema/hyprtrace.sql` 单源化：两份 DDL 合并为一个文件 + 两处 `include_str!`
+- [x] 1a `schema/hyprtrace.sql` 单源化：两份 DDL 合并为一个文件 + 两处 `include_str!`
+      （fresh-DB schema 逐字节比对通过；新增 3 个守卫测试/crate；快照 `schema/expected-columns.txt`）
 - [ ] 1b `server/db.rs`(3412) → `server/db/*.rs`（按域拆 14 个模块 + `tests.rs`）
 - [ ] 1c `server/insights.rs`(2075) → `server/insights/*.rs`（10 个域模块，测试随域下放）
 - [ ] 1d `daemon/db.rs`(1469) → `daemon/db/*.rs`

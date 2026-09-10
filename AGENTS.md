@@ -19,14 +19,14 @@ Hyprland 窗口时间追踪器：Rust daemon + Axum server + React SPA，三者�
 1. **不要动正在跑的实例。** 用户级 systemd 服务（`hyprtrace-daemon` / `hyprtrace-server`）通常在服务 `http://localhost:9420` 并有真实数据。不要 `pkill`，不要随手重启；重启走 `systemctl --user restart hyprtrace-server.service`。
 2. **不要对同一个数据库起第二个 daemon。** 它不解析参数，会共用同一 config 与 db，双写会话并往桌面弹提醒。要验证请用数据库副本 + 隔离 `HOME`（步骤见 `hyprtrace-ops`）。
 3. **`~/.config/hyprtrace/config.toml` 里有真实的 `[ai.openai].api_key`。** 不要 cat、不要复制进仓库/临时目录/命令行，派生临时配置时必须删掉该键。
-4. **schema 改动必须落在两处**：`crates/hyprtrace-daemon/src/db.rs` 与 `crates/hyprtrace-server/src/db.rs` 的迁移副本（注释 `KEEP IN SYNC`），并保持 `scripts/repair-negative-durations.sh` 的列预期。
+4. **schema 只有一份权威定义：`schema/hyprtrace.sql`。** daemon 与 server 各自用 `include_str!` 嵌入它（见两个 crate 的 `src/schema.rs`），不要再在任何 `db.rs` 里手写 DDL。改这个文件后必须：① 两个 crate 的 `db::tests::migrate_*` 会对 `schema/expected-columns.txt` 快照断言，按测试失败信息重新生成快照；② 保持 `scripts/repair-negative-durations.sh` 的列预期。旧库的列升级仍由各 crate 的 `migrate_v2/v3/v7`（`add_column_if_missing`）负责，别删。
 5. **前端不得硬编码颜色**（`gray-*`/`cyan-*`/`#hex`…），只能用 `web/DESIGN.md` 里的语义 token；否则浅色主题会坏。
 6. 推之前本地跑一遍 CI 的三步（见下）；`tsconfig` 开了 `noUnusedLocals`，未使用的 import 会直接让构建失败。
 
 ## 常用命令
 
 ```bash
-cargo check --workspace && cargo test --workspace        # CI 前两步（daemon 47 + server 58）
+cargo check --workspace && cargo test --workspace        # CI 前两步（daemon 50 + server 61）
 cd web && npx tsc --noEmit -p tsconfig.json              # 前端类型门
 cd web && npm run build                                  # 产物在 web/dist（需部署才生效）
 curl -s localhost:9420/api/health                        # 运行中的实例

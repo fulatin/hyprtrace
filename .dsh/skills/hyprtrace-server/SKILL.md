@@ -53,7 +53,7 @@ AI：`/api/ai/models`、`/tools`、`/chat`（普通）、`/chat/stream`（SSE，
 
 **日期列约定**：汇总表用本地 `date`；原始表用 `date_local`；只有 `started_at`/`occurred_at` 是 UTC 瞬时，本地小时在读取时用 `with_timezone(&chrono::Local)` 推导。`from > to` 是字典序比较，只对零填充 ISO 日期成立；非法日期静默返回空集。
 
-**表归属**：schema 权威在 daemon，本 crate 顶部是手工副本（`KEEP IN SYNC`）。server 运行期**只写**：汇总表（仅重建）、`goals`、`app_categories`、`projects`/`project_rules`、`ai_conversations`，以及删除路径；**从不**插入 `sessions`/`activity_events`/`app_resources`/`disruptions`。
+**表归属**：schema 权威是仓库根的 `schema/hyprtrace.sql`，本 crate 通过 `src/schema.rs` 的 `include_str!` 嵌入（与 daemon 同一个文件，已无手工副本）。server 运行期**只写**：汇总表（仅重建）、`goals`、`app_categories`、`projects`/`project_rules`、`ai_conversations`，以及删除路径；**从不**插入 `sessions`/`activity_events`/`app_resources`/`disruptions`。`app_categories`/`projects`/`project_rules` 三张表刻意不放进共享 schema，由本 crate 的 `ensure_*` 自建自播种。
 
 **性能与热点**：单连接单 `tokio::Mutex`，61 处 `db.lock().await` 串行化；重建/删除会整体重写汇总表并阻塞所有端点。`hourly_breakdown` 只要该日期在 `hourly_summary` 有 ≥1 行就直接信任它，不做交叉校验。`today_summary` 的空闲时长用 `LAG(...) OVER (ORDER BY started_at)` 扫**全部**已结束会话再按 `date_local` 过滤。
 

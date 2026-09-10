@@ -38,54 +38,26 @@ impl Database {
 
     /// Run idempotent schema migrations.
     ///
-    /// The daemon owns the canonical schema, but the server may be started
-    /// before the daemon has ever run (install.sh enables both services with
-    /// no ordering guarantee). Without these migrations every API would fail
-    /// with "no such table" until the daemon writes the database once.
-    ///
-    /// KEEP IN SYNC with `crates/hyprtrace-daemon/src/db.rs::migrate` — any
-    /// schema change must be applied to both copies (ideally by extracting a
-    /// shared schema crate; until then, this is a deliberate copy). This copy
-    /// includes the `date_local` column (daemon v7) so the server's date-local
-    /// queries work even when it initializes the database first.
+    /// The DDL is shared with the daemon through `schema/hyprtrace.sql` +
+    /// `include_str!` (see `crate::schema`), so there is no longer a second
+    /// hand-maintained copy to keep in sync.
     pub fn migrate(&self) -> anyhow::Result<()> {
-        self.conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS sessions (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                class       TEXT NOT NULL,
-                title       TEXT NOT NULL DEFAULT '',
-                workspace   TEXT,
-                started_at  TEXT NOT NULL,
-                ended_at    TEXT,
-                duration_ms INTEGER DEFAULT 0
-            );
-
-            CREATE TABLE IF NOT EXISTS daily_summary (
-                id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                date          TEXT NOT NULL,
-                class         TEXT NOT NULL,
-                total_ms      INTEGER NOT NULL DEFAULT 0,
-                session_count INTEGER NOT NULL DEFAULT 0,
-                UNIQUE(date, class)
-            );
-
-            CREATE TABLE IF NOT EXISTS ai_conversations (
-                id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                created_at TEXT NOT NULL,
-                role       TEXT NOT NULL,
-                content    TEXT NOT NULL,
-                model      TEXT NOT NULL
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_sessions_class ON sessions(class);
-            CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at);
-            CREATE INDEX IF NOT EXISTS idx_daily_summary_date ON daily_summary(date);",
-        )?;
+        // Every statement in the shared file is `IF NOT EXISTS`: on a database
+        // written by an older build it creates only what is still missing, and
+        // the column upgrades below bring the existing tables up to date.
+        //
+        // This matters because the server can start before the daemon has ever
+        // run (install.sh enables both services with no ordering guarantee).
+        // Without these migrations every API would fail with "no such table"
+        // until the daemon writes the database once.
+        //
+        // Step order matters and mirrors the previous hand-written chain — in
+        // particular v6 (which may rebuild the summary tables) still runs
+        // before v7 (which adds and backfills `date_local`).
+        self.conn.execute_batch(crate::schema::SCHEMA_SQL)?;
 
         self.migrate_v2()?;
         self.migrate_v3()?;
-        self.migrate_v4()?;
-        self.migrate_v5()?;
         self.migrate_v6()?;
         self.migrate_v7()?;
         Ok(())
@@ -100,83 +72,18 @@ impl Database {
 
         self.add_column_if_missing("ai_conversations", "complete", "INTEGER", "1")?;
 
-        self.conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS activity_events (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id  INTEGER,
-                state       TEXT NOT NULL,
-                started_at  TEXT NOT NULL,
-                ended_at    TEXT,
-                duration_ms INTEGER DEFAULT 0,
-                FOREIGN KEY (session_id) REFERENCES sessions(id)
-            );
-
-            CREATE TABLE IF NOT EXISTS hourly_summary (
-                id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                date          TEXT NOT NULL,
-                hour          INTEGER NOT NULL,
-                class         TEXT NOT NULL,
-                total_ms      INTEGER NOT NULL DEFAULT 0,
-                session_count INTEGER NOT NULL DEFAULT 0,
-                focused_ms    INTEGER NOT NULL DEFAULT 0,
-                UNIQUE(date, hour, class)
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_hourly_summary_date ON hourly_summary(date);
-            CREATE INDEX IF NOT EXISTS idx_activity_events_session ON activity_events(session_id);",
-        )?;
+        // `activity_events` and `hourly_summary` come from the shared schema.
         Ok(())
     }
 
     fn migrate_v3(&self) -> anyhow::Result<()> {
         self.add_column_if_missing("sessions", "pid", "INTEGER", "NULL")?;
-
-        self.conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS app_resources (
-                id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id INTEGER,
-                class      TEXT NOT NULL,
-                sampled_at TEXT NOT NULL,
-                cpu_pct    REAL,
-                mem_kb     INTEGER,
-                FOREIGN KEY (session_id) REFERENCES sessions(id)
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_app_resources_class ON app_resources(class);
-            CREATE INDEX IF NOT EXISTS idx_app_resources_session ON app_resources(session_id);",
-        )?;
+        // `app_resources` comes from the shared schema.
         Ok(())
     }
 
-    fn migrate_v4(&self) -> anyhow::Result<()> {
-        self.conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS disruptions (
-                id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                kind       TEXT NOT NULL,
-                app        TEXT,
-                summary    TEXT,
-                occurred_at TEXT NOT NULL
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_disruptions_at ON disruptions(occurred_at);
-            CREATE INDEX IF NOT EXISTS idx_disruptions_kind ON disruptions(kind);",
-        )?;
-        Ok(())
-    }
-
-    fn migrate_v5(&self) -> anyhow::Result<()> {
-        self.conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS goals (
-                id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                name            TEXT NOT NULL,
-                target_type     TEXT NOT NULL DEFAULT 'all',
-                target_key      TEXT,
-                daily_target_ms INTEGER NOT NULL,
-                enabled         INTEGER NOT NULL DEFAULT 1
-            );",
-        )?;
-        Ok(())
-    }
+    /// The tables v4/v5 introduced (`disruptions`, `goals`) are created by the
+    /// shared schema file, so there is no per-step copy of their DDL here.
 
     /// Mirrors the daemon's v6: clamp negative durations left by a wall-clock
     /// jump and rebuild the summary tables from the repaired sessions. The
@@ -2413,6 +2320,132 @@ fn like_match(pattern: &str, text: &str) -> bool {
 mod tests {
     use super::*;
     use rusqlite::params;
+
+    /// Stable textual dump of every table column and index in `conn`, in the
+    /// exact format of `schema/expected-columns.txt`.
+    fn schema_fingerprint(conn: &Connection) -> String {
+        let names: Vec<(String, String)> = conn
+            .prepare("SELECT type, name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+
+        let mut out = String::new();
+        for (kind, name) in &names {
+            if kind == "index" {
+                out.push_str(&format!("IDX|{}\n", name));
+            } else if kind == "table" {
+                let cols: Vec<(String, String, i64, Option<String>)> = conn
+                    .prepare(&format!("PRAGMA table_info({})", name))
+                    .unwrap()
+                    .query_map([], |r| Ok((r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))
+                    .unwrap()
+                    .map(|r| r.unwrap())
+                    .collect();
+                for (col, ty, notnull, dflt) in cols {
+                    out.push_str(&format!(
+                        "COL|{}|{}|{}|{}|{}\n",
+                        name,
+                        col,
+                        ty,
+                        notnull,
+                        dflt.unwrap_or_else(|| "<null>".to_string())
+                    ));
+                }
+            }
+        }
+        out.trim_end().to_string()
+    }
+
+    fn temp_db(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("hyprtrace-schema-{}-{}", tag, std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.db");
+        (dir, path)
+    }
+
+    /// The server must produce exactly the same schema as the daemon: both embed
+    /// `schema/hyprtrace.sql` and assert against the same committed snapshot, so
+    /// a change that only one side picks up fails the other side's tests. The
+    /// server-only tables (`app_categories`, `projects`, `project_rules`) are
+    /// created by `ensure_*`, which this test deliberately does not call.
+    #[test]
+    fn migrate_fresh_db_matches_the_canonical_schema() {
+        let (dir, path) = temp_db("fresh");
+        let db = Database::open(&path, 20 * 60).unwrap();
+        db.migrate().unwrap();
+        assert_eq!(
+            schema_fingerprint(&db.conn),
+            crate::schema::EXPECTED_SCHEMA.trim_end()
+        );
+        drop(db);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A database left behind by an old build (v1 tables only, none of the
+    /// columns v2/v3/v7 added) must end up with the very same shape as a fresh
+    /// one: the shared DDL creates whatever is missing and the legacy ALTERs
+    /// upgrade the tables that already exist.
+    #[test]
+    fn migrate_upgrades_a_legacy_database_to_the_canonical_schema() {
+        let (dir, path) = temp_db("legacy");
+        let db = Database::open(&path, 20 * 60).unwrap();
+        db.conn
+            .execute_batch(
+                "CREATE TABLE sessions (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    class       TEXT NOT NULL,
+                    title       TEXT NOT NULL DEFAULT '',
+                    workspace   TEXT,
+                    started_at  TEXT NOT NULL,
+                    ended_at    TEXT,
+                    duration_ms INTEGER DEFAULT 0
+                );
+
+                CREATE TABLE daily_summary (
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    date          TEXT NOT NULL,
+                    class         TEXT NOT NULL,
+                    total_ms      INTEGER NOT NULL DEFAULT 0,
+                    session_count INTEGER NOT NULL DEFAULT 0,
+                    UNIQUE(date, class)
+                );
+
+                CREATE TABLE ai_conversations (
+                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at TEXT NOT NULL,
+                    role       TEXT NOT NULL,
+                    content    TEXT NOT NULL,
+                    model      TEXT NOT NULL
+                );",
+            )
+            .unwrap();
+
+        db.migrate().unwrap();
+
+        assert_eq!(
+            schema_fingerprint(&db.conn),
+            crate::schema::EXPECTED_SCHEMA.trim_end()
+        );
+        drop(db);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `migrate()` runs the whole file on every start, so a second run must be
+    /// a no-op.
+    #[test]
+    fn migrate_is_idempotent() {
+        let (dir, path) = temp_db("idempotent");
+        let db = Database::open(&path, 20 * 60).unwrap();
+        db.migrate().unwrap();
+        let first = schema_fingerprint(&db.conn);
+        db.migrate().unwrap();
+        assert_eq!(schema_fingerprint(&db.conn), first);
+        drop(db);
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn like_match_wildcards() {

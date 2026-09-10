@@ -39,7 +39,7 @@ crates/hyprtrace-daemon/src/           # 无 lib.rs，测试都在 #[cfg(test)] 
 
 crates/hyprtrace-server/src/
   main.rs            (120)   启动、resolve_web_dir、SPA fallback、后台任务孵化
-  db.rs             (3400+)  schema 的**手工副本**（"KEEP IN SYNC"）+ 全部查询方法
+  db.rs             (3370+) 全部查询方法（DDL 已移出到共享 `schema/`）
   models.rs          (225)   全部 serde 模型（字段名即前端/AI 契约）
   routes/mod.rs       (98)   路由表 + AppState
   routes/data.rs     (761)   数据查询端点
@@ -75,10 +75,12 @@ web/src/
 
 ## Schema 归属
 
-- **权威定义在 daemon**（`crates/hyprtrace-daemon/src/db.rs` 的 `migrate*`），server 在 `crates/hyprtrace-server/src/db.rs` 顶部保留一份**手工副本**（注释 `KEEP IN SYNC`）。
+- **权威定义只有一份：`schema/hyprtrace.sql`**（仓库根 `schema/`）。两个 crate 各有一个 `src/schema.rs`，用 `include_str!` 把同一个文件嵌进来（`SCHEMA_SQL`），在 `Database::migrate()` 开头 `execute_batch`。历史上两侧各有一份手抄副本（`KEEP IN SYNC`），已合并——不要再在任何 `db.rs` 里写 DDL。
+- `src/schema.rs` 里还有 `EXPECTED_SCHEMA`（`schema/expected-columns.txt` 快照），两个 crate 的 `migrate_fresh_db_matches_the_canonical_schema` / `migrate_upgrades_a_legacy_database_to_the_canonical_schema` / `migrate_is_idempotent` 会断言它；改 DDL 后按测试提示重新生成快照。
 - 没有 `user_version` 之类的版本闸门：`migrate()` **每次启动都跑全部迁移**，所以每个迁移必须幂等。
-- 加列/加表必须**同时改两处**，并保持 `scripts/repair-negative-durations.sh` 的列预期（它读 `sessions`/`activity_events`/`daily_summary`/`hourly_summary`）。
-- server 额外拥有 `app_categories`、`projects`、`project_rules`（`ensure_*` 在启动时创建并播种 47 条默认分类规则）。
+- 共享 DDL 描述的是**全新库的最终形状**，并且刻意与旧库升级后的形状保持一致（由 ALTER 追加的列在 DDL 里声明为 nullable-with-default）。旧库的列升级仍由各 crate 的 `migrate_v2/v3/v7`（`add_column_if_missing`）完成，不能删。
+- 改列/加表后保持 `scripts/repair-negative-durations.sh` 的列预期（它读 `sessions`/`activity_events`/`daily_summary`/`hourly_summary`）。
+- server 额外拥有 `app_categories`、`projects`、`project_rules`（`ensure_*` 在启动时创建并播种 47 条默认分类规则）——这三张表**刻意不在**共享 schema 文件里。
 
 表清单（v1..v7）：`sessions`(+activity_state, focused_ms, pid, date_local)、`daily_summary`(+focused_ms, focused_session_count)、`hourly_summary`、`activity_events`、`app_resources`、`disruptions`、`goals`、`ai_conversations`(+complete)、`app_categories`、`projects`、`project_rules`。
 
