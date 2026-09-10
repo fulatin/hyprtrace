@@ -26,6 +26,10 @@ mod test_support;
 #[cfg(test)]
 mod tests;
 
+// Re-exported so the route layer clamps a request with the same rule the query
+// applies, instead of echoing a page it did not actually serve.
+pub use sessions::{clamp_sessions_page, MAX_SESSIONS_PER_PAGE};
+
 pub struct Database {
     conn: Connection,
     focused_threshold_ms: i64,

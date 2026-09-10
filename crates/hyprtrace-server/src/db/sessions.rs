@@ -2,6 +2,22 @@ use crate::models::{ActivityEvent, DailyTrend, Session};
 use chrono::Timelike;
 use rusqlite::params;
 
+/// Largest page size `/api/sessions` will serve. The web UI asks for 50, and
+/// 200 when it walks every page to export, so 500 leaves room without letting a
+/// single request read the whole table.
+pub const MAX_SESSIONS_PER_PAGE: u32 = 500;
+
+/// Clamp a requested `page`/`per_page` pair into what the query can serve.
+///
+/// Called by BOTH the handler (so the pagination echoed back is the one that was
+/// actually used) and the query itself. Without it `per_page` reached SQLite
+/// unclamped — `?per_page=4294967295` asked for every row — and
+/// `(page - 1) * per_page` overflowed the `u32` arithmetic: a panic in debug
+/// builds, a silently wrapped offset in release ones.
+pub fn clamp_sessions_page(page: u32, per_page: u32) -> (u32, u32) {
+    (page.max(1), per_page.clamp(1, MAX_SESSIONS_PER_PAGE))
+}
+
 impl super::Database {
     pub fn sessions_paginated(
         &self,
@@ -11,6 +27,7 @@ impl super::Database {
         per_page: u32,
         class_filter: Option<&str>,
     ) -> anyhow::Result<(Vec<Session>, u32)> {
+        let (page, per_page) = clamp_sessions_page(page, per_page);
         let (where_clause, param_values): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
             if let Some(class) = class_filter {
                 (
@@ -37,7 +54,11 @@ impl super::Database {
             |row| row.get(0),
         )?;
 
-        let offset = (page.saturating_sub(1)) * per_page;
+        // Both factors are clamped, so this cannot overflow: the largest offset
+        // is (u32::MAX - 1) * 500, which fits a u64 and an i64 with room to
+        // spare. Doing the arithmetic in u64 also keeps a debug build from
+        // panicking on a page number a caller made up.
+        let offset = (page - 1) as u64 * per_page as u64;
 
         let sql = format!(
             "SELECT id, class, title, workspace, started_at, ended_at, duration_ms,

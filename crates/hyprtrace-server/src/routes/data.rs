@@ -280,19 +280,18 @@ pub async fn sessions(
     let from = query.from.unwrap_or_else(|| today.clone());
     let to = query.to.unwrap_or(today);
 
+    // Clamped here as well as in the query: the response echoes the pagination
+    // it used, so a caller must not be told it is on page 4294967295 when the
+    // database served page 1.
+    let (page, per_page) = crate::db::clamp_sessions_page(query.page, query.per_page);
+
     let db = state.db.lock().await;
-    match db.sessions_paginated(
-        &from,
-        &to,
-        query.page,
-        query.per_page,
-        query.class.as_deref(),
-    ) {
+    match db.sessions_paginated(&from, &to, page, per_page, query.class.as_deref()) {
         Ok((data, total)) => Ok(Json(PaginatedResponse {
             data,
             total,
-            page: query.page,
-            per_page: query.per_page,
+            page,
+            per_page,
         })),
         Err(e) => {
             log::error!("Failed to get sessions: {}", e);

@@ -130,6 +130,50 @@
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// `page` and `per_page` come straight off the query string. They used to
+    /// reach SQLite unclamped, so `?per_page=4294967295` asked for every row,
+    /// and `(page - 1) * per_page` overflowed the u32 arithmetic — a panic in a
+    /// debug build (which is what `cargo test` runs) and a silently wrapped
+    /// offset in a release one.
+    #[test]
+    fn sessions_paginated_clamps_page_and_per_page() {
+        assert_eq!(clamp_sessions_page(0, 0), (1, 1));
+        assert_eq!(
+            clamp_sessions_page(u32::MAX, u32::MAX),
+            (u32::MAX, MAX_SESSIONS_PER_PAGE)
+        );
+
+        let db = test_db();
+        for day in 1..=3 {
+            insert_session(
+                &db,
+                "kitty",
+                &format!("2025-01-0{day}T10:00:00Z"),
+                Some("2025-01-01T11:00:00Z"),
+            );
+        }
+
+        let (rows, total) = db
+            .sessions_paginated("2025-01-01", "2025-01-31", u32::MAX, u32::MAX, None)
+            .expect("an absurd page number must not panic");
+        assert_eq!(total, 3, "the total counts matching rows, not the page");
+        assert!(
+            rows.len() <= MAX_SESSIONS_PER_PAGE as usize,
+            "per_page must be clamped, got {} rows",
+            rows.len()
+        );
+
+        let (rows, _) = db
+            .sessions_paginated("2025-01-01", "2025-01-31", 0, 0, None)
+            .unwrap();
+        assert_eq!(rows.len(), 1, "page 0 / per_page 0 clamp to page 1 / size 1");
+
+        let (rows, _) = db
+            .sessions_paginated("2025-01-01", "2025-01-31", 1, 2, None)
+            .unwrap();
+        assert_eq!(rows.len(), 2, "a normal page size is left alone");
+    }
+
     #[test]
     fn like_match_wildcards() {
         assert!(like_match("firefox", "firefox"));
