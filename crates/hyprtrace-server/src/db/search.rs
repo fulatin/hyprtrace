@@ -153,10 +153,14 @@ impl super::Database {
         to: &str,
         limit: usize,
     ) -> anyhow::Result<Vec<SearchHit>> {
+        // The title IS the excerpt. `snippet()` would be the obvious tool, but
+        // with the trigram tokenizer its token budget counts three-character
+        // sequences rather than words, so a title like `zsh in hyprtrace` comes
+        // back cut mid-word as `zsh in hyprtra …`. Window titles are short, and
+        // the UI already truncates them and shows the whole thing on hover.
         let mut stmt = self.conn.prepare(
             "SELECT s.id, s.class, s.title, s.workspace, s.started_at, s.ended_at,
-                    s.duration_ms, s.activity_state, s.focused_ms,
-                    snippet(sessions_fts, 0, '', '', ' … ', 12)
+                    s.duration_ms, s.activity_state, s.focused_ms, s.title
              FROM sessions_fts
              JOIN sessions s ON s.id = sessions_fts.rowid
              WHERE sessions_fts MATCH ?1
@@ -276,7 +280,10 @@ mod tests {
         // Several words are ANDed, order-independent and case-insensitive.
         let hits = db.search_sessions("MATRIX pattern", "", "", 50).unwrap();
         assert_eq!(hits.len(), 1);
-        assert!(hits[0].snippet.contains("pattern"));
+        assert_eq!(
+            hits[0].snippet, hits[0].session.title,
+            "the excerpt is the title, not a truncated token window"
+        );
     }
 
     /// A two-character Chinese word is an ordinary query, and it is BELOW the
