@@ -33,7 +33,11 @@ async fn main() -> anyhow::Result<()> {
     // the server for the whole migration window ("database is locked").
     let mut init_attempts = 0u32;
     loop {
-        match db.ensure_categories().and_then(|_| db.ensure_projects()) {
+        match db
+            .ensure_categories()
+            .and_then(|_| db.ensure_projects())
+            .and_then(|_| db.ensure_search_index())
+        {
             Ok(()) => break,
             Err(e) if is_sqlite_busy(&e) && init_attempts < 5 => {
                 init_attempts += 1;

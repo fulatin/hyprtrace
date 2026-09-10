@@ -61,6 +61,16 @@ pub struct Session {
     pub focused_ms: Option<i64>,
 }
 
+/// One full-text hit: the session, plus the matching title excerpt.
+#[derive(Debug, Serialize)]
+pub struct SearchHit {
+    #[serde(flatten)]
+    pub session: Session,
+    /// Plain text with the match in context. No markup is embedded — the UI can
+    /// highlight the query itself, and nothing here needs escaping.
+    pub snippet: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct DailyTrend {
     pub date: String,

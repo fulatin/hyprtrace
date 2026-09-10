@@ -16,6 +16,7 @@ mod projects;
 mod report;
 mod resources;
 mod retention;
+mod search;
 mod sessions;
 mod status;
 mod summaries;

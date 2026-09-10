@@ -1,5 +1,6 @@
 use crate::models::{
-    AppMetadata, CategoryRule, PaginatedResponse, Project, ProjectRule, ProjectStat, Session,
+    AppMetadata, CategoryRule, PaginatedResponse, Project, ProjectRule, ProjectStat, SearchHit,
+    Session,
 };
 use crate::routes::AppState;
 use axum::extract::{Path, Query, State};
@@ -754,6 +755,45 @@ pub async fn titles(
         Ok(stats) => Ok(Json(stats)),
         Err(e) => {
             log::error!("Failed to get title stats: {}", e);
+            Err(Json(serde_json::json!({"error": "Internal server error"})))
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct SearchQuery {
+    #[serde(default)]
+    pub q: String,
+    pub from: Option<String>,
+    pub to: Option<String>,
+    #[serde(default = "default_search_limit")]
+    pub limit: usize,
+}
+
+fn default_search_limit() -> usize {
+    50
+}
+
+/// Full-text search over window titles.
+///
+/// Unlike the other list endpoints this one has NO default date window: "when
+/// did I last look at this file" is a question about the whole history, and the
+/// LIMIT is what bounds the answer.
+pub async fn search(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<SearchQuery>,
+) -> Result<Json<Vec<SearchHit>>, Json<serde_json::Value>> {
+    // Clamped here as well as in the query, so a request cannot ask the database
+    // for more than the endpoint advertises.
+    let limit = query.limit.clamp(1, 200);
+    let from = query.from.unwrap_or_default();
+    let to = query.to.unwrap_or_default();
+
+    let db = state.db.lock().await;
+    match db.search_sessions(&query.q, &from, &to, limit) {
+        Ok(hits) => Ok(Json(hits)),
+        Err(e) => {
+            log::error!("Search failed: {}", e);
             Err(Json(serde_json::json!({"error": "Internal server error"})))
         }
     }
