@@ -86,9 +86,13 @@ web/src/
 
 ## 跨组件不变量（改动前必须确认）
 
-1. **`focused_ms` 是阈值启发式**，不是实测：`max(0, duration_ms - focused_threshold_ms)`（默认阈值 1200s）。改 `daemon.focused_threshold_seconds` 只影响**以后的**重建，不会追溯修正已写入的汇总。
-2. **汇总表由 daemon 增量维护**（`end_session` 的事务里 upsert），server 只在重建/删除时整体重写。任何一方改了汇总语义，另一方必须跟上。
-3. **server 的重建不是事务性的**（`rebuild_daily_summary`/`rebuild_hourly_summary` 先 DELETE 后 INSERT），中断会留下空的/半截的汇总表，而 `hourly_breakdown` 只要看到该日期有 ≥1 行就直接信任 `hourly_summary` → 图表会静默变空。这是已知缺陷。
+1. **专注时长不再是汇总表里的列，而是查询时派生的。** 唯一权威定义在 `server/src/insights/focus.rs`：一个**专注块**＝同一本地日期上连续的同类会话，累计 dwell ≥ 15 分钟；块内会话的 dwell 之和就是专注时长（用 dwell 而不是墙钟跨度，run 中间的空白不会把数字吹大）。
+   数据库里那四个 `focused_ms` 列与 `focused_session_count` 记录的是**旧的**每会话阈值公式 `max(0, duration_ms - focused_threshold_seconds)`——中位会话约 1 秒时它**恒为 0**，所以整卡都是死的。这些列仍由 daemon 写入、由重建维护（避免读它们的东西崩），但**没有任何权威数字来自它们**。
+   消费方（效率分的 40 分项、Dashboard 专注卡片、`app_ranking` 的每应用专注、`hourly_breakdown` 的每小时专注、`fragmentation` 的块计数）全部走 `insights::focus`。新增任何专注相关展示都必须走它，否则同一天又会出现两个答案。
+2. **汇总表由 daemon 增量维护**（`end_session` 的事务里 upsert），server 只在重建/删除时整体重写。**两条路径的口径必须一致**，而这已经踩过雷：它们曾在 0 时长会话、`date_local` 未回填的行、`focused_ms` 来源、`focused_session_count` 计数四处各不相同（`08b769a` 统一）。
+   现行规则：已完成会话全部计入（`duration_ms >= 0`）；分桶用 `started_at` 推导的 LOCAL 日期/小时（**不读** `date_local`）；`focused_ms` 按当前阈值重算；`focused_session_count = count(focused_ms > 0)`。
+   `scripts/repair-negative-durations.sh` 是第三份实现，也必须同步（它会读配置里的阈值）。
+3. **汇总重建已事务化**（`rebuild_daily_summary`/`rebuild_hourly_summary` 的 DELETE 与 INSERT 在同一个 `BEGIN IMMEDIATE` 里，`d2c26ca`）——曾经中断会留下空的/半截的汇总表，而 `hourly_breakdown` 只要看到该日期有 ≥1 行就直接信任它 → 图表静默变空。删会话路径（`delete_matching_sessions`）**仍未**整体事务化，是同类残留缺口。
 4. **`class` 一律小写**写入（`listener.rs` 与 `idle_monitor.rs` 各一处），它是 `daily_summary`/`hourly_summary`/分类规则/目标 `target_key` 的聚合键；新增写入路径必须小写，否则聚合被拆开。
 5. **限流钳制是安全措施**：`usize::MAX` 转 `i64` 会变成 `-1`，SQLite 把负 LIMIT 当"无限制"。新端点必须在 handler 和 DB 两层都钳制。
 6. **HTTP 200 + `{"error": ...}`**：多数 handler 返回 `Result<Json<T>, Json<Value>>`，失败也是 200。前端 `fetchJSON` 只在非 2xx 抛错 → `{"error":...}` 会被当成正常数据，在组件里才炸。

@@ -25,6 +25,16 @@
 -- Dates: `sessions.started_at` / `disruptions.occurred_at` hold UTC RFC3339
 -- strings; `date_local` holds the LOCAL calendar date (`YYYY-MM-DD`) derived
 -- from them. `daily_summary.date` / `hourly_summary.date` are local dates too.
+--
+-- FOCUS IS NOT READ FROM THIS SCHEMA ANY MORE. The four `focused_ms` columns and
+-- `focused_session_count` record a per-session threshold
+-- (`max(0, duration_ms - focused_threshold_seconds)`), which is 0 for every
+-- session shorter than the threshold — with a median session of about a second,
+-- that was every session, so the figure was always 0. Focus time is now derived
+-- on demand from focus blocks (`insights::focus` in the server: a run of
+-- consecutive same-class sessions on one local date adding up to 15 minutes).
+-- The columns are still written by the daemon and rebuilt by the server so
+-- nothing that reads them breaks, but no authoritative figure comes from them.
 
 CREATE TABLE IF NOT EXISTS sessions (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -36,6 +46,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     duration_ms    INTEGER DEFAULT 0,
     -- added by migrate_v2 / v3 / v7
     activity_state TEXT DEFAULT 'active',
+    -- legacy threshold figure; focus is derived, see the header note
     focused_ms     INTEGER DEFAULT 0,
     pid            INTEGER DEFAULT NULL,
     date_local     TEXT DEFAULT ''
@@ -50,7 +61,7 @@ CREATE TABLE IF NOT EXISTS daily_summary (
     class                 TEXT NOT NULL,
     total_ms              INTEGER NOT NULL DEFAULT 0,
     session_count         INTEGER NOT NULL DEFAULT 0,
-    -- added by migrate_v2
+    -- added by migrate_v2; legacy threshold figure, see the header note
     focused_ms            INTEGER DEFAULT 0,
     focused_session_count INTEGER DEFAULT 0,
     UNIQUE(date, class)
@@ -65,6 +76,7 @@ CREATE TABLE IF NOT EXISTS hourly_summary (
     class         TEXT NOT NULL,
     total_ms      INTEGER NOT NULL DEFAULT 0,
     session_count INTEGER NOT NULL DEFAULT 0,
+    -- legacy threshold figure, see the header note
     focused_ms    INTEGER NOT NULL DEFAULT 0,
     UNIQUE(date, hour, class)
 );

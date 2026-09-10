@@ -95,15 +95,20 @@
 - [x] 2g `db/test_support.rs` 手写 DDL（`f02b6cc`）：夹具改为直接跑 `schema/hyprtrace.sql` 并沿用 `PRAGMA foreign_keys=ON`，
       server 自有表改由 `ensure_projects()` 创建。它当时**已经和自己漂移**（`sessions` 被声明两次、`duration_ms` 定义不同）。
       改完 64 个测试仍全绿（含外键真正生效），净减 74 行。
-- [ ] 2h **效率分在空日有两个定义**：`efficiency_score` 返回 30（late 15 + disruption 15），
-      而 `insights::efficiency_subscore` 对同一天返回 0，`insight_disruption_impact` 用的是后者。
-      与 Phase 3 的「全应用只有一个定义」是同一主题，建议并入 3 一起做。
+- [x] 2h 效率分在空日有两个定义（`6d65b59`）：`efficiency_score` 里是 `insights::efficiency_subscore` 的**逐字副本**
+      （同样的 40/30/15/15 权重、同样的 15/90/180 分钟阈值），却只在空日上分道扬镳——
+      深夜与打断两个分量会给空日各 15 分，于是 Dashboard 说 30/100、Insights（平均的是 subscore）说 0。
+      现在 DB 版**调用**纯函数版。回归测试撤掉修复即报 `a day with no activity is not a 30/100 day: left: 30, right: 0`。
 
 ### Phase 3 — 语义统一（**已定 A 方案：查询侧派生**）
 用户已选定：专注时长改为**由服务端用纯函数按需派生**，daemon 一行不改、零 schema 变更、不新建 crate。
-- [ ] 3a 把 `insights` 的专注块检测（同类会话连续成串、累计 ≥ 15 分钟）扩成「按日给出成员会话」的纯函数
-- [ ] 3b Dashboard / 效率分 / 目标 / Insights 全部改用它——全应用只剩一个「专注」定义
-- [ ] 3c `daily_summary.focused_ms` 降级为 legacy（保留列供兼容，文档与代码注释明确标注，不再作为权威来源）
+- [x] 3a 新增 `insights/focus.rs`（`98cd9d1`）：`blocks_of` / `focus_total_ms` / `focus_by_class` / `focus_ms_by_hour` 纯函数 + 4 个单测。
+      规则：同一本地日期上连续的同类会话，累计 dwell ≥ 15 分钟；块内 dwell 之和即专注时长（用 dwell 而非墙钟跨度，run 中间的空白不会吹大数字）。
+- [x] 3b 全部消费方改用派生值（`98cd9d1`）：效率分的 40 分项、`today_summary` 的专注卡、`app_ranking` 的每应用专注、`hourly_breakdown` 的每小时专注；
+      `fragmentation` 里那份内联副本删掉、改调同一函数（它**既有**的测试正好成了等价性判据：块数不变）。
+      `app_ranking` 的 `focused_session_count` 也从「随手填 1」改成诚实定义：该类参与专注块的会话数。
+- [x] 3c 四个 `focused_ms` 列与 `focused_session_count` 标注为 legacy（`schema/hyprtrace.sql` 头部 + 列注释、
+      架构技能的不变量 1 全部改写）：仍由 daemon 写入、由重建维护，但**没有任何权威数字来自它们**。
 - [ ] 3d 会话合并/debounce 暂缓：A 方案下既非必需，也能避免改动 daemon 写入路径
 
 ### Phase 4 — 新功能
