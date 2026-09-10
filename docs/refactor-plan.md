@@ -70,15 +70,21 @@
       DELETE 与 INSERT 之间原本没有事务，中断即留下**空表**，而读者只要看到该日期有 ≥1 行就当真 → 图表静默变空。
       用「触发器 RAISE(ABORT) 注入失败」验证：撤掉事务后 daily 变 0 行（原 2 行）、hourly 留半截（1 行）。
 - [x] 2b `resume_session` 尊重 `record_titles`（`9ba0639`：抽出 `privacy::recorded_title`，两条写 title 的路径统一走它）
-- [ ] 2c `disruptions` / `app_resources` 纳入保留策略
-- [ ] 2d 收敛重建口径分歧。已知**四处**，不止最初看到的一处：
-      ① `migrate_v6` 的重建路径两侧不同（daemon `rebuild_summaries_from_sessions` vs server `rebuild_daily/hourly_summary`），
-      在 `duration_ms = 0` 行、`date_local = ''` 行、`focused_ms` 来源三处不同；
-      ② `end_session` 增量写的 `focused_session_count` 用 `activity_state == "focused"`，
-      而重建路径用 `focused_ms > 0` 计数——同一个字段两种口径；
-      ③ server 的 `migrate_v6` 跑在 `migrate_v7` 之前，此时 `date_local` 可能还是空串，
-      而 `rebuild_daily_summary` 正是按 `date_local <> ''` 过滤 → 会重建出一张**空表**；
-      ④ `repair-negative-durations.sh` 是第三份实现。
+- [x] 2c `disruptions` / `app_resources` / `activity_events` 纳入保留策略（`7601c71`）：
+      **`disruptions` 原本没有任何删除路径**——一个设了保留窗口的用户仍然永久保留全部通知与剪贴板事件
+      （本机实测 14,621 行，是最大的辅助表）。`app_resources`/`activity_events` 只在会话被删时才跟随删除，
+      所以 daemon 留下的未闭合会话、`session_id` 为 NULL 的行都会永久留存（资源采样 30 秒一行）。
+      新增 `prune_auxiliary_before` + `apply_retention`（先用例由后台任务调用）；`date_local` 为空的行**刻意保留**
+      ——没有日期就无法套用截止日，猜一个等于删掉策略未覆盖的数据。回归测试撤掉修复即报 `the old disruption must go: left 0, right 1`。
+- [x] 2d 收敛重建口径分歧（`08b769a` + `c921909`）：四处全部统一
+      ① 停止条件统一为 `duration_ms >= 0`（0 时长会话也被 `end_session` 计数过）；
+      ② 分桶一律用 `started_at` 推导的 LOCAL 日期/小时，不再读 `date_local`——正是这一条让「未回填的行被整行丢弃」与下面的空表 bug 不再是可能；
+      ③ `focused_ms` 统一为**按当前阈值重算**（这样 `focused_threshold_seconds` 才有意义，重建＝用今天的规则重算）；
+      ④ `focused_session_count` 统一为 `focused_ms > 0`（增量路径原本用 `activity_state == "focused"`，那是空闲监控的状态机，不是专注度量）；
+      ⑤ `scripts/repair-negative-durations.sh`（第三份实现）也改为读配置里的阈值并按同一规则重算。
+      **顺带修掉一个会毁数据的顺序 bug**：server 的 `migrate_v6`（可能重建汇总）跑在 `migrate_v7`（添加并回填 `date_local`）之前，
+      旧过滤条件 `date_local <> ''` 会把 `daily_summary` **整个清空**。现在 v7 先跑，且重建已完全不依赖该列。
+      两个测试在旧语义下分别报 `the rebuild rules changed` 与「汇总表为空」。
 - [x] 2e `finalize_orphaned_sessions` 关闭孤儿会话后不维护汇总表（`56b03ac`）：
       改为在同一事务内按 LOCAL 开始日期**作用域重建**（`write_summaries` 被抽出，`migrate_v6` 仍走全量路径），
       并补齐 `focused_ms`/`date_local`。回归测试已验证「撤掉修复即变红」。
@@ -136,6 +142,10 @@ cat <新目录>/*.rs | sed 's/[[:space:]]*$//' | sort | uniq -c > /tmp/b ; diff 
 | 2a 重建事务化（daily） | `left: 0, right: 2` —— 汇总表丢了**全部**行 |
 | 2a 重建事务化（hourly） | `left: 1, right: 2` —— 留下半截 |
 | 2f 分页钳制 | `attempt to multiply with overflow`（debug 构建直接 panic） |
+| 2c 保留策略覆盖 | `the old disruption must go: left: 0, right: 1` |
+| 2d 重建规则（规则） | `the rebuild rules changed` |
+| 2d 重建规则（旧库） | 旧库上 `daily_summary` 被清空，取行直接 panic |
+| 1g 告警 | 真构建出现 `warning: constant \`EXPECTED_SCHEMA\` is never used`（`cargo test` 看不到） |
 
 **4. 真实数据端到端等价（本轮做的集成验证）**
 
