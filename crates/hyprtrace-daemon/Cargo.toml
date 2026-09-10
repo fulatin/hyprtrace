@@ -5,7 +5,10 @@ edition.workspace = true
 
 [dependencies]
 hyprland = "0.4.0-beta.3"
-rusqlite = "0.31"
+# `bundled` compiles SQLite from source instead of linking the system
+# library: it guarantees the FTS5 module the global search needs and keeps
+# the SQLite version identical across distributions (and in CI).
+rusqlite = { version = "0.31", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }

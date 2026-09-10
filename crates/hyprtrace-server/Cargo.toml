@@ -8,7 +8,10 @@ axum = "0.7"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-rusqlite = "0.31"
+# `bundled` compiles SQLite from source instead of linking the system
+# library: it guarantees the FTS5 module the global search needs and keeps
+# the SQLite version identical across distributions (and in CI).
+rusqlite = { version = "0.31", features = ["bundled"] }
 chrono = { version = "0.4", features = ["serde"] }
 toml = "0.8"
 toml_edit = "0.22"
