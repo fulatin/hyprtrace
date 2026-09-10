@@ -1,14 +1,15 @@
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 /// Metadata for a single application, resolved from a `.desktop` file.
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Clone, TS)]
 pub struct AppMetadata {
     pub desktop_id: String,
     pub display_name: String,
     pub icon: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
 pub struct TodaySummary {
     pub date: String,
     pub total_active_ms: i64,
@@ -19,7 +20,7 @@ pub struct TodaySummary {
     pub top_apps: Vec<AppRank>,
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Clone, TS)]
 pub struct AppRank {
     pub class: String,
     pub total_ms: i64,
@@ -31,7 +32,7 @@ pub struct AppRank {
     pub category: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, TS)]
 pub struct CategoryRule {
     pub id: Option<i64>,
     pub pattern: String,
@@ -40,7 +41,7 @@ pub struct CategoryRule {
     pub priority: i64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
 pub struct HourlyBucket {
     pub hour: u8,
     pub total_ms: i64,
@@ -48,7 +49,7 @@ pub struct HourlyBucket {
     pub focused_ms: i64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
 pub struct Session {
     pub id: i64,
     pub class: String,
@@ -62,7 +63,7 @@ pub struct Session {
 }
 
 /// One full-text hit: the session, plus the matching title excerpt.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
 pub struct SearchHit {
     #[serde(flatten)]
     pub session: Session,
@@ -71,7 +72,7 @@ pub struct SearchHit {
     pub snippet: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
 pub struct DailyTrend {
     pub date: String,
     pub total_ms: i64,
@@ -81,7 +82,7 @@ pub struct DailyTrend {
 
 /// Per-day activity totals, used for the yearly activity heatmap. Days with no
 /// recorded sessions are zero-filled so the client can render a complete grid.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
 pub struct DailyActivity {
     pub date: String,
     pub total_ms: i64,
@@ -90,7 +91,7 @@ pub struct DailyActivity {
 }
 
 /// Aggregate of time spent on a single window title (document/tab) over a range.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
 pub struct TitleStat {
     pub class: String,
     pub title: String,
@@ -99,7 +100,7 @@ pub struct TitleStat {
     pub last_used_at: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
 pub struct AiMessage {
     pub id: i64,
     pub created_at: String,
@@ -117,7 +118,7 @@ pub struct PaginatedResponse<T: Serialize> {
     pub per_page: u32,
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Clone, TS)]
 pub struct AppResource {
     pub class: String,
     pub avg_cpu_pct: f64,
@@ -125,7 +126,7 @@ pub struct AppResource {
     pub sample_count: i64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
 pub struct ActivityEvent {
     pub id: i64,
     pub session_id: Option<i64>,
@@ -135,7 +136,7 @@ pub struct ActivityEvent {
     pub duration_ms: Option<i64>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
 pub struct DisruptionEvent {
     pub id: i64,
     pub kind: String,
@@ -144,7 +145,7 @@ pub struct DisruptionEvent {
     pub occurred_at: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
 pub struct EfficiencyScore {
     pub date: String,
     pub score: i64,
@@ -155,7 +156,7 @@ pub struct EfficiencyScore {
     pub total_active_ms: i64,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, TS)]
 pub struct Goal {
     pub id: Option<i64>,
     pub name: String,
@@ -170,14 +171,14 @@ fn default_true() -> bool {
     true
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
 pub struct GoalProgress {
     pub goal: Goal,
     pub today_ms: i64,
     pub pct: f64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
 pub struct TrendPrediction {
     pub today_ms: i64,
     pub predicted_today_ms: i64,
@@ -187,7 +188,7 @@ pub struct TrendPrediction {
     pub window_days: i64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
 pub struct CurrentStatus {
     pub current_app: String,
     pub current_session_min: i64,
@@ -198,7 +199,7 @@ pub struct CurrentStatus {
     pub efficiency_score: Option<i64>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
 pub struct WorkspaceRecommendation {
     pub app: String,
     pub workspace: String,
@@ -208,7 +209,7 @@ pub struct WorkspaceRecommendation {
     pub confidence: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, TS)]
 pub struct Project {
     pub id: Option<i64>,
     pub name: String,
@@ -216,7 +217,7 @@ pub struct Project {
     pub sort_order: i64,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, TS)]
 pub struct ProjectRule {
     pub id: Option<i64>,
     pub project_id: i64,
@@ -224,7 +225,7 @@ pub struct ProjectRule {
     pub priority: i64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
 pub struct ProjectStat {
     pub project_id: Option<i64>,
     pub name: String,

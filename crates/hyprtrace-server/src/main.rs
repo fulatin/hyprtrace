@@ -1,4 +1,8 @@
 mod ai;
+// Binding generation is a build-time concern: the module renders
+// `web/src/lib/api-types.ts` and asserts it is current, so only the tests need it.
+#[cfg(test)]
+mod api_types;
 mod auth;
 mod config;
 mod db;
