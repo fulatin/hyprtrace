@@ -3,8 +3,8 @@
 //!
 //! Everything in this module is a plain function over already-fetched rows so it
 //! can be unit-tested without a database (each submodule carries its own
-//! `#[cfg(test)] mod tests`). The SQL lives in `db.rs`; the HTTP plumbing lives
-//! in `routes/insights.rs`.
+//! `#[cfg(test)] mod tests`). The SQL lives in `db/insights_sql.rs`; the HTTP
+//! plumbing lives in `routes/insights.rs`.
 //!
 //! Contract notes that explain the non-obvious formulas:
 //!   * `probability` in the transition graph is row-normalised over *all*

@@ -241,7 +241,7 @@ pub fn anomalies(
 
 /// Hours counted as "late night" for the anomaly detector: 23:00 and 00:00-05:59.
 ///
-/// The SQL in `db.rs::insight_anomalies` filters the same hours; this is the
+/// The SQL in `db/insights_sql.rs::insight_anomalies` filters the same hours; this is
 /// single Rust-side definition, kept test-only so it cannot drift silently.
 #[cfg(test)]
 pub fn is_late_night_hour(hour: u8) -> bool {
