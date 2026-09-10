@@ -118,10 +118,24 @@
       **3 字符以下的查询走 LIKE 兜底**——trigram 索引对更短的查询只会**静默返回空**，而「课表」是很常见的中文两字查询；通配符 `%`/`_` 在 LIKE 路径里转义。
       用户输入永不作为 FTS5 语法：每个词都被引号包成短语（内部引号翻倍），所以 `foo -bar`、不配对的引号、`NEAR(` 都是「搜不到」而不是 500。
       真机验证（21,563 会话）：启动时一次性建索引（亚秒级），`hyprtrace`/`main.rs`/`班级课表`/`课表`/多词 AND 都能命中，200 条宽查询约 8ms。
+- [x] 4b **`ts-rs` 生成前端类型**（`584464e` + `7fd1686`）：`web/src/lib/api-types.ts` 是由 Rust 模型渲染的**已提交产物**，
+      Rust 侧测试在两者不一致时失败（`HYPRTRACE_WRITE_TYPES=1 cargo test -p hyprtrace-server api_types` 重新生成）。
+      三个要点：① **64 位整数必须保持 `number`**（ts-rs 默认 `bigint`——JSON 给不出 bigint，而前端对每个毫秒值做算术）；
+      ② 该模块 `#[cfg(test)]`（渲染是构建期的事，放进二进制会多两个只被测试读的 `pub` 项 = dead-code 告警）；
+      ③ ts-rs 按「每类型一个文件」渲染，所以要剥掉重复头与跨文件 import（残留会是悬空 import，`tsc` 会报错而非忽略）。
+      `types.ts` 改为再导出生成类型（433 → 307 行），且生成类型更严：`id` 在线上**总是存在**（`Option<i64>` 序列化为 `null`），
+      于是 4 处客户端草稿改为显式 `id: null`（线上语义不变——`null` 与省略键都反序列化为 `None`）。
 - [ ] 4a（前端）搜索 UI：命令面板或搜索页 + `web/src/lib/api.ts` 的 `api.search()` + `SearchHit` 类型（需浏览器核对）
 - [x] 4g `rusqlite` 开启 `bundled`（`d914199`）：为 FTS5 提供保证（它是编译期开关，发行版不一定启用），并固定 SQLite 版本。
       实测本机首次构建 13s；**连 schema 快照测试都照常通过**，说明 bundled 版本与系统 3.53.4 的 `pragma table_info` 输出一致，无需重生成快照。
-- [ ] 1e **`Settings.tsx`(1525) 拆分 + `@tanstack/react-query` 接管数据层**（不能当纯移动做：44 个 `useState` 与取数都在父组件里）
+- [x] 1e `Settings.tsx`(1525) 拆分 + `@tanstack/react-query` 接管数据层（`236c2bf`/`4620c43`/`c69394e`）：
+      `Settings.tsx` 1525 → **147 行**（只剩 section rail + scroll-spy + 骨架屏门），9 个 section 各自持有草稿与保存处理器，
+      共享控件只存在一份（`ui/Controls.tsx`、`ui/AnimatedRow.tsx`）。数据层在 `lib/queries.ts`。
+      **顺带修掉一个真实的 UX bug**：`retention_days` 显示在 Privacy 区，却只被 AI 区的「Save Config」写入——
+      在该区改保留天数再点本区保存会**静默丢失**。现在 Privacy 拥有并提交 `record_titles` + `retention_days`，AI 区只发自己的 5 个字段。
+      **运行时验证**（子代理无法做，需可写实例）：在隔离实例上把保留天数改成 45 并点保存 → 隔离配置磁盘上 `retention_days = 45` ✓、
+      其它 section 的值全部保留 ✓、**真实用户配置未被触碰** ✓；拆分前后截图逐项一致；设计 token 规则干净。
+      一处文案随行为改动：那行「saved with the config above」原本指的是不再写它的按钮。
 - [ ] 4f **Sessions 页的 "Focus" 列（宽屏 2xl 才显示）仍在展示已死的每会话值**（3c 收尾时发现）：
       它渲染 `Session.focused_ms`，也就是阈值公式的值（对几乎每个会话都是 0），与 Dashboard 的专注卡**直接矛盾**。
       二选一：改成显示「该会话是否属于某个专注块」的标记，或去掉该列。属前端改动，必须按仓库习惯做浏览器视觉核对。
@@ -196,6 +210,8 @@ cat <新目录>/*.rs | sed 's/[[:space:]]*$//' | sort | uniq -c > /tmp/b ; diff 
   只能在 `db` 的后代模块里编译 → 放 `db/test_support.rs`
 - **夹具不要再手写 DDL**：`test_db()` 现在直接跑 `schema/hyprtrace.sql` + `PRAGMA foreign_keys=ON`，
   server 自有表用 `ensure_projects()`。手写副本已经漂移过一次（`sessions` 被声明两遍且列定义不同）。
+- **新增 Rust 依赖需要一次沙箱提权**：`cargo` 必须解包到 `~/.cargo/registry/src`，而它在工作区外。
+  `cargo add` 本身只会警告，真正失败在 `cargo fetch`/`build`（`Read-only file system`）。ts-rs 就是这么装上的（一次性 `danger-full-access`）。
 - **告警只在真构建里出现**：`pub` 但只有测试读的常量，`cargo test` 不报警、`cargo build`/`cargo check -p` 才报（1g 就是这么漏掉的）。
   比告警集合时要用同一种构建方式，别拿 `cargo test` 的输出当基线。
 - CRLF 文件：`daemon/config.rs`、`daemon/main.rs`、两个 `Cargo.toml`、`scripts/*.service`、`web/src/lib/api.ts`
