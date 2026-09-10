@@ -104,6 +104,23 @@ impl super::Database {
             total_all += total_ms;
             raw.push((class, total_ms, session_count, focused_ms, focused_sessions));
         }
+        drop(stmt);
+
+        // The per-class focus figure is derived from the range's sessions, like
+        // every other focus number in the application; the `focused_ms` column
+        // above is the legacy per-session-threshold value and would read 0 for
+        // any app the user only ever used in short bursts. See `insights::focus`.
+        let focus_by_class = self
+            .insight_sessions(from, to, 0)
+            .map(|sessions| crate::insights::focus_by_class(&sessions))
+            .unwrap_or_default();
+        let raw: Vec<(String, i64, i64, i64, i64)> = raw
+            .into_iter()
+            .map(|(class, total_ms, session_count, _legacy_focused, _legacy_focused_sessions)| {
+                let focus = focus_by_class.get(&class).copied().unwrap_or_default();
+                (class, total_ms, session_count, focus.focus_ms, focus.sessions)
+            })
+            .collect();
 
         for (class, total_ms, session_count, focused_ms, focused_session_count) in raw {
             let percentage = if total_all > 0 {

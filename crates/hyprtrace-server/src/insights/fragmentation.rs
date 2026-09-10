@@ -48,8 +48,6 @@ pub struct FragmentationResponse {
 
 /// Sessions shorter than this count as "short" (fragmented attention).
 const SHORT_SESSION_MS: i64 = 60_000;
-/// A focus block is a run of same-class sessions spanning at least 15 minutes.
-const FOCUS_BLOCK_MS: i64 = 15 * 60_000;
 /// Re-orientation cost per switch is capped at one minute of the previous dwell.
 const SWITCH_COST_CAP_MS: i64 = 60_000;
 /// Fraction of the pre-switch dwell charged as lost re-orientation time.
@@ -107,24 +105,10 @@ pub fn fragmentation(sessions: &[InsightSession], from: &str, to: &str) -> Fragm
             .count() as i64;
 
         // Focus blocks: consecutive same-class sessions whose combined duration
-        // reaches 15 minutes. A single long session is its own block.
-        let mut focus_blocks = 0i64;
-        let mut run_class: Option<&str> = None;
-        let mut run_ms = 0i64;
-        for s in day_sessions.iter() {
-            if run_class == Some(s.class.as_str()) {
-                run_ms += s.dwell_ms();
-            } else {
-                if run_ms >= FOCUS_BLOCK_MS {
-                    focus_blocks += 1;
-                }
-                run_class = Some(s.class.as_str());
-                run_ms = s.dwell_ms();
-            }
-        }
-        if run_ms >= FOCUS_BLOCK_MS {
-            focus_blocks += 1;
-        }
+        // reaches 15 minutes. The rule lives in `insights::focus` now — this used
+        // to be a second copy of it, and a copy is how the same day ends up with
+        // two different focus figures.
+        let focus_blocks = crate::insights::focus::blocks_of(day_sessions).len() as i64;
 
         let longest_focus_ms = {
             // Longest unbroken same-class run, reported as the run duration.

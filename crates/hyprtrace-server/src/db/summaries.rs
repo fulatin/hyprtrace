@@ -8,11 +8,15 @@ impl super::Database {
             params![date],
             |row| row.get(0),
         )?;
-        let total_focused_ms: i64 = self.conn.query_row(
-            "SELECT COALESCE(SUM(focused_ms), 0) FROM daily_summary WHERE date = ?1",
-            params![date],
-            |row| row.get(0),
-        )?;
+        // Focus is derived from the day's sessions, exactly as the efficiency
+        // score does it. Reading `daily_summary.focused_ms` here would show the
+        // legacy per-session-threshold figure, i.e. "Focus time <1m" on the very
+        // days the efficiency card now reports real focus for. See
+        // `insights::focus`.
+        let total_focused_ms: i64 = self
+            .insight_sessions(date, date, 0)
+            .map(|sessions| crate::insights::focus_total_ms(&sessions))
+            .unwrap_or(0);
 
         let app_count: usize = self.conn.query_row(
             "SELECT COUNT(DISTINCT class) FROM daily_summary WHERE date = ?1",

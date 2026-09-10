@@ -20,6 +20,7 @@
 mod anomalies;
 mod cooccurrence;
 mod disruption;
+mod focus;
 mod forecast;
 mod fragmentation;
 mod rhythm;
@@ -41,6 +42,10 @@ pub use self::{
     disruption::{
         disruption_impact, DisruptionBucket, DisruptionCorrelations, DisruptionDay,
         DisruptionImpactResponse,
+    },
+    focus::{
+        blocks_of, focus_by_class, focus_ms_by_hour, focus_total_ms, ClassFocus, FocusBlock,
+        FOCUS_BLOCK_MIN_MS,
     },
     forecast::{forecast, ForecastFuturePoint, ForecastPoint, ForecastResponse},
     fragmentation::{

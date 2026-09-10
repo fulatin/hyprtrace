@@ -1081,6 +1081,69 @@
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// The efficiency score's focus component must come from focus BLOCKS, not
+    /// from the legacy per-session threshold.
+    ///
+    /// This fixture is the shape of real data: a day made of one-minute
+    /// sessions. `max(0, duration_ms - 20 min)` is 0 for every one of them, so
+    /// the old rule scored the day's 40-point focus component at zero no matter
+    /// how focused the user was (on this machine's database the dashboard
+    /// reported "Focus time <1m" every day for that reason).
+    #[test]
+    fn focus_time_comes_from_blocks_not_from_the_per_session_threshold() {
+        let db = test_db(); // threshold = 20 min
+        let insert = |class: &str, start_minute: i64, duration_ms: i64| {
+            db.conn
+                .execute(
+                    "INSERT INTO sessions (class, title, started_at, ended_at, duration_ms, date_local)
+                     VALUES (?1, '', ?2, ?2, ?3, '2025-03-04')",
+                    params![
+                        class,
+                        format!("2025-03-04T10:{start_minute:02}:00Z"),
+                        duration_ms
+                    ],
+                )
+                .unwrap();
+        };
+
+        // 20 unbroken minutes on kitty, in one-minute sessions.
+        for minute in 0..20 {
+            insert("kitty", minute, 60_000);
+        }
+        // A second class with a single one-minute session: no block, no focus.
+        db.conn
+            .execute(
+                "INSERT INTO sessions (class, title, started_at, ended_at, duration_ms, date_local)
+                 VALUES ('zed', '', '2025-03-04T14:00:00Z', '2025-03-04T14:00:00Z', 60000, '2025-03-04')",
+                [],
+            )
+            .unwrap();
+
+        // What the legacy rule makes of this day: nothing at all.
+        db.rebuild_daily_summary().unwrap();
+        let legacy: i64 = db
+            .conn
+            .query_row(
+                "SELECT COALESCE(SUM(focused_ms), 0) FROM daily_summary WHERE date = '2025-03-04'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            legacy, 0,
+            "the per-session threshold cannot see any focus in this day"
+        );
+
+        let score = db.efficiency_score("2025-03-04").unwrap();
+        assert!(
+            score.focus_ratio > 0.9,
+            "focus must come from the 20-minute block, got focus_ratio {}",
+            score.focus_ratio
+        );
+        // 1_200_000 ms of kitty sessions out of 1_260_000 ms total.
+        assert!(score.score > 30, "the focus component must not be dead");
+    }
+
     #[test]
     fn projects_and_rules_roundtrip_and_match() {
         let db = project_test_db();

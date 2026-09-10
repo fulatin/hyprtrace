@@ -19,13 +19,14 @@ impl super::Database {
             )
             .unwrap_or(0);
 
+        // Focus is DERIVED from the day's sessions, not read from
+        // `daily_summary.focused_ms`: that column holds the legacy per-session
+        // threshold figure, which is 0 on any day built out of short sessions —
+        // i.e. on most real days, which is why the dashboard reported "Focus
+        // time <1m". See `insights::focus` for the rule.
         let total_focused_ms: i64 = self
-            .conn
-            .query_row(
-                "SELECT COALESCE(SUM(focused_ms), 0) FROM daily_summary WHERE date = ?1",
-                params![date],
-                |row| row.get(0),
-            )
+            .insight_sessions(date, date, 0)
+            .map(|sessions| crate::insights::focus_total_ms(&sessions))
             .unwrap_or(0);
 
         let session_count: i64 = self

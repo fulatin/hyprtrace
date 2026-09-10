@@ -13,7 +13,14 @@ impl super::Database {
 
     /// Sessions in the inclusive local-date range, ordered chronologically so
     /// callers can walk consecutive pairs as the app-switch sequence.
-    fn insight_sessions(&self, from: &str, to: &str, min_ms: i64) -> anyhow::Result<Vec<InsightSession>> {
+    /// Also used by `db::efficiency`, which derives focus time from the sessions
+    /// instead of reading the legacy summary column.
+    pub(super) fn insight_sessions(
+        &self,
+        from: &str,
+        to: &str,
+        min_ms: i64,
+    ) -> anyhow::Result<Vec<InsightSession>> {
         let mut stmt = self.conn.prepare(
             "SELECT class, started_at, ended_at, COALESCE(duration_ms, 0), date_local
              FROM sessions
