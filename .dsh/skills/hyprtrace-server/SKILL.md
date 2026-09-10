@@ -20,12 +20,13 @@ Axum 0.7 + tokio，binary-only（无 `lib.rs`，测试全是内联单测）。`A
 | `GET /api/summary` | `date`(本地今天) | `TodaySummary` |
 | `GET /api/apps` | from/to, `limit`(10 → 1..500，两层都钳) | `AppRank[]` |
 | `GET /api/timeline` | `date` | `HourlyBucket[24]` |
-| `GET /api/sessions` | from/to, `page`(1), `per_page`(50) **未钳制**, `class` | `{data,total,page,per_page}` |
+| `GET /api/sessions` | from/to, `page`(1), `per_page`(50 → 1..500，**两层都钳**), `class` | `{data,total,page,per_page}` |
 | `DELETE /api/sessions` | from/to, `class` | `{deleted,rebuilt_summaries}` |
 | `GET /api/app/:class/trend` | from/to, `granularity=hour` | `DailyTrend[]` |
 | `GET /api/apps/classes` / `GET /api/apps/metadata` | from/to；`classes=a,b` | `string[]` / `{entries}`（不查库，走 desktop 缓存） |
 | `GET /api/activity/events` / `daily` | `limit`(100 → 1..1000) / `days`(371 → **7..730**) | 事件列表 / 零填充的日均序列 |
 | `GET /api/titles` | from(今天-6)/to, `class`, `limit`(50 → 1..500) | `TitleStat[]` |
+| `GET /api/search` | `q`（必填，**子串**匹配）、from/to（可省略＝**全历史**）、`limit`(50 → 1..200，两层都钳) | `SearchHit[]`：会话字段内联 + `snippet` |
 | `GET /api/resources` / `disruptions` | from/to, `limit`（**只在 handler 钳制**） | `AppResource[]` / `DisruptionEvent[]` |
 | `GET /api/efficiency` | `date` | `EfficiencyScore` |
 | `GET/PUT /api/goals` | PUT = **整体替换**（`replace_all=true`） | `{goals,progress}` |
@@ -61,7 +62,8 @@ AI：`/api/ai/models`、`/tools`、`/chat`（普通）、`/chat/stream`（SSE，
 
 ## 三、派生指标公式
 
-- **效率分**（0..100）：`focus_score = clamp(40×focused/active, 0, 40)`；`frag_score`：平均会话 900..5400s 得 30，更短按 `avg/900×30`，更长按 `30-((avg-5400)/10800)×10`（下限 0）；`late_score = clamp(15×(1-late_night_pct/100), 0,15)`；`disruption_score = clamp(15×(1-notifications/20), 0,15)`。**深夜窗口硬编码 23..5**（忽略 config 的 `late_night_*`）。**空数据的一天得 30 分**而不是 0。注意 `insights::efficiency_subscore` 是另一套（把 focus_ratio 钳到 0..1，且 active≤0 时返回 0），两者对空日不一致；洞察的 disruption-impact 用的是后者。
+- **专注时长**：查询时由 `insights::focus` 派生。**专注块**＝同一本地日期上连续的**同类**会话、累计 dwell ≥ 15 分钟；块内会话的 dwell 之和就是专注时长（用 dwell 而非墙钟跨度，run 中间的空白不会吹大数字）。`/api/summary` 的 `total_focused_ms`、`/api/efficiency` 的 `focus_ratio`、`/api/apps` 的每应用专注、`/api/timeline` 的每小时专注、`insights/fragmentation` 的块计数**全部**走它。数据库里的 `focused_ms` 列是**旧的**每会话阈值公式（`max(0, duration - 阈值)`，中位会话约 1 秒时恒为 0），仍被写入但不再是任何权威数字的来源。
+- **效率分**（0..100）：`focus_score = clamp(40×focused/active, 0, 40)`（`focused` 即上面的派生专注时长）；`frag_score`：平均会话 900..5400s 得 30，更短按 `avg/900×30`，更长按 `30-((avg-5400)/10800)×10`（下限 0）；`late_score = clamp(15×(1-late_night_pct/100), 0,15)`；`disruption_score = clamp(15×(1-notifications/20), 0,15)`。**深夜窗口硬编码 23..5**（忽略 config 的 `late_night_*`）。**空数据的一天得 0 分**：公式只有一份（`insights::efficiency_subscore`，`efficiency_score` 直接调用它）——它曾经有两份逐字副本，只在空日上分道扬镳（30 vs 0）。
 - **趋势预测 `/api/predict`**：只在**存在的日期**上做 OLS（不补零），结果钳制到 `[0, 16h]`；`predicted_today = max(拟合值, 今日实际)`。与 `/api/insights/forecast`（补零序列 + 周内因子 + 95% 区间）是**两套不同模型**。
 - **洞察**：转移矩阵按行归一化到"该 app 的全部出边（含自环）"（`probability = count/out_total`，矩阵行和 ≈1，`edges` 不含自环）；预测的周内因子只用**有活动的日子**计算、无活动的星期回退 1.0、统一钳到 `0.2..=5.0`；碎片化的"重建成本"定义为 `Σ round(min(prev_dwell, 60s) × 0.5)`；共现的 lift/jaccard/support 都按"出现过的日期集合"算；异常的基线是中位数 + `1.4826×MAD`（MAD 塌缩时回退标准差），触发条件是 `|z| ≥ threshold` 或深夜占比 ≥0.35 或短会话占比 ≥0.75，severity 由 `|z| ≥ 1.5×threshold` 或"≥2 个触发条件"决定。所有除法都有零分母保护，输出保证有限。
 - **项目统计**：按 class 取**优先级最高的** LIKE 规则归属项目；百分比分母包含未归类桶；未归类桶名 `未分类`、色 `#6b7280`。
@@ -96,7 +98,7 @@ AI：`/api/ai/models`、`/tools`、`/chat`（普通）、`/chat/stream`（SSE，
 2. 单连接单锁：不要在锁内做长任务；新增长查询要考虑它会阻塞所有端点。
 3. `Database` 方法都是 `&self` + `unchecked_transaction()`，互斥完全依赖外层 Mutex。
 4. **重建非事务**（先 DELETE 后 INSERT）→ 中断会留下空/半截汇总表，且 `hourly_breakdown` 会静默信任它。修的时候要和 daemon 的增量 upsert 语义对齐。
-5. LIMIT 钳制是安全措施（负 LIMIT = 无限制）。`/api/sessions` 的 `page`/`per_page` **没有**钳制，`offset` 是不可检查的 u32 乘法。
+5. LIMIT 钳制是安全措施（负 LIMIT = 无限制）。`/api/sessions` 的 `page`/`per_page` 曾在 handler 与 SQL 两层都没有钳制，且 `offset` 是不可检查的 u32 乘法（debug 下 panic、release 下**静默回绕**到错误窗口）；现在统一由 `db::clamp_sessions_page`（1..500）处理，handler 与查询各调一次。新端点必须在两层都钳。
 6. 日期语义：请求用本地日期，原始表用 `date_local`，汇总表用本地 `date`；时区变更会重切历史桶。
 7. **200 + `{"error":...}`** 的约定：前端只检查非 2xx，改这里会连带改前端。
 8. 前端契约：`web/src/lib/api.ts` 调用的端点清单、NDJSON 五种事件名、`X-Auth-Token` 头，都是硬契约。`PUT /api/goals` 是整体替换，而 AI 工具路径必须用合并语义——**不要统一**。
