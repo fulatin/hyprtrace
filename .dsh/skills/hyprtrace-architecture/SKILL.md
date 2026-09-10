@@ -50,7 +50,7 @@ crates/hyprtrace-server/src/
   auth.rs            (194)   Origin 白名单 + 可选静态 token
   desktop.rs         (482)   .desktop 解析 → 应用友好名/图标（OnceLock 全局缓存）
   proactive.rs / retention.rs / weekly_report.rs   三个后台任务
-  ai/{mod,ollama,openai,tools}.rs                   provider 抽象 / 流式解析 / 25 个 agent 工具
+  ai/{mod,ollama,openai,tools}.rs                   provider 抽象 / 流式解析 / 29 个 agent 工具
 
 web/src/
   lib/api.ts         所有 REST 调用（含 insights 命名空间）

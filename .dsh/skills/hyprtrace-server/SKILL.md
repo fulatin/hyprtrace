@@ -1,6 +1,6 @@
 ---
 name: hyprtrace-server
-description: hyprtrace-server 参考：全部 /api 端点与其参数钳制、SQL 层与日期列约定、每个派生指标的确切公式（效率分、趋势预测、洞察七件套）、鉴权与 Origin 白名单、三个后台任务、AI provider 与 25 个 agent 工具、以及会踩坑的不变量。
+description: hyprtrace-server 参考：全部 /api 端点与其参数钳制、SQL 层与日期列约定、每个派生指标的确切公式（效率分、趋势预测、洞察七件套）、鉴权与 Origin 白名单、三个后台任务、AI provider 与 29 个 agent 工具、以及会踩坑的不变量。
 whenToUse: 新增或修改 REST 端点、改派生指标/统计算法、排查接口数据不对、处理鉴权/CORS、改 AI 集成或 agent 工具、改配置读写时。
 ---
 
@@ -87,7 +87,7 @@ AI：`/api/ai/models`、`/tools`、`/chat`（普通）、`/chat/stream`（SSE，
 - `AiManager` 固定注册 `ollama` 与 `openai` 两个 provider（key 可回退 `OPENAI_API_KEY` 环境变量）。**调用 provider 前先 `snapshot()` 取副本，不要在持锁状态下发请求**。
 - 流式差异：ollama 是 NDJSON，`tool_calls` **一次给全**；openai 是 SSE，`tool_calls` **跨 delta 分片**，在流结束后才 flush。两者 HTTP client 的总超时都是 300s。
 - agent 循环：`MAX_ROUNDS = 6`、`MAX_TOOL_CALLS = 20`，首轮失败会以 `tools_enabled=false` 重试一次，超预算/截断都会发 `{"type":"error"}`。
-- 25 个工具定义在 `ai/tools.rs`：DB 类（查汇总/排行/会话/目标/分类，以及 `set_goal`/`delete_goal`/`send_reminder`）+ 只读 Hyprland 类。**未知工具名会落到 Hyprland 分支**并返回 `Unknown tool`。system prompt 里编码了信任边界（窗口标题、通知文本、DB 值都当作不可信数据）与"未经明确要求不得调用 `set_goal(replace_all=true)`/`delete_goal`/`send_reminder`"的约束——不要削弱。
+- 29 个工具定义在 `ai/tools.rs`（含 `search_titles`：对窗口标题做子串全文搜索，走 `db::search` 的 FTS5 索引）：DB 类（查汇总/排行/会话/目标/分类，以及 `set_goal`/`delete_goal`/`send_reminder`）+ 只读 Hyprland 类。**未知工具名会落到 Hyprland 分支**并返回 `Unknown tool`。system prompt 里编码了信任边界（窗口标题、通知文本、DB 值都当作不可信数据）与"未经明确要求不得调用 `set_goal(replace_all=true)`/`delete_goal`/`send_reminder`"的约束——不要削弱。
 - 会话持久化：`ai_conversations.complete` 标记流式行是否完成；历史重建跳过"未完成且内容为空"的行，但**未完成但非空**的行会原样回灌进下一次 prompt。
 
 ## 七、不变量（改之前先读）

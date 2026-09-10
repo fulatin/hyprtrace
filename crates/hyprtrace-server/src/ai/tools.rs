@@ -44,6 +44,19 @@ fn obj_params(props: Value, required: &[&str]) -> Value {
 pub fn all_tools() -> Vec<ToolDef> {
     vec![
         ToolDef {
+            name: "search_titles",
+            description: "Full-text search over the recorded window titles (files, browser tabs, documents) to answer 'when did I work on X'. Matches substrings, so a partial word or file name works; several words are ANDed. Prefer this over listing sessions when the user names something specific.",
+            parameters: obj_params(
+                json!({
+                    "query": {"type": "string", "description": "What to look for, e.g. 'auth.rs', 'hyprtrace' or '课表'. Substring match."},
+                    "from": {"type": "string", "description": "Optional local start date, YYYY-MM-DD."},
+                    "to": {"type": "string", "description": "Optional local end date, YYYY-MM-DD."},
+                    "limit": {"type": "integer", "description": "Maximum hits to return, default 25."}
+                }),
+                &["query"],
+            ),
+        },
+        ToolDef {
             name: "get_app_categories",
             description: "List the app categorization rules (pattern -> category) used to classify apps into development/browsing/gaming/etc.",
             parameters: empty_params(),
@@ -349,6 +362,29 @@ pub async fn execute_tool(
                 .await
                 .sessions_paginated(&from, &to, 1, limit, None)?;
             Ok(serde_json::to_value(sessions)?)
+        }
+        "search_titles" => {
+            let query = arg_str(args, "query").unwrap_or_default();
+            let from = arg_str(args, "from").unwrap_or_default();
+            let to = arg_str(args, "to").unwrap_or_default();
+            let limit = arg_i64(args, "limit").unwrap_or(25).clamp(1, 50) as usize;
+            let hits = db
+                .lock()
+                .await
+                .search_sessions(query, from, to, limit)?;
+            Ok(json!({
+                "query": query,
+                "count": hits.len(),
+                "hits": hits
+                    .iter()
+                    .map(|h| json!({
+                        "title": h.session.title,
+                        "class": h.session.class,
+                        "started_at": h.session.started_at,
+                        "duration_ms": h.session.duration_ms,
+                    }))
+                    .collect::<Vec<_>>(),
+            }))
         }
         "get_hourly_breakdown" => {
             let date = arg_str(args, "date")
