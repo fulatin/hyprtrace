@@ -2,71 +2,23 @@ use rusqlite::{params, Connection};
 
 use super::Database;
 
-    /// Open a throwaway in-memory DB and create the tables the delete paths
-    /// touch (mirroring the daemon's schema subset we care about here).
+    /// Open a throwaway in-memory DB carrying the CANONICAL schema.
+    ///
+    /// This used to hand-write the handful of tables the tests touch, which is
+    /// exactly how a fixture drifts away from production: `sessions` was already
+    /// declared twice, with two different column definitions, and nothing would
+    /// have caught it. The fixture now runs the same `schema/hyprtrace.sql` that
+    /// `Database::migrate()` runs, with the same `foreign_keys=ON` that
+    /// `Database::open()` sets, so a test can no longer exercise a schema the
+    /// real server never sees.
     pub(crate) fn test_db() -> Database {
-        let db = Database {
-            conn: Connection::open_in_memory().unwrap(),
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        conn.execute_batch(crate::schema::SCHEMA_SQL).unwrap();
+        Database {
+            conn,
             focused_threshold_ms: 20 * 60 * 1000,
-        };
-        db.conn
-            .execute_batch(
-                "CREATE TABLE sessions (
-                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                    class       TEXT NOT NULL,
-                    title       TEXT NOT NULL DEFAULT '',
-                    workspace   TEXT,
-                    started_at  TEXT NOT NULL,
-                    ended_at    TEXT,
-                    duration_ms INTEGER DEFAULT 0,
-                    activity_state TEXT,
-                    focused_ms  INTEGER,
-                    date_local  TEXT DEFAULT ''
-                );
-                CREATE TABLE app_resources (
-                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                    session_id INTEGER,
-                    class      TEXT NOT NULL,
-                    sampled_at TEXT NOT NULL,
-                    cpu_pct    REAL,
-                    mem_kb     INTEGER,
-                    date_local TEXT DEFAULT '',
-                    FOREIGN KEY (session_id) REFERENCES sessions(id)
-                );
-                CREATE TABLE activity_events (
-                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                    session_id  INTEGER,
-                    state       TEXT NOT NULL,
-                    started_at  TEXT NOT NULL,
-                    ended_at    TEXT,
-                    duration_ms INTEGER DEFAULT 0,
-                    date_local  TEXT DEFAULT '',
-                    FOREIGN KEY (session_id) REFERENCES sessions(id)
-                );
-                CREATE TABLE daily_summary (
-                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                    date          TEXT NOT NULL,
-                    class         TEXT NOT NULL,
-                    total_ms      INTEGER NOT NULL DEFAULT 0,
-                    session_count INTEGER NOT NULL DEFAULT 0,
-                    focused_ms    INTEGER NOT NULL DEFAULT 0,
-                    focused_session_count INTEGER NOT NULL DEFAULT 0,
-                    UNIQUE(date, class)
-                );
-                CREATE TABLE hourly_summary (
-                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                    date          TEXT NOT NULL,
-                    hour          INTEGER NOT NULL,
-                    class         TEXT NOT NULL,
-                    total_ms      INTEGER NOT NULL DEFAULT 0,
-                    session_count INTEGER NOT NULL DEFAULT 0,
-                    focused_ms    INTEGER NOT NULL DEFAULT 0,
-                    UNIQUE(date, hour, class)
-                );
-                PRAGMA foreign_keys = ON;",
-            )
-            .unwrap();
-        db
+        }
     }
     pub(crate) fn insert_session(db: &Database, class: &str, started_at: &str, ended_at: Option<&str>) -> i64 {
         // date_local is set to the date portion of started_at so the tests are
@@ -81,39 +33,13 @@ use super::Database;
             .unwrap();
         db.conn.last_insert_rowid()
     }
+    /// `test_db` plus the server-owned tables, created by the same functions the
+    /// server calls at startup (`app_categories`, `projects`, `project_rules`).
     pub(crate) fn project_test_db() -> Database {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "PRAGMA foreign_keys=ON;
-             CREATE TABLE IF NOT EXISTS projects (
-                id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                name       TEXT NOT NULL UNIQUE,
-                color      TEXT NOT NULL DEFAULT '#22d3ee',
-                sort_order INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL DEFAULT (datetime('now'))
-             );
-             CREATE TABLE IF NOT EXISTS project_rules (
-                id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-                pattern    TEXT NOT NULL,
-                priority   INTEGER NOT NULL DEFAULT 0
-             );
-             CREATE TABLE IF NOT EXISTS sessions (
-                id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                class        TEXT NOT NULL,
-                title        TEXT NOT NULL DEFAULT '',
-                workspace    TEXT,
-                started_at   TEXT NOT NULL,
-                ended_at     TEXT,
-                duration_ms  INTEGER,
-                activity_state TEXT,
-                focused_ms   INTEGER,
-                date_local   TEXT DEFAULT ''
-             );",
-        )
-        .unwrap();
+        let db = test_db();
+        db.ensure_projects().unwrap();
         Database {
-            conn,
+            conn: db.conn,
             focused_threshold_ms: 30_000,
         }
     }
