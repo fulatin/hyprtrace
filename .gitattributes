@@ -1,0 +1,3 @@
+# Keep a single line ending everywhere: the project targets Linux only, and
+# mixed CRLF files made `git diff`/`patch`/copy-paste extraction noisy.
+* text=auto eol=lf
