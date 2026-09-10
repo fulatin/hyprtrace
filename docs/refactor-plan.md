@@ -112,6 +112,15 @@
 - [ ] 3d 会话合并/debounce 暂缓：A 方案下既非必需，也能避免改动 daemon 写入路径
 
 ### Phase 4 — 前端与新功能
+- [x] 4a（后端）**FTS5 全局搜索**（`3195f55` + `6271763`）：`GET /api/search?q=&from=&to=&limit=`，`db/search.rs`。
+      索引**归 server 所有**（不进共享 schema）：它是派生数据，触发器活在数据库里，所以 daemon 的写入、删除路径、重建端点都会自动维护它，两侧代码都不需要知道它存在。
+      用 **trigram** 分词器：默认分词器按**整词**匹配，`hypr` 找不到 `hyprtrace`、`main.rs` 会被拆成 `main`+`rs`；trigram 支持子串，也是唯一对中文有效的。
+      **3 字符以下的查询走 LIKE 兜底**——trigram 索引对更短的查询只会**静默返回空**，而「课表」是很常见的中文两字查询；通配符 `%`/`_` 在 LIKE 路径里转义。
+      用户输入永不作为 FTS5 语法：每个词都被引号包成短语（内部引号翻倍），所以 `foo -bar`、不配对的引号、`NEAR(` 都是「搜不到」而不是 500。
+      真机验证（21,563 会话）：启动时一次性建索引（亚秒级），`hyprtrace`/`main.rs`/`班级课表`/`课表`/多词 AND 都能命中，200 条宽查询约 8ms。
+- [ ] 4a（前端）搜索 UI：命令面板或搜索页 + `web/src/lib/api.ts` 的 `api.search()` + `SearchHit` 类型（需浏览器核对）
+- [x] 4g `rusqlite` 开启 `bundled`（`d914199`）：为 FTS5 提供保证（它是编译期开关，发行版不一定启用），并固定 SQLite 版本。
+      实测本机首次构建 13s；**连 schema 快照测试都照常通过**，说明 bundled 版本与系统 3.53.4 的 `pragma table_info` 输出一致，无需重生成快照。
 - [ ] 1e **`Settings.tsx`(1525) 拆分 + `@tanstack/react-query` 接管数据层**（不能当纯移动做：44 个 `useState` 与取数都在父组件里）
 - [ ] 4f **Sessions 页的 "Focus" 列（宽屏 2xl 才显示）仍在展示已死的每会话值**（3c 收尾时发现）：
       它渲染 `Session.focused_ms`，也就是阈值公式的值（对几乎每个会话都是 0），与 Dashboard 的专注卡**直接矛盾**。
