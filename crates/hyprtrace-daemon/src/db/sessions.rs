@@ -144,7 +144,6 @@ impl super::Database {
              params![session_date, class, duration_ms, focused_ms, is_focused_session],
         )?;
 
-        // Maintain hourly_summary incrementally so the server's fast path stays fresh.
         // Maintain hourly_summary incrementally so the server's fast path stays
         // fresh. Bucket by the session's LOCAL start hour (matching date_local).
         // Lenient by design (pre-existing behavior): a failed hourly upsert
