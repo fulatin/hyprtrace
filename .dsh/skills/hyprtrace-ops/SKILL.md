@@ -51,6 +51,32 @@ HOME="$ISO/home" XDG_CONFIG_HOME="$ISO/config" ./target/release/hyprtrace-server
 - 起后台任务时用受管的后台作业（不要 `&` 后不管），否则进程会随命令结束被回收；停止用 `fuser -k 9421/tcp`，**不要用 `pkill -f`**（会连自己的 shell 一起杀）。
 - 前端指向临时实例：`cd web && VITE_API_TARGET=http://127.0.0.1:9421 npm run dev`（Origin 白名单接受任意回环端口，无需 CORS 配置）。
 
+## 验证改动（总结出来的实际做法）
+
+隔离实例不只用来看接口能不能通，它还能验证**写路径**——而且这是唯一安全的验证方式：
+
+```bash
+# 让页面显示真实内容：从用户配置派生，但把密钥清空、指到副本库与 9421
+cp ~/.config/hyprtrace/config.toml "$ISO/config/hyprtrace/config.toml"
+#   编辑副本时：api_key 置空、db_path 指向 copy.db、port=9421、
+#   retention_days=0、weekly_report_enabled=false
+```
+
+- **验证保存路径**：在隔离实例上真的点一次保存，然后核对**隔离目录里的 config.toml 磁盘内容**变了，而不是只看界面提示。同时确认其它字段没被覆盖（`PUT /api/config` 只合并请求里带的键），以及**用户的真实配置 mtime 没变**。
+- **改动前先拍基线**：UI 重构要证明「视觉无变化」，就先在改动前（工作树干净时）起一次 dev server 截图，改完用同一路径重拍对照。凭印象说「没变」不算。
+- **浏览器工具的快照可能非常大**（Settings 页有 47 条分类规则时单次快照上万 token）。在**副本**上删掉多余数据让页面变小即可：
+  `sqlite3 "$ISO/copy.db" "DELETE FROM app_categories WHERE id NOT IN (SELECT id FROM app_categories ORDER BY priority DESC, id LIMIT 4)"`——只动副本，不碰真实数据。
+- **旧 vs 新逐字段比对**：同一个副本库上，让旧版本（9420）与新版本（9421）回答同一批历史日期请求，逐字节 diff。历史数据必须完全一致；只有「今天」这条仍在写入的尾部允许不同，且每处差异都要能归因。
+
+## 沙箱（本会话环境）
+
+文件沙箱只允许写工作区内，这会让两个包管理器失败，且**报错信息不指向沙箱**：
+
+| 症状 | 原因 | 解法 |
+|---|---|---|
+| `npm error Log files were not written ... /home/<user>/.npm/_logs` 或安装无声失败 | npm 缓存/日志在 `~/.npm`（工作区外） | `npm install --cache ../.dsh-diag/npm-cache <pkg>` |
+| `cargo add` 只警告，`cargo fetch`/`build` 报 `Read-only file system`（解包 `~/.cargo/registry/src`） | cargo 必须写工作区外的 registry | 按提示**用同一条命令重试并申请提权**（一次性 `danger-full-access`）；用户会看到授权弹窗 |
+
 ## 部署前端到正在服务的实例
 
 `~/.local/share/hyprtrace/web` 是 install.sh **拷贝**出来的目录，不是源码；只 `npm run build` 不会更新页面。
@@ -77,7 +103,9 @@ journalctl --user -u hyprtrace-server -n 50
 
 ## CI 门禁（推之前本地跑一遍）
 
-`.github/workflows/ci.yml`：`cargo check --workspace` → `cargo test --workspace` → `cd web && npm ci && npm run build`（Node 20，`tsc -b` 含严格类型门）。**没有** clippy / fmt / lint 步骤，但以上任一失败就会红。注意：`rusqlite` 未开 `bundled`，链接依赖系统 libsqlite3（pkg-config）。
+`.github/workflows/ci.yml`：`cargo check --workspace` → `cargo test --workspace` → `cd web && npm ci && npm run build`（Node 20，`tsc -b` 含严格类型门）。**没有** clippy / fmt / lint 步骤，但以上任一失败就会红。注意：`rusqlite` 现在开了 **`bundled`**（编译期自带 SQLite），所以构建不再依赖系统 libsqlite3 / pkg-config——代价是首次构建多十几秒。
+这样做的原因是 **FTS5**：它是 SQLite 的编译期开关，发行版不一定启用，失败要到运行时 `CREATE VIRTUAL TABLE` 才暴露。
+`depends=('sqlite')` 仍留在 PKGBUILD 里（为了 `sqlite3` CLI 做快照/排查），但二进制不再链接它。
 
 ## 打包（AUR）
 

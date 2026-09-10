@@ -14,8 +14,10 @@ React 18 + TypeScript + Vite 5 + Tailwind 3 + Recharts 2 + framer-motion 11。**
 src/main.tsx            挂载 + StrictMode
 src/App.tsx             ThemeProvider → BrowserRouter → ErrorBoundary → Layout → 9 条路由
 src/components/Layout.tsx   侧栏（可折叠，layoutId 高亮滑块）+ 顶栏 + 路由过渡 + 滚动复位
-src/lib/api.ts          fetchJSON + 全部 REST（含 api.insights.* 命名空间）；401 清 token
-src/lib/types.ts        与 server models.rs 一一对应的类型（字段名是契约）
+src/lib/api.ts          fetchJSON + 全部 REST（含 api.insights.* 与 api.search）；401 清 token
+src/lib/api-types.ts    **生成物**：由 Rust 模型渲染，勿手改（见下）
+src/lib/types.ts        再导出生成类型 + 只属于客户端的请求体/包装类型
+src/lib/queries.ts      react-query 数据层：一个端点一个 key，保存后 invalidate
 src/lib/transport.ts    /api/ai/chat/agent 的 NDJSON → AI SDK 消息流（只认 5 种 type）
 src/lib/auth.ts         X-Auth-Token（localStorage: hyprtrace_auth_token）
 src/lib/theme.tsx       深色/浅色/跟随系统（localStorage: hyprtrace.theme）
@@ -59,6 +61,12 @@ src/pages/              Dashboard, Insights, Apps, Timeline, Sessions, Titles, S
 ## 数据层契约
 
 - 所有请求经 `fetchJSON`：自动带 `X-Auth-Token`、15s 超时、401 清 token。
+- **`lib/api-types.ts` 是生成的**（`crates/hyprtrace-server/src/api_types.rs` 渲染），Rust 侧测试在它与模型不一致时变红：改任何 serde 模型后跑
+  `HYPRTRACE_WRITE_TYPES=1 cargo test -p hyprtrace-server api_types`，不要手改 `types.ts` 里的模型类型。
+  生成器把 64 位整数固定成 `number`（ts-rs 默认 `bigint`，而 JSON 给不出 bigint，前端还对这些毫秒值做算术）。
+- **`lib/queries.ts` 的 key 约定**：一个端点一个 key；`['config']` 是**共享**的——AI、周报、隐私三节读写同一份 `/api/config` 的不同字段，
+  所以它们共用这个 key 并在保存后 invalidate（`PUT /api/config` 只合并请求里带的键，各 section 的载荷不会互相覆盖）。
+  草稿回填策略是有意为之：categories 保存后按服务端返回重新播种（拿服务端分配的 id），goals 保留用户正在编辑的草稿（重新拉取会用 id 重新 key、打断编辑），projects 用 PUT 响应回填。
 - **后端多数错误是 HTTP 200 + `{"error":...}`**，`fetchJSON` 不会抛，会在组件里才炸——新增调用点要考虑这点。
 - 洞察页用 `api.insights.*`；`forecast` **没有 from/to**（服务端固定到今天）。
 - `api.search(q, from, to, limit)` 是唯一**没有默认日期窗口**的列表调用：from/to 传空串＝搜全历史。返回值里的 `snippet` 就是命中标题本身（服务端不用 `snippet()`，见其 `db/search.rs` 注释）。
@@ -77,3 +85,10 @@ VITE_API_TARGET=http://127.0.0.1:9421 npm run dev   # 开发服务器（默认�
 - `vite.config.ts` 有 `manualChunks` 分包（react / charts / motion / markdown），别再合成一个 1.5MB 的包。
 - 视觉改动**必须真的看一眼**：起 dev server 后用浏览器打开并截图核对，不要只靠类型检查通过就交付。注意本仓库的滚动容器是 `main`，不是 window——外层滚动截图/滚动脚本可能不生效。
 - 构建产物要生效必须重新部署（见 `hyprtrace-ops`），只 `npm run build` 不会更新正在服务的页面。
+
+## 运行时验证（类型检查不够）
+
+视觉改动、保存路径、数据层改动都要在**隔离实例**上真的跑一遍：`VITE_API_TARGET=http://127.0.0.1:9421 npm run dev`，
+然后按 `hyprtrace-ops` 的「验证改动」一节做（基线截图对照、真的点一次保存并核对隔离配置的磁盘内容、别碰 9420）。
+**反例值得记住**：搜索页曾用 FTS5 的 `snippet()` 取摘要，`tsc` 与单测全绿，但浏览器里标题被截成 `zsh in hyprtra …`——
+trigram 分词器下 `snippet()` 数的是 3 字符序列而不是词。只有打开页面才看得见。

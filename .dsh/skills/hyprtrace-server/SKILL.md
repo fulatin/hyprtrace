@@ -50,7 +50,15 @@ Axum 0.7 + tokio，binary-only（无 `lib.rs`，测试全是内联单测）。`A
 
 AI：`/api/ai/models`、`/tools`、`/chat`（普通）、`/chat/stream`（SSE，**无 `[DONE]`、无 error 事件**）、`/chat/stream/text`（纯文本）、`/chat/agent`（**NDJSON**，事件恰好五种：`text` / `tool_call` / `tool_result` / `done` / `error`，前端 `web/src/lib/transport.ts` 按此解析）、`/report/weekly`、`/conversations`（GET/DELETE）。
 
-## 二、SQL 层（`db.rs`）
+## 二、SQL 层（`db/`）
+
+`db.rs` 已拆成模块（无行为变化）：`mod.rs`（`struct Database` + `open` + `mod` 声明）、`migrate`、`sessions`、
+`summaries`、`analytics`、`goals`、`categories`、`projects`、`resources`、`hourly`、`report`、`retention`、
+`ai_conversations`、`insights_sql`、`search`、`like`、`tests`、`test_support`。
+- 每个域一个文件，`impl super::Database { … }`；`conn`/`focused_threshold_ms` 私有，子模块天然可访问，**不需要放宽可见性**。
+- 跨域私有 helper 只有一个：`like::like_match`（`pub(crate)`）。其余私有方法各属一个域。
+- 测试夹具 `test_support.rs` 直接跑 `schema/hyprtrace.sql`（不再手写 DDL）+ `PRAGMA foreign_keys=ON`。
+
 
 **日期列约定**：汇总表用本地 `date`；原始表用 `date_local`；只有 `started_at`/`occurred_at` 是 UTC 瞬时，本地小时在读取时用 `with_timezone(&chrono::Local)` 推导。`from > to` 是字典序比较，只对零填充 ISO 日期成立；非法日期静默返回空集。
 
@@ -68,6 +76,18 @@ AI：`/api/ai/models`、`/tools`、`/chat`（普通）、`/chat/stream`（SSE，
 - **洞察**：转移矩阵按行归一化到"该 app 的全部出边（含自环）"（`probability = count/out_total`，矩阵行和 ≈1，`edges` 不含自环）；预测的周内因子只用**有活动的日子**计算、无活动的星期回退 1.0、统一钳到 `0.2..=5.0`；碎片化的"重建成本"定义为 `Σ round(min(prev_dwell, 60s) × 0.5)`；共现的 lift/jaccard/support 都按"出现过的日期集合"算；异常的基线是中位数 + `1.4826×MAD`（MAD 塌缩时回退标准差），触发条件是 `|z| ≥ threshold` 或深夜占比 ≥0.35 或短会话占比 ≥0.75，severity 由 `|z| ≥ 1.5×threshold` 或"≥2 个触发条件"决定。所有除法都有零分母保护，输出保证有限。
 - **项目统计**：按 class 取**优先级最高的** LIKE 规则归属项目；百分比分母包含未归类桶；未归类桶名 `未分类`、色 `#6b7280`。
 - **工作区建议**：取每个 class 时长最长的工作区，置信度按占比 ≥70/≥40 分档；**完全并列时依赖 HashMap 迭代顺序，结果不确定**。
+
+## 三·五、前端类型是生成的
+
+`crates/hyprtrace-server/src/api_types.rs` 把 `models.rs` 渲染成 `web/src/lib/api-types.ts`，
+`api_types_are_in_sync_with_the_models` 在不一致时失败。**改任何 serde 模型后**：
+
+```bash
+HYPRTRACE_WRITE_TYPES=1 cargo test -p hyprtrace-server api_types
+```
+
+两个约束：64 位整数必须渲染成 `number`（`Config::with_large_int("number")`——ts-rs 默认 `bigint`，JSON 给不出，前端还要对这些毫秒做算术）；
+该模块是 `#[cfg(test)]`（渲染是构建期的事，放进二进制会多两个只被测试读的 `pub` 项 = dead-code 告警）。
 
 ## 四、鉴权（`auth.rs`）
 

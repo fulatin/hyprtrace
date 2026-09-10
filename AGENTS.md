@@ -26,7 +26,7 @@ Hyprland 窗口时间追踪器：Rust daemon + Axum server + React SPA，三者�
 ## 常用命令
 
 ```bash
-cargo check --workspace && cargo test --workspace        # CI 前两步（daemon 50 + server 61）
+cargo check --workspace && cargo test --workspace        # CI 前两步（daemon 54 + server 81）
 cd web && npx tsc --noEmit -p tsconfig.json              # 前端类型门
 cd web && npm run build                                  # 产物在 web/dist（需部署才生效）
 curl -s localhost:9420/api/health                        # 运行中的实例
@@ -38,4 +38,10 @@ cd web && VITE_API_TARGET=http://127.0.0.1:9421 npm run dev   # 指向临时实�
 - 前端**视觉/动效改动必须真的看一眼**（起 dev server + 浏览器截图核对），类型检查通过不等于没坏。
 - 改了 `web/` 想让运行中的站点生效，必须重新拷贝到 `~/.local/share/hyprtrace/web`（该路径在工作区之外，需要一次沙箱提权）并确认 `dist/assets` 与目标目录一致。
 - 大改动前后用 `git status` 确认没有把 `.aur/`、`.dsh-diag/`、`target/`、`web/dist/` 之类提交进去（`.gitignore` 已覆盖，别用 `git add -f`）。
-- 后端新逻辑优先写成 `insights.rs` 那样的**纯函数 + 单测**，SQL 只负责取数。
+- 后端新逻辑优先写成 `insights/` 那样的**纯函数 + 单测**，SQL 只负责取数。
+- **验证要配得上改动的风险**（详见 `hyprtrace-architecture` 的「验证与防漂移」）：
+  纯移动用「字面量指纹 + 行多重集」自证；修复必须「撤掉就变红」；跨组件改动在数据库快照 + 隔离实例上做旧/新逐字段对比。
+- **只被测试使用的 `pub` 项在真构建里是 dead-code 告警**，而 `cargo test` 看不到——比告警集合请用
+  `cargo check --workspace 2>&1 | grep "^warning" | sort` 做集合比对，不要只数行数。
+- 前端类型是**生成**的：改了 serde 模型就跑 `HYPRTRACE_WRITE_TYPES=1 cargo test -p hyprtrace-server api_types`。
+- 沙箱只允许写工作区内：`npm` 要 `--cache` 指到工作区；**新增 Rust 依赖需要一次提权**（cargo 解包到 `~/.cargo`）。

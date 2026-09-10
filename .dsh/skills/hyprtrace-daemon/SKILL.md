@@ -55,6 +55,24 @@ whenToUse: 修改守护进程、排查"时长/专注时间/空闲状态不对"�
 
 DDL 本身已不在本 crate 的 `db.rs` 里：唯一权威是仓库根的 `schema/hyprtrace.sql`，本 crate 用 `src/schema.rs` 的 `include_str!` 嵌入并在 `migrate()` 开头执行（server 嵌的是同一个文件）。v2/v3/v7 保留的只是**旧库列升级**（`add_column_if_missing`），v4/v5 的建表已并入共享文件。
 
+## 模块布局（`db.rs` 已拆分，无行为变化）
+
+`src/db/`：`mod.rs`（`struct Database` + `Goal` + `open` + `mod` 声明）、`migrations.rs`（`migrate` + v2/v3/v6/v7 + `write_summaries`）、
+`sessions.rs`（生命周期、activity_events、孤儿收尾）、`resources.rs`、`disruptions.rs`、`goals.rs`、`tests.rs`。
+`local_date_from_rfc3339` 在 `migrations.rs`（唯一调用者是 `backfill_date_local`）。
+
+`src/privacy.rs` 是写 `sessions.title` 的**唯一**判定（`recorded_title`）：`listener.rs` 与 `idle_monitor.rs` 都必须走它——
+后者曾经无条件写真实标题，让 `record_titles = false` 这个隐私开关在「空闲恢复」路径上失效。
+
+### 汇总规则（与 server 必须一致）
+
+- 已完成会话全部计入（`duration_ms >= 0`，0 时长也计数）；
+- 分桶用 `started_at` 推导的 LOCAL 日期/小时，**不读** `date_local`；
+- `focused_ms` 按**当前**阈值重算（重建 = 用今天的规则重算）；
+- `focused_session_count = count(focused_ms > 0)`（增量路径也曾用 `activity_state == "focused"`，那是状态机不是专注度量）。
+- `finalize_orphaned_sessions` 在**一个事务**里收尾会话并按受影响日期**作用域**重建汇总（`write_summaries`），
+  否则崩溃重启后这些会话会「列得出来、算不进任何总量」。
+
 ## 会破坏数据的不变量
 
 1. 时长只能来自 `session_elapsed_ms`；`activity_events.duration_ms` 不是单调的（回拨时为 0）。

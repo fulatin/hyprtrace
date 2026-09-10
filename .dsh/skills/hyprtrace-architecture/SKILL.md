@@ -27,7 +27,9 @@ Hyprland IPC ──▶ hyprtrace-daemon ──▶ SQLite ──▶ hyprtrace-ser
 crates/hyprtrace-daemon/src/           # 无 lib.rs，测试都在 #[cfg(test)] mod tests
   main.rs            (314)   启动顺序、线程孵化、退出码契约
   config.rs          (288)   ~/.config/hyprtrace/config.toml 的读写（daemon 首次运行会创建）
-  db.rs             (1469)   schema 权威定义 + 会话开始/结束 + 汇总表增量写
+  schema.rs           (20)   include_str! 嵌入 schema/hyprtrace.sql
+  privacy.rs          (44)   recorded_title()：写 sessions.title 的**唯一**允许/拒绝判定
+  db/               (1500)   mod(结构体+open) / migrations / sessions / resources / disruptions / goals / tests
   listener.rs        (131)   Hyprland 事件 → 会话开关（唯一的窗口变更写入口）
   idle_monitor.rs    (407)   空闲判定（evdev > loginctl > Hyprland 事件）+ focused/idle 状态机
   input_monitor.rs   (134)   evdev 键鼠活动（可选，需要 input 组权限）
@@ -35,34 +37,39 @@ crates/hyprtrace-daemon/src/           # 无 lib.rs，测试都在 #[cfg(test)] 
   disruption_monitor.rs(202) dbus-monitor 通知 + wl-paste 剪贴板 → disruptions
   goal_monitor.rs    (283)   目标 50%/100% 与连续聚焦休息提醒（发通知）
   wellbeing_monitor.rs (89)  深夜提醒，可调 hyprlock
-  notify.rs           (53)   zbus → notify-send 回退
 
 crates/hyprtrace-server/src/
-  main.rs            (120)   启动、resolve_web_dir、SPA fallback、后台任务孵化
-  db.rs             (3370+) 全部查询方法（DDL 已移出到共享 `schema/`）
-  models.rs          (225)   全部 serde 模型（字段名即前端/AI 契约）
-  routes/mod.rs       (98)   路由表 + AppState
-  routes/data.rs     (761)   数据查询端点
-  routes/config.rs   (179)   GET/PUT /api/config（toml_edit 读改写）
-  routes/ai.rs       (744)   AI 对话（含 NDJSON agent 循环）
-  routes/insights.rs (203)   7 个洞察端点（薄 handler，只做参数钳制）
-  insights.rs       (2000+)  洞察公式 + 18 个单测（纯函数，无 DB）
-  auth.rs            (194)   Origin 白名单 + 可选静态 token
-  desktop.rs         (482)   .desktop 解析 → 应用友好名/图标（OnceLock 全局缓存）
-  proactive.rs / retention.rs / weekly_report.rs   三个后台任务
-  ai/{mod,ollama,openai,tools}.rs                   provider 抽象 / 流式解析 / 29 个 agent 工具
+  main.rs                   启动、resolve_web_dir、SPA fallback、后台任务孵化
+  schema.rs                 include_str! 嵌入同一份 schema + EXPECTED_SCHEMA（cfg(test) 快照）
+  api_types.rs              由 Rust 模型渲染 web/src/lib/api-types.ts + 漂移测试（cfg(test)）
+  db/                (3400)  mod(结构体+open) / migrate / sessions / summaries / analytics / goals /
+                             categories / projects / resources / hourly / report / retention /
+                             ai_conversations / insights_sql / search / like / tests / test_support
+  models.rs                 全部 serde 模型（字段名即前端/AI 契约）——**再加字段要重新生成 api-types.ts**
+  routes/{mod,data,config,ai,insights}.rs            路由表 / 数据 / 配置读写 / AI / 洞察
+  insights/          (2000)  insights 公式（纯函数，无 DB）：focus / transitions / forecast / rhythm /
+                             fragmentation / cooccurrence / disruption / anomalies / stats / time / session
+  auth.rs                   Origin 白名单 + 可选静态 token
+  desktop.rs                .desktop 解析 → 应用友好名/图标（OnceLock 全局缓存）
+  proactive.rs / retention.rs / weekly_report.rs     三个后台任务
+  ai/{mod,ollama,openai,tools}.rs                    provider 抽象 / 流式解析 / 29 个 agent 工具
 
 web/src/
-  lib/api.ts         所有 REST 调用（含 insights 命名空间）
-  lib/types.ts       与 models.rs 一一对应的 TS 类型
+  lib/api.ts         所有 REST 调用（含 insights 命名空间与 search）
+  lib/api-types.ts   **生成物**：由 Rust 模型渲染，勿手改（见 api_types.rs）
+  lib/types.ts       再导出生成类型 + 只属于客户端的请求体/包装类型
+  lib/queries.ts     react-query 数据层：一个端点一个 key，共享 ['config'] + 保存后 invalidate
   lib/transport.ts   NDJSON agent 流 → AI SDK 消息流
   lib/theme.tsx      深色/浅色/跟随系统（localStorage: hyprtrace.theme）
   lib/motion.ts      动效预设（spring / fadeUp / pageTransition / …）
-  components/ui/     设计系统基础件（Card/Panel/Reveal/Feedback/CountUp/…）
+  components/ui/     设计系统基础件（Card/Panel/Reveal/Feedback/CountUp/Controls/AnimatedRow/…）
   components/insights/  洞察可视化（矩阵/流向图/预测/热力图/和弦图/散点/异常）
-  pages/             Dashboard, Insights, Apps, Timeline, Sessions, Titles, AIChat, Settings
+  pages/             Dashboard, Insights, Apps, Timeline, Sessions, Titles, Search, AIChat, Settings
+  pages/settings/    Settings 的 9 个 section，各自持有草稿与保存处理器（父组件只剩 rail + scroll-spy）
   DESIGN.md          设计系统约定（颜色 token、组件类、动效规则）——改 UI 前必读
-```
+
+schema/hyprtrace.sql          **唯一**的 DDL 权威（两个 crate include_str! 同一份）
+schema/expected-columns.txt   全新库 schema 快照，两个 crate 的 migrate_* 测试断言它
 
 ## 时间与日期语义（最容易踩的坑）
 
@@ -122,3 +129,56 @@ curl -s localhost:9420/api/health                     # 运行中的实例是否
 ```
 
 更细的按组件操作（构建、隔离实例、部署、打包、禁忌）见 `hyprtrace-ops` 技能；daemon 细节见 `hyprtrace-daemon`；API 与公式见 `hyprtrace-server`；前端见 `hyprtrace-web`。
+
+## 验证与防漂移（这套仓库里已经建成的手法，新改动请沿用）
+
+一次大规模解耦（拆 god file、单源化 schema、统一口径）总结出来的做法。**不是流程洁癖**：下面每一条都真的抓到过问题。
+
+### 1. 仓库里已经存在的漂移守卫
+
+| 守卫 | 保护什么 | 不符时怎么修 |
+|---|---|---|
+| `schema/expected-columns.txt` + 两个 crate 的 `migrate_*` 测试 | DDL 与「全新库的真实形状」一致（含列顺序、可空性、默认值） | 改 DDL 后重新生成快照（测试失败信息里有提示） |
+| `web/src/lib/api-types.ts` + `api_types_are_in_sync_with_the_models` | 前端类型与 Rust 模型一致 | `HYPRTRACE_WRITE_TYPES=1 cargo test -p hyprtrace-server api_types` |
+| `scripts/repair-negative-durations.sh` 的列预期 | 应急修复脚本不因加列而失效 | 加列时同步 |
+
+三者都是「**快照 + 测试断言**」：把人工同步变成红灯，而不是靠记性。
+
+### 2. 证明「纯移动」= 指纹 + 行多重集
+
+拆文件时不要只说「我只搬了代码」，用两条机械证据：
+
+```bash
+# ① 字面量多重集指纹：抓任何 SQL / 格式串改动（拆分前后必须完全相同）
+cat <新模块目录>/*.rs | grep -o '"[^"]*"' | sort | md5sum
+# ② 行多重集：抓任何逻辑/数字/注释改动（差异只允许 mod/use/impl 包装/可见性放宽）
+git show <拆分前>:<旧文件> | sed 's/[[:space:]]*$//' | sort | uniq -c > /tmp/a
+cat <新模块目录>/*.rs      | sed 's/[[:space:]]*$//' | sort | uniq -c > /tmp/b
+diff /tmp/a /tmp/b
+```
+
+再补一条**只在测试里用过**的检查：每个新文件都必须在 `mod.rs` 里有 `mod` 声明——**漏声明不会报错**，文件被静默忽略、方法凭空消失。故意在一个新文件里写个语法错误、确认构建失败、再改回来，是最快的自证方式。
+
+### 3. 回归测试必须「撤掉修复就变红」
+
+写完修复别急着提交：把修复临时还原，确认测试**确实失败**，并记下失败信息。本仓库已按此验证过 10+ 条修复（计划文档 `docs/refactor-plan.md` 有完整表格）。没做过这一步的测试等于没有测试。
+
+### 4. 真实数据上的端到端等价（单元测试覆盖不到「迁移已有旧库」）
+
+按 `hyprtrace-ops` 的隔离流程，用**数据库快照 + 隔离 HOME** 起一个临时实例，与运行中的旧版本**逐字段比对接口响应**。历史日期上必须逐字节相同；只允许「今天」这条仍在写入的尾部有差异，且每处差异都要能归因（哪几行是新增的、哪一行是刚被闭合的）。
+
+### 5. 类型检查通过 ≠ 没坏：前端必须真的看一眼
+
+真实案例：搜索页用 FTS5 的 `snippet()` 取摘要，类型与单测全绿，但在浏览器里读到的标题是 `zsh in hyprtra …`——**截在词中间**（trigram 分词器下 `snippet()` 数的是 3 字符序列而不是词）。只有把页面打开才发现。
+
+### 6. 只被测试使用的 `pub` 项 = 真构建里的 dead-code 告警
+
+`cargo test` **看不到**这类告警（测试构建里它们被用到了）。这个坑在本仓库被踩到 4 次（`EXPECTED_SCHEMA`、`MAX_SESSIONS_PER_PAGE`、`api_types::render`、`blocks()`）。规则：
+
+- 只被测试读的常量/函数 → `#[cfg(test)]`；整个模块只服务测试就 `#[cfg(test)] mod x;`
+- 比告警集合要用**同一种构建方式**，并且做**集合比对**（`cargo check --workspace 2>&1 | grep "^warning" | sort > baseline`），不要只数行数
+- 发布用的 `pub use` 不要重导出测试专用符号（那是 unused-import 告警）
+
+### 7. 沙箱与依赖（细节见 `hyprtrace-ops`）
+
+本环境的文件沙箱只允许写工作区内：`npm` 必须 `--cache` 指向工作区，**新增 Rust 依赖需要一次提权**（cargo 要解包到 `~/.cargo`）。
