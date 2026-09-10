@@ -99,7 +99,11 @@ journalctl --user -u hyprtrace-server -n 50
 
 - **agent 沙箱里 `systemctl --user` 通常连不上用户总线**（`Failed to connect to user scope bus`）。此时 `is-active` 返回 1 **不代表服务挂了**，也不代表你可以放弃——换用 `danger-full-access` 提权重试同一条命令（实测可行），或让用户在自己的终端执行。
 - 替换正在运行的二进制会 `ETXTBSY`：先 `cp` 成新名字再 `mv -f` 覆盖，然后重启服务。
-- 服务重启后 `/api/health` 应返回 `{"status":"ok",...}`；旧的静态资源哈希变化说明前端已更新。
+- 服务重启后 `/api/health` 应返回 `{"status":"ok",...}`；静态资源哈希变化说明前端已更新。
+- **升级后第一次启动 server 会明显变慢**：它要在启动路径上为**全部历史**建全文索引（22.6k 会话实测 ~21 秒），
+  期间端口已经在监听但**不响应请求**——重启后立刻 curl 会以为服务挂了。看日志确认（`Built the window-title search index over N session(s)`），
+  之后每次启动都跳过（表已存在）。
+- 那 21 秒里 daemon 会撞到 `database is locked` 并自动退避重试（日志 `Database migration busy (attempt n/5)`），这是既有设计，不要以为是故障。
 
 ## CI 门禁（推之前本地跑一遍）
 
