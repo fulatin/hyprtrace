@@ -131,6 +131,11 @@ export interface Session {
   focused_ms: number | null;
 }
 
+/// One full-text hit: the session plus the matching title excerpt.
+export interface SearchHit extends Session {
+  snippet: string;
+}
+
 export interface DailyTrend {
   date: string;
   total_ms: number;

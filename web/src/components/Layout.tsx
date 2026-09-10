@@ -7,6 +7,7 @@ import {
   Clock,
   List,
   FileText,
+  Search,
   Bot,
   Settings,
   Sparkles,
@@ -24,6 +25,7 @@ const navItems = [
   { to: '/timeline', icon: Clock, label: 'Timeline' },
   { to: '/sessions', icon: List, label: 'Sessions' },
   { to: '/titles', icon: FileText, label: 'Documents' },
+  { to: '/search', icon: Search, label: 'Search' },
   { to: '/ai', icon: Bot, label: 'AI Chat' },
   { to: '/settings', icon: Settings, label: 'Settings' },
 ];

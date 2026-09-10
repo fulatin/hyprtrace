@@ -4,6 +4,7 @@ import type {
   AppRank,
   HourlyBucket,
   Session,
+  SearchHit,
   DailyTrend,
   AiMessage,
   AiModelsResponse,
@@ -76,6 +77,14 @@ export const api = {
   sessions: (from: string, to: string, page = 1, perPage = 50, cls?: string) =>
     fetchJSON<PaginatedResponse<Session>>(
       `/api/sessions?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&page=${page}&per_page=${perPage}${cls ? `&class=${encodeURIComponent(cls)}` : ''}`
+    ),
+
+  // Full-text search over window titles. Unlike the other list calls there is
+  // no default date window: an empty `from`/`to` searches the whole history,
+  // which is what "when did I last look at this" usually means.
+  search: (q: string, from = '', to = '', limit = 100) =>
+    fetchJSON<SearchHit[]>(
+      `/api/search?q=${encodeURIComponent(q)}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&limit=${limit}`
     ),
 
   appClasses: (from: string, to: string) =>

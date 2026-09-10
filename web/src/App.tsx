@@ -9,6 +9,7 @@ import Timeline from './pages/Timeline';
 import Sessions from './pages/Sessions';
 import AIChat from './pages/AIChat';
 import Titles from './pages/Titles';
+import Search from './pages/Search';
 import Settings from './pages/Settings';
 
 export default function App() {
@@ -34,6 +35,7 @@ function AppErrorBoundary() {
           <Route path="/timeline" element={<Timeline />} />
           <Route path="/sessions" element={<Sessions />} />
           <Route path="/titles" element={<Titles />} />
+          <Route path="/search" element={<Search />} />
           <Route path="/ai" element={<AIChat />} />
           <Route path="/settings" element={<Settings />} />
         </Route>
