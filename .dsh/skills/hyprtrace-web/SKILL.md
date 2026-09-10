@@ -12,7 +12,7 @@ React 18 + TypeScript + Vite 5 + Tailwind 3 + Recharts 2 + framer-motion 11。**
 
 ```
 src/main.tsx            挂载 + StrictMode
-src/App.tsx             ThemeProvider → BrowserRouter → ErrorBoundary → Layout → 8 条路由
+src/App.tsx             ThemeProvider → BrowserRouter → ErrorBoundary → Layout → 9 条路由
 src/components/Layout.tsx   侧栏（可折叠，layoutId 高亮滑块）+ 顶栏 + 路由过渡 + 滚动复位
 src/lib/api.ts          fetchJSON + 全部 REST（含 api.insights.* 命名空间）；401 清 token
 src/lib/types.ts        与 server models.rs 一一对应的类型（字段名是契约）
@@ -27,7 +27,7 @@ src/components/insights/  TransitionMatrix / FlowDiagram / ForecastChart / Rhyth
                         / FragmentationPanel / CooccurrenceGraph / DisruptionImpact / AnomalyList
 src/components/         StatCard / ActivityHeatmap / AppUsagePie / HourlyBars / AppRankingBar
                         / AppTrendChart / AppName / ErrorState / ErrorBoundary（其余为 AI 聊天专用）
-src/pages/              Dashboard, Insights, Apps, Timeline, Sessions, Titles, AIChat, Settings
+src/pages/              Dashboard, Insights, Apps, Timeline, Sessions, Titles, Search, AIChat, Settings
 ```
 
 ## 设计系统（要点）
@@ -52,7 +52,8 @@ src/pages/              Dashboard, Insights, Apps, Timeline, Sessions, Titles, A
 2. **换页要复位滚动**：`Layout` 用 `useLayoutEffect` 在 pathname 变化时把 `main` 的 scrollTop 置 0；否则会停在上一个页面的滚动位置，上半页的滚动显现元素永远不触发。
 3. **`RevealOnScroll` 用显式 IntersectionObserver**，并且在挂载时若元素已在视口内（或上方）立即显示——`whileInView` 只对"进入视口"有反应，刷新恢复滚动位置时会留下永久透明的区块。
 4. **年度热力图**（`ActivityHeatmap`）：`@uiw/react-heat-map` 的 `<svg>` 没有宽度属性时会退回 300px 固有宽度，只渲染约 17/53 周 → 必须传 `style={{ width: '100%' }}`；另外该库取色是"第一个严格大于 count 的档位"，会让 0 分钟的日子也显示成有活动 → 颜色由 `rectRender` 自己按分钟数计算。同时用 ResizeObserver 按容器宽度算 `rectSize`。
-5. **Sessions 表格**：7 列在 1280px 下会溢出，现在是 `table-fixed` + 固定列宽 + `overflow-x-auto`，`Focus` 列在 `2xl` 以下隐藏；应用名靠 `min-w-0` + `truncate` 截断（否则会糊到 Title 列上）。
+5. **Sessions 表格**：宽列组合在 1280px 下会溢出，现在是 `table-fixed` + 固定列宽 + `overflow-x-auto`；应用名靠 `min-w-0` + `truncate` 截断（否则会糊到 Title 列上）。
+   原本还有一列 `Focus`（只在 `2xl` 显示、渲染 `Session.focused_ms`）——那个字段是**已废弃**的每会话阈值值，几乎恒为 0，且与 Dashboard 的专注卡矛盾，已删除（表格现在是 6 列）。若要把「该会话是否属于专注块」重新显示出来，需先让服务端给记录打标（块归属取决于整天，不是当前这一页）。
 6. `Layout` 侧栏高亮用的是 `bg-accent/10`——改透明度档位要检查是否真的生成了 CSS。
 
 ## 数据层契约
@@ -60,6 +61,7 @@ src/pages/              Dashboard, Insights, Apps, Timeline, Sessions, Titles, A
 - 所有请求经 `fetchJSON`：自动带 `X-Auth-Token`、15s 超时、401 清 token。
 - **后端多数错误是 HTTP 200 + `{"error":...}`**，`fetchJSON` 不会抛，会在组件里才炸——新增调用点要考虑这点。
 - 洞察页用 `api.insights.*`；`forecast` **没有 from/to**（服务端固定到今天）。
+- `api.search(q, from, to, limit)` 是唯一**没有默认日期窗口**的列表调用：from/to 传空串＝搜全历史。返回值里的 `snippet` 就是命中标题本身（服务端不用 `snippet()`，见其 `db/search.rs` 注释）。
 - AI 对话走 `lib/transport.ts`，只认 NDJSON 的 `text` / `tool_call` / `tool_result` / `done` / `error`。
 - 时间戳是 UTC RFC3339，展示前用 `date-fns` 转本地；日期字符串（`date_local` 系列）本来就是本地日期，不要再用 `new Date()` 当作 UTC 解析。
 
