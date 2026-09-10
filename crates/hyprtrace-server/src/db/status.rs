@@ -27,13 +27,14 @@ impl super::Database {
                 |r| r.get(0),
             )
             .unwrap_or(0);
+        // Derived, like every other focus figure (see `insights::focus`). Reading
+        // `daily_summary.focused_ms` here made the Waybar module report 0 focus
+        // while the dashboard showed real focus for the same day — this endpoint
+        // was the last consumer still on the legacy column, and it took a
+        // deployment to notice it.
         let today_focused_ms: i64 = self
-            .conn
-            .query_row(
-                "SELECT COALESCE(SUM(focused_ms), 0) FROM daily_summary WHERE date = ?1",
-                params![today],
-                |r| r.get(0),
-            )
+            .insight_sessions(&today, &today, 0)
+            .map(|sessions| crate::insights::focus_total_ms(&sessions))
             .unwrap_or(0);
 
         // First enabled goal (target) for a progress bar.

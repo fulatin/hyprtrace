@@ -1144,6 +1144,49 @@
         assert!(score.score > 30, "the focus component must not be dead");
     }
 
+    /// The lightweight live status (the Waybar module) must report the same focus
+    /// as the dashboard for the same day.
+    ///
+    /// It read `daily_summary.focused_ms` — the legacy per-session threshold
+    /// figure — so a day built from short sessions showed 0 focus in the status
+    /// bar while the dashboard showed real focus. Every focus consumer goes
+    /// through `insights::focus`; this was the last one that did not.
+    #[test]
+    fn live_status_reports_the_derived_focus() {
+        let db = test_db();
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+
+        // A 20-minute block of one-minute sessions, today.
+        for minute in 0..20 {
+            db.conn
+                .execute(
+                    "INSERT INTO sessions (class, title, started_at, ended_at, duration_ms, date_local)
+                     VALUES ('kitty', '', ?1 || 'T10:00:00Z', ?1 || 'T10:01:00Z', 60000, ?1)",
+                    params![today],
+                )
+                .unwrap();
+        }
+
+        // What the legacy column makes of it.
+        db.rebuild_daily_summary().unwrap();
+        let legacy: i64 = db
+            .conn
+            .query_row(
+                "SELECT COALESCE(SUM(focused_ms), 0) FROM daily_summary WHERE date = ?1",
+                params![today],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(legacy, 0, "no single one-minute session crosses the threshold");
+
+        let status = db.current_status().unwrap();
+        assert!(
+            status.today_focused_ms > 0,
+            "the status bar must see the 20-minute block, got {}",
+            status.today_focused_ms
+        );
+    }
+
     /// One definition of the efficiency score, on a day with no data at all.
     ///
     /// `efficiency_score` used to repeat the formula instead of calling
