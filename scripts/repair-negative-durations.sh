@@ -30,6 +30,34 @@ db_path = sys.argv[1]
 db = sqlite3.connect(db_path)
 db.execute("PRAGMA busy_timeout=5000")
 
+# The rules the summaries are rebuilt with, matching Database::rebuild_daily_summary
+# / rebuild_hourly_summary (and the daemon's copy of them):
+#   * every finished session counts, duration_ms >= 0;
+#   * bucketed by the LOCAL date/hour of started_at, derived here rather than
+#     read from date_local, so an unfilled column cannot drop a row;
+#   * focused_ms is re-derived with the threshold in force now;
+#   * focused_session_count counts focused_ms > 0.
+# Keep this in step with the Rust rebuilds: they were unified deliberately, and
+# a repair that produced different numbers would be worse than no repair.
+def focused_threshold_seconds():
+    default = 1200
+    config = os.environ.get("HYPRTRACE_CONFIG") or os.path.expanduser(
+        "~/.config/hyprtrace/config.toml"
+    )
+    try:
+        import tomllib
+        with open(config, "rb") as fh:
+            return int(
+                tomllib.load(fh).get("daemon", {}).get(
+                    "focused_threshold_seconds", default
+                )
+            )
+    except (OSError, ValueError, ImportError):
+        return default
+
+FOCUSED_THRESHOLD_MS = focused_threshold_seconds() * 1000
+print(f"Focused threshold: {FOCUSED_THRESHOLD_MS} ms (from [daemon] config or default)")
+
 # 1) Consistent backup (honours WAL) next to the original database.
 backup_path = f"{db_path}.bak-{datetime.datetime.now():%Y%m%d-%H%M%S}"
 dst = sqlite3.connect(backup_path)
@@ -57,15 +85,16 @@ db.execute("UPDATE activity_events SET duration_ms = 0 WHERE duration_ms < 0")
 #    (matching the daemon's local-midnight bucketing).
 from collections import defaultdict
 rows = db.execute(
-    "SELECT started_at, class, duration_ms, COALESCE(focused_ms, 0) "
+    "SELECT started_at, class, duration_ms "
     "FROM sessions WHERE ended_at IS NOT NULL AND duration_ms >= 0"
 ).fetchall()
 daily = defaultdict(lambda: [0, 0, 0, 0])  # total_ms, session_count, focused_ms, focused_session_count
-for started_at, cls, duration_ms, focused_ms in rows:
+for started_at, cls, duration_ms in rows:
     try:
         dt = datetime.datetime.fromisoformat(started_at)
     except ValueError:
         continue
+    focused_ms = max(0, duration_ms - FOCUSED_THRESHOLD_MS)
     local_date = dt.astimezone().date().isoformat()  # system local timezone
     entry = daily[(local_date, cls)]
     entry[0] += duration_ms
@@ -86,15 +115,16 @@ for (date, cls), (total_ms, session_count, focused_ms, focused_session_count) in
 # 4) Rebuild hourly_summary bucketed by LOCAL start hour, matching the daemon.
 from collections import defaultdict
 rows = db.execute(
-    "SELECT started_at, class, duration_ms, COALESCE(focused_ms, 0) "
+    "SELECT started_at, class, duration_ms "
     "FROM sessions WHERE ended_at IS NOT NULL AND duration_ms >= 0"
 ).fetchall()
 agg = defaultdict(lambda: [0, 0, 0])
-for started_at, cls, duration_ms, focused_ms in rows:
+for started_at, cls, duration_ms in rows:
     try:
         dt = datetime.datetime.fromisoformat(started_at)
     except ValueError:
         continue
+    focused_ms = max(0, duration_ms - FOCUSED_THRESHOLD_MS)
     local = dt.astimezone()  # system local timezone, same as chrono::Local
     key = (local.date().isoformat(), local.hour, cls)
     entry = agg[key]
