@@ -1,9 +1,12 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-/// Periodically enforce the configured retention policy: every 6 hours,
-/// delete finished sessions older than `server.retention_days` days
-/// (disabled when the value is 0).
+/// Periodically enforce the configured retention policy: every 6 hours, delete
+/// everything older than `server.retention_days` days — finished sessions with
+/// their children, plus the auxiliary tables (`disruptions`, `app_resources`,
+/// `activity_events`) that a session deletion does not always reach. Disabled
+/// when the value is 0, which is the default: nothing is pruned, including the
+/// raw resource samples that accumulate at one row per 30 s per session.
 pub fn spawn_retention_cleanup(state: Arc<crate::routes::AppState>) {
     tokio::spawn(async move {
         let initial_delay = Duration::from_secs(5 * 60);
@@ -37,15 +40,12 @@ async fn cleanup_once(state: &Arc<crate::routes::AppState>) {
         .format("%Y-%m-%d")
         .to_string();
 
-    log::info!(
-        "Retention cleanup starting: deleting sessions before {}",
-        cutoff
-    );
+    log::info!("Retention cleanup starting: cutoff date {}", cutoff);
 
-    let deleted = {
+    let outcome = {
         let db = state.db.lock().await;
-        match db.delete_sessions_before(&cutoff) {
-            Ok(n) => n,
+        match db.apply_retention(&cutoff) {
+            Ok(o) => o,
             Err(e) => {
                 log::warn!("Retention cleanup failed: {}", e);
                 return;
@@ -54,8 +54,11 @@ async fn cleanup_once(state: &Arc<crate::routes::AppState>) {
     };
 
     log::info!(
-        "Retention cleanup: deleted {} session(s) started before {}",
-        deleted,
-        cutoff
+        "Retention cleanup before {}: {} session(s), {} disruption(s), {} resource sample(s), {} activity event(s)",
+        cutoff,
+        outcome.sessions,
+        outcome.disruptions,
+        outcome.app_resources,
+        outcome.activity_events
     );
 }

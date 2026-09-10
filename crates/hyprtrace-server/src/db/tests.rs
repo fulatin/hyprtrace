@@ -836,6 +836,94 @@
         assert_eq!(resources, 0);
     }
 
+    /// The retention policy has to bound the whole database, not just the
+    /// sessions table.
+    ///
+    /// `disruptions` has no session to cascade from and no code path ever
+    /// deleted it, so a user who set a retention window still kept every
+    /// disruption forever. `app_resources`/`activity_events` only follow a
+    /// session that is itself deleted — which never happens for a session the
+    /// daemon left open, nor for a row whose `session_id` is NULL.
+    #[test]
+    fn retention_prunes_the_auxiliary_tables_too() {
+        let db = test_db();
+        let insert = |table: &str, date: &str, session_id: Option<i64>| {
+            let ts = format!("{date}T10:00:00Z");
+            let sql = match table {
+                "disruptions" => {
+                    "INSERT INTO disruptions (kind, app, summary, occurred_at, date_local)
+                     VALUES ('notification', 'app', 's', ?1, ?2)"
+                }
+                "activity_events" => {
+                    "INSERT INTO activity_events (session_id, state, started_at, date_local)
+                     VALUES (?3, 'active', ?1, ?2)"
+                }
+                _ => {
+                    "INSERT INTO app_resources (session_id, class, sampled_at, date_local)
+                     VALUES (?3, 'kitty', ?1, ?2)"
+                }
+            };
+            let affected = if table == "disruptions" {
+                db.conn.execute(sql, params![ts, date]).unwrap()
+            } else {
+                db.conn.execute(sql, params![ts, date, session_id]).unwrap()
+            };
+            assert_eq!(affected, 1);
+        };
+
+        // One row per auxiliary table on an old date and on the cutoff date,
+        // all with NO session to cascade from.
+        for table in ["disruptions", "app_resources", "activity_events"] {
+            insert(table, "2025-01-01", None);
+            insert(table, "2025-06-01", None);
+        }
+        // A row whose date was never filled in must survive: the cutoff cannot
+        // be applied to a row that has no date.
+        db.conn
+            .execute(
+                "INSERT INTO disruptions (kind, app, summary, occurred_at, date_local)
+                 VALUES ('notification', 'app', 's', '2025-01-01T10:00:00Z', '')",
+                [],
+            )
+            .unwrap();
+
+        let outcome = db.apply_retention("2025-06-01").unwrap();
+        assert_eq!(outcome.disruptions, 1, "the old disruption must go");
+        assert_eq!(outcome.app_resources, 1);
+        assert_eq!(outcome.activity_events, 1);
+
+        for table in ["disruptions", "app_resources", "activity_events"] {
+            let old: i64 = db
+                .conn
+                .query_row(
+                    &format!("SELECT COUNT(*) FROM {table} WHERE date_local = '2025-01-01'"),
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            let kept: i64 = db
+                .conn
+                .query_row(
+                    &format!("SELECT COUNT(*) FROM {table} WHERE date_local = '2025-06-01'"),
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(old, 0, "{table}: rows before the cutoff must be deleted");
+            assert_eq!(kept, 1, "{table}: rows on the cutoff date must survive");
+        }
+
+        let undated: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM disruptions WHERE date_local = ''",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(undated, 1, "a row with no date is kept, not guessed at");
+    }
+
     #[test]
     fn projects_and_rules_roundtrip_and_match() {
         let db = project_test_db();

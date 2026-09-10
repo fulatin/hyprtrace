@@ -1,6 +1,15 @@
 use chrono::Timelike;
 use rusqlite::params;
 
+/// What one retention pass removed, per table.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct RetentionOutcome {
+    pub sessions: usize,
+    pub disruptions: usize,
+    pub app_resources: usize,
+    pub activity_events: usize,
+}
+
 impl super::Database {
     /// Delete child rows first (FK integrity), then the matching finished
     /// sessions, then rebuild both summary tables from the remaining sessions.
@@ -73,6 +82,49 @@ impl super::Database {
         let where_clause = "date_local < ?1 AND ended_at IS NOT NULL".to_string();
         let params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(cutoff_date.to_string())];
         self.delete_matching_sessions(&where_clause, &params)
+    }
+
+    /// Delete the auxiliary rows older than `cutoff_date` that deleting a
+    /// session does NOT reach.
+    ///
+    /// Deleting a session takes its `app_resources` and `activity_events` with
+    /// it, so the retention policy looked like it covered everything. It did
+    /// not:
+    ///
+    ///   * `disruptions` has no session to cascade from and was never deleted by
+    ///     any code path at all — it is the largest auxiliary table in practice.
+    ///   * `app_resources` and `activity_events` outlive the policy whenever
+    ///     their session survives it: a session the daemon left open, a session
+    ///     whose row is kept, or a row whose `session_id` is NULL.
+    ///
+    /// Rows are matched on the local `date_local`, the column the rest of the
+    /// retention code filters on. A row whose `date_local` is still empty is
+    /// deliberately kept: it has no date the policy can be applied to, and
+    /// guessing one would delete data the cutoff does not clearly cover.
+    pub fn prune_auxiliary_before(&self, cutoff_date: &str) -> anyhow::Result<RetentionOutcome> {
+        let mut outcome = RetentionOutcome::default();
+        for table in ["disruptions", "app_resources", "activity_events"] {
+            let deleted = self.conn.execute(
+                &format!("DELETE FROM {table} WHERE date_local <> '' AND date_local < ?1"),
+                params![cutoff_date],
+            )?;
+            match table {
+                "disruptions" => outcome.disruptions = deleted,
+                "app_resources" => outcome.app_resources = deleted,
+                _ => outcome.activity_events = deleted,
+            }
+        }
+        Ok(outcome)
+    }
+
+    /// One retention pass: the finished sessions older than `cutoff_date` (with
+    /// their children, and the summaries rebuilt from what is left) plus the
+    /// auxiliary rows no session deletion reaches.
+    pub fn apply_retention(&self, cutoff_date: &str) -> anyhow::Result<RetentionOutcome> {
+        let sessions = self.delete_sessions_before(cutoff_date)?;
+        let mut outcome = self.prune_auxiliary_before(cutoff_date)?;
+        outcome.sessions = sessions;
+        Ok(outcome)
     }
 
     /// Rewrite `daily_summary` from `sessions`.
