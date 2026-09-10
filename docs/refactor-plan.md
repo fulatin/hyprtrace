@@ -66,7 +66,9 @@
       —— 不新建 crate：沿用 schema 的做法（共享快照文件 + 两端断言），让漂移变成测试失败
 
 ### Phase 2 — 正确性欠债（各配回归测试，各自独立 commit）
-- [ ] 2a `rebuild_*` 事务化
+- [x] 2a `rebuild_daily_summary`/`rebuild_hourly_summary` 事务化（`d2c26ca`）：
+      DELETE 与 INSERT 之间原本没有事务，中断即留下**空表**，而读者只要看到该日期有 ≥1 行就当真 → 图表静默变空。
+      用「触发器 RAISE(ABORT) 注入失败」验证：撤掉事务后 daily 变 0 行（原 2 行）、hourly 留半截（1 行）。
 - [x] 2b `resume_session` 尊重 `record_titles`（`9ba0639`：抽出 `privacy::recorded_title`，两条写 title 的路径统一走它）
 - [ ] 2c `disruptions` / `app_resources` 纳入保留策略
 - [ ] 2d 收敛重建口径分歧。已知**四处**，不止最初看到的一处：
@@ -80,11 +82,13 @@
 - [x] 2e `finalize_orphaned_sessions` 关闭孤儿会话后不维护汇总表（`56b03ac`）：
       改为在同一事务内按 LOCAL 开始日期**作用域重建**（`write_summaries` 被抽出，`migrate_v6` 仍走全量路径），
       并补齐 `focused_ms`/`date_local`。回归测试已验证「撤掉修复即变红」。
-- [ ] 2f **`sessions_paginated` 的 `(page-1) * per_page` 未做受检乘法**（拆分时发现）：
-      `page` 巨大时 `usize` 溢出 → 转 `i64` 变负 → SQLite 把负 LIMIT 当**无限制**（架构技能不变量 5 的原型）。
-      handler 侧也没有钳制。修法：两侧都 clamp，并加一个 `page = usize::MAX` 的回归测试。
-- [ ] 2g **`db/test_support.rs` 手写 8 条 `CREATE TABLE`**（拆分时发现）：与 `schema/hyprtrace.sql` 单源规则冲突，
-      夹具会静默漂移（其中 `sessions` 已被声明两次）。修法：夹具改为从共享 schema 建表。
+- [x] 2f `sessions_paginated` 的 `(page-1) * per_page` 未做受检乘法（`5829a1c`）：它是全 server **唯一**没钳制的分页端点，
+      `?per_page=4294967295` 会直接向 SQLite 要整张表；乘法溢出则是 debug 构建 panic、release 构建**静默回绕**到错误窗口。
+      现在 `clamp_sessions_page` 是唯一定义，handler（决定响应里回显的分页）与查询各调一次，offset 用 u64 计算。
+      回归测试在旧代码上以 `attempt to multiply with overflow` 失败。
+- [x] 2g `db/test_support.rs` 手写 DDL（`f02b6cc`）：夹具改为直接跑 `schema/hyprtrace.sql` 并沿用 `PRAGMA foreign_keys=ON`，
+      server 自有表改由 `ensure_projects()` 创建。它当时**已经和自己漂移**（`sessions` 被声明两次、`duration_ms` 定义不同）。
+      改完 64 个测试仍全绿（含外键真正生效），净减 74 行。
 - [ ] 2h **效率分在空日有两个定义**：`efficiency_score` 返回 30（late 15 + disruption 15），
       而 `insights::efficiency_subscore` 对同一天返回 0，`insight_disruption_impact` 用的是后者。
       与 Phase 3 的「全应用只有一个定义」是同一主题，建议并入 3 一起做。
@@ -124,7 +128,14 @@ cat <新目录>/*.rs | sed 's/[[:space:]]*$//' | sort | uniq -c > /tmp/b ; diff 
 
 **2. 新模块是否真的被编译**：`db` 20/20、`insights` 11/11 个文件都有 `mod` 声明；并各注入过一次语法错误确认构建会失败（防「文件写了但没声明 = 静默不编译」）。
 
-**3. 回归测试是否真的有效**：2e 的测试在撤掉修复后报 `the finalised session must appear in daily_summary: QueryReturnedNoRows`，装回修复才通过。
+**3. 每个修复的回归测试都真的能抓到 bug**（把修复撤掉再跑，必须变红）：
+
+| 修复 | 撤掉修复后的失败信息 |
+|---|---|
+| 2e 孤儿会话汇总 | `the finalised session must appear in daily_summary: QueryReturnedNoRows` |
+| 2a 重建事务化（daily） | `left: 0, right: 2` —— 汇总表丢了**全部**行 |
+| 2a 重建事务化（hourly） | `left: 1, right: 2` —— 留下半截 |
+| 2f 分页钳制 | `attempt to multiply with overflow`（debug 构建直接 panic） |
 
 **4. 真实数据端到端等价（本轮做的集成验证）**
 
@@ -155,6 +166,8 @@ cat <新目录>/*.rs | sed 's/[[:space:]]*$//' | sort | uniq -c > /tmp/b ; diff 
 - 用显式 `pub use` 而非 glob re-export（避免未来同名符号静默遮蔽）
 - 测试辅助函数（`test_db`/`insert_session`/`project_test_db`/`tracked_session`）构造 `Database` 字面量，
   只能在 `db` 的后代模块里编译 → 放 `db/test_support.rs`
+- **夹具不要再手写 DDL**：`test_db()` 现在直接跑 `schema/hyprtrace.sql` + `PRAGMA foreign_keys=ON`，
+  server 自有表用 `ensure_projects()`。手写副本已经漂移过一次（`sessions` 被声明两遍且列定义不同）。
 - **告警只在真构建里出现**：`pub` 但只有测试读的常量，`cargo test` 不报警、`cargo build`/`cargo check -p` 才报（1g 就是这么漏掉的）。
   比告警集合时要用同一种构建方式，别拿 `cargo test` 的输出当基线。
 - CRLF 文件：`daemon/config.rs`、`daemon/main.rs`、两个 `Cargo.toml`、`scripts/*.service`、`web/src/lib/api.ts`
