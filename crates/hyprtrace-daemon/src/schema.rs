@@ -14,4 +14,9 @@ pub const SCHEMA_SQL: &str = include_str!("../../../schema/hyprtrace.sql");
 
 /// Committed snapshot of the shape `SCHEMA_SQL` (plus the legacy column
 /// upgrades) produces, asserted by `db::tests::migrate_*`.
+///
+/// Test-only on purpose: this crate is a binary, so a `pub` item that nothing
+/// in the shipped code reads is a dead-code warning, and there is no reason to
+/// carry the snapshot in a release build.
+#[cfg(test)]
 pub const EXPECTED_SCHEMA: &str = include_str!("../../../schema/expected-columns.txt");
