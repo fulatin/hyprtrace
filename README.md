@@ -241,6 +241,23 @@ VITE_API_TARGET=http://127.0.0.1:9421 npm run dev
 
 前端设计系统（颜色 token、组件类、动效约定）见 [`web/DESIGN.md`](web/DESIGN.md)。
 
+### 给 AI 助手的项目知识库
+
+仓库自带一份面向 AI 编码助手的知识库，随代码一起版本化：
+
+- [`AGENTS.md`](AGENTS.md) —— 常驻的项目约束（不要动正在运行的实例、不要对同一数据库起第二个 daemon、配置里有真实密钥、schema 必须双写等）与常用命令。
+- [`.dsh/skills/`](.dsh/skills) —— 按领域拆分的深参考技能，助手按需加载即可，无需通读全部源码：
+
+| 技能 | 内容 |
+|---|---|
+| `hyprtrace-architecture` | 组件边界、数据流、目录对照、时间/日期语义、schema 归属、不变量、"改 X 动哪里" |
+| `hyprtrace-daemon` | 进程模型、会话生命周期、`end_session` 事务、六个监控线程、迁移函数 |
+| `hyprtrace-server` | 全部端点与参数钳制、SQL 层、派生指标公式、鉴权、后台任务、AI 工具 |
+| `hyprtrace-web` | 页面/组件结构、设计系统、动效约定、API 客户端与已修复的坑 |
+| `hyprtrace-ops` | 构建、隔离实例、部署、systemd、CI 门禁、AUR 打包与禁忌 |
+
+支持 skills 的助手（如 DeepSeek Harness）在本仓库工作时会自动发现它们。
+
 ## CI
 
 GitHub Actions 在每次 push / pull request 时运行 `cargo check`、`cargo test` 与 `npm run build`。
