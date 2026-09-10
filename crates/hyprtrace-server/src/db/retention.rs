@@ -1,3 +1,4 @@
+use super::migrate::local_date_from_rfc3339;
 use chrono::Timelike;
 use rusqlite::params;
 
@@ -134,28 +135,76 @@ impl super::Database {
     /// (and the dashboard) trust `daily_summary`/`hourly_summary` as soon as a
     /// date has one row — so the charts would show nothing at all rather than
     /// something stale, with no error anywhere.
+    /// Rewrite `daily_summary` from `sessions`.
+    ///
+    /// The rules are the ones `end_session` applies incrementally, so that a
+    /// rebuild reproduces the numbers the incremental path already wrote. The
+    /// two used to disagree on all three counts:
+    ///
+    ///   * every finished session counts, a zero-duration one included —
+    ///     `end_session` increments `session_count` for it, so filtering on
+    ///     `duration_ms > 0` silently changed the day's session count.
+    ///   * the bucket is the LOCAL date of `started_at`, derived here instead of
+    ///     read from `date_local`, so a row whose column is still empty is
+    ///     bucketed correctly rather than dropped — filtering on
+    ///     `date_local <> ''` could rebuild an EMPTY table, which is what the
+    ///     server's `migrate_v6` did when it ran before `migrate_v7` had
+    ///     backfilled that column.
+    ///   * `focused_ms` is re-derived from the session duration with the
+    ///     threshold in force NOW, so a rebuild is "recompute with today's
+    ///     rules": lowering `focused_threshold_seconds` and rebuilding does
+    ///     re-score history, which is what the option is for.
+    ///     `focused_session_count` counts the sessions that contributed focus —
+    ///     `focused_ms > 0` — the same rule the incremental path uses.
+    ///
+    /// The daemon keeps its own copy of these rules (`db/migrations.rs`); the
+    /// two must stay in step, which is what
+    /// `rebuild_matches_the_incremental_path` in each crate's tests pins down.
     pub fn rebuild_daily_summary(&self) -> anyhow::Result<()> {
         let threshold = self.focused_threshold_ms;
-        let sql = format!(
-            "INSERT INTO daily_summary (date, class, total_ms, session_count, focused_ms, focused_session_count)
-             SELECT date_local as date,
-                    class,
-                    SUM(duration_ms) as total_ms,
-                    COUNT(*) as session_count,
-                    SUM(MAX(0, duration_ms - {})) as focused_ms,
-                    SUM(CASE WHEN duration_ms >= {} THEN 1 ELSE 0 END) as focused_sessions
+        let mut stmt = self.conn.prepare(
+            "SELECT started_at, class, duration_ms
              FROM sessions
-             WHERE ended_at IS NOT NULL AND duration_ms > 0 AND date_local <> ''
-             GROUP BY date_local, class",
-            threshold, threshold,
-        );
+             WHERE ended_at IS NOT NULL AND duration_ms >= 0",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })?;
+
+        let mut agg: std::collections::HashMap<(String, String), (i64, i64, i64, i64)> =
+            std::collections::HashMap::new();
+        for r in rows {
+            let (started_at, class, duration_ms) = r?;
+            let Some(date) = local_date_from_rfc3339(&started_at) else {
+                continue;
+            };
+            let focused_ms = std::cmp::max(0, duration_ms - threshold);
+            let entry = agg.entry((date, class)).or_insert((0, 0, 0, 0));
+            entry.0 += duration_ms;
+            entry.1 += 1;
+            entry.2 += focused_ms;
+            if focused_ms > 0 {
+                entry.3 += 1;
+            }
+        }
+        drop(stmt);
 
         let tx = rusqlite::Transaction::new_unchecked(
             &self.conn,
             rusqlite::TransactionBehavior::Immediate,
         )?;
         tx.execute("DELETE FROM daily_summary", [])?;
-        tx.execute_batch(&sql)?;
+        for ((date, class), (total_ms, session_count, focused_ms, focused_count)) in agg {
+            tx.execute(
+                "INSERT INTO daily_summary (date, class, total_ms, session_count, focused_ms, focused_session_count)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![date, class, total_ms, session_count, focused_ms, focused_count],
+            )?;
+        }
         tx.commit()?;
         Ok(())
     }
@@ -163,37 +212,42 @@ impl super::Database {
     /// Rewrite `hourly_summary` from `sessions`. Transactional for the same
     /// reason as `rebuild_daily_summary` — and here it matters more, because the
     /// rows are inserted one at a time from the Rust-side aggregation.
+    ///
+    /// Same rules as `rebuild_daily_summary`; the bucket is the LOCAL start hour.
     pub fn rebuild_hourly_summary(&self) -> anyhow::Result<()> {
         // Aggregate in Rust so we can bucket by LOCAL hour (chrono::Local),
         // consistent with the sessions-based fallback and the daemon's incremental upsert.
+        let threshold = self.focused_threshold_ms;
         let mut stmt = self.conn.prepare(
-            "SELECT started_at, date_local, class, duration_ms, COALESCE(focused_ms, 0)
+            "SELECT started_at, class, duration_ms
              FROM sessions
-             WHERE ended_at IS NOT NULL AND duration_ms > 0 AND date_local <> ''",
+             WHERE ended_at IS NOT NULL AND duration_ms >= 0",
         )?;
 
         let rows = stmt.query_map([], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, i64>(3)?,
-                row.get::<_, i64>(4)?,
+                row.get::<_, i64>(2)?,
             ))
         })?;
 
         let mut agg: std::collections::HashMap<(String, u8, String), (i64, i64, i64)> =
             std::collections::HashMap::new();
         for r in rows {
-            let (started_at, date, class, duration_ms, focused_ms) = r?;
-            let hour = chrono::DateTime::parse_from_rfc3339(&started_at)
+            let (started_at, class, duration_ms) = r?;
+            let Some(local) = chrono::DateTime::parse_from_rfc3339(&started_at)
                 .ok()
-                .map(|dt| dt.with_timezone(&chrono::Local).hour() as u8)
-                .unwrap_or(0);
+                .map(|dt| dt.with_timezone(&chrono::Local))
+            else {
+                continue;
+            };
+            let date = local.format("%Y-%m-%d").to_string();
+            let hour = local.hour() as u8;
             let entry = agg.entry((date, hour, class)).or_insert((0, 0, 0));
             entry.0 += duration_ms;
             entry.1 += 1;
-            entry.2 += focused_ms;
+            entry.2 += std::cmp::max(0, duration_ms - threshold);
         }
         drop(stmt);
 

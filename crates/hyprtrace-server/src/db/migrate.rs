@@ -16,15 +16,20 @@ impl super::Database {
         // Without these migrations every API would fail with "no such table"
         // until the daemon writes the database once.
         //
-        // Step order matters and mirrors the previous hand-written chain — in
-        // particular v6 (which may rebuild the summary tables) still runs
-        // before v7 (which adds and backfills `date_local`).
+        // Step order: v7 runs BEFORE v6. v6 may rebuild the summary tables, and
+        // that rebuild now buckets by the local date derived from `started_at`,
+        // but the sequence it replaced read the `date_local` column — which v7
+        // is what adds and backfills. Running v6 first therefore rebuilt the
+        // summaries by filtering on a column that was empty for every existing
+        // row, i.e. it wiped `daily_summary` and left it empty. v6's own repair
+        // (clamping negative durations) does not depend on v7, so swapping the
+        // two is safe.
         self.conn.execute_batch(crate::schema::SCHEMA_SQL)?;
 
         self.migrate_v2()?;
         self.migrate_v3()?;
-        self.migrate_v6()?;
         self.migrate_v7()?;
+        self.migrate_v6()?;
         Ok(())
     }
 
@@ -168,7 +173,10 @@ impl super::Database {
 }
 
 /// Local calendar date (`YYYY-MM-DD`) of a stored UTC RFC3339 timestamp.
-fn local_date_from_rfc3339(ts: &str) -> Option<String> {
+///
+/// Shared with `db::retention`, whose rebuilds derive the bucket from
+/// `started_at` instead of reading `date_local`.
+pub(super) fn local_date_from_rfc3339(ts: &str) -> Option<String> {
     chrono::DateTime::parse_from_rfc3339(ts).ok().map(|dt| {
         dt.with_timezone(&chrono::Local)
             .format("%Y-%m-%d")

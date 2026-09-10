@@ -137,6 +137,8 @@
     /// offset in a release one.
     #[test]
     fn sessions_paginated_clamps_page_and_per_page() {
+        use super::sessions::MAX_SESSIONS_PER_PAGE;
+
         assert_eq!(clamp_sessions_page(0, 0), (1, 1));
         assert_eq!(
             clamp_sessions_page(u32::MAX, u32::MAX),
@@ -922,6 +924,161 @@
             )
             .unwrap();
         assert_eq!(undated, 1, "a row with no date is kept, not guessed at");
+    }
+
+    /// A rebuild must reproduce what the incremental path wrote.
+    ///
+    /// The two used to disagree on all three counts: a zero-duration session
+    /// (counted by `end_session`, dropped by the rebuild), a row whose
+    /// `date_local` was still empty (dropped entirely), and `focused_ms` read
+    /// from the session instead of re-derived. This pins the rules a rebuild
+    /// must follow, and `hourly_summary` must agree with `daily_summary` on the
+    /// same day.
+    #[test]
+    fn rebuild_matches_the_incremental_path() {
+        let db = test_db(); // threshold = 20 min = 1_200_000 ms
+        let insert = |class: &str, started_at: &str, duration_ms: i64, date_local: &str| {
+            db.conn
+                .execute(
+                    "INSERT INTO sessions (class, title, started_at, ended_at, duration_ms, date_local)
+                     VALUES (?1, '', ?2, ?3, ?4, ?5)",
+                    params![class, started_at, started_at, duration_ms, date_local],
+                )
+                .unwrap();
+        };
+        // 10:00Z keeps the local date the same across the timezones a test host
+        // might run in.
+        insert("kitty", "2025-03-04T10:00:00Z", 3_600_000, "2025-03-04");
+        // A zero-duration session: no time, but `end_session` does count it.
+        insert("kitty", "2025-03-04T11:00:00Z", 0, "2025-03-04");
+        // Never backfilled: the rebuild must bucket it from `started_at`
+        // instead of dropping it.
+        insert("firefox", "2025-03-04T12:00:00Z", 1_500_000, "");
+
+        db.rebuild_daily_summary().unwrap();
+        db.rebuild_hourly_summary().unwrap();
+
+        let mut stmt = db
+            .conn
+            .prepare(
+                "SELECT class, total_ms, session_count, focused_ms, focused_session_count
+                 FROM daily_summary WHERE date = '2025-03-04' ORDER BY class",
+            )
+            .unwrap();
+        let daily: Vec<(String, i64, i64, i64, i64)> = stmt
+            .query_map([], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            })
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            daily,
+            vec![
+                // firefox: 25 min, of which 5 min past the 20 min threshold
+                ("firefox".to_string(), 1_500_000, 1, 300_000, 1),
+                // kitty: 60 min + a zero-duration session that still counts
+                ("kitty".to_string(), 3_600_000, 2, 2_400_000, 1),
+            ],
+            "the rebuild rules changed"
+        );
+
+        let hourly_total: i64 = db
+            .conn
+            .query_row(
+                "SELECT SUM(total_ms) FROM hourly_summary WHERE date = '2025-03-04'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let hourly_sessions: i64 = db
+            .conn
+            .query_row(
+                "SELECT SUM(session_count) FROM hourly_summary WHERE date = '2025-03-04'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            hourly_total,
+            3_600_000 + 1_500_000,
+            "hourly and daily must agree on the same day"
+        );
+        assert_eq!(hourly_sessions, 3, "including the zero-duration session");
+    }
+
+    /// `migrate_v6` repairs negative durations and then rebuilds the summaries.
+    /// On a database written before `date_local` existed it used to rebuild them
+    /// by filtering on that column — empty for every row — and left both summary
+    /// tables EMPTY rather than repaired. The rebuilt numbers must survive.
+    #[test]
+    fn migrate_v6_on_a_legacy_db_keeps_the_summaries() {
+        let (dir, path) = temp_db("legacy-v6");
+        let db = Database::open(&path, 20 * 60).unwrap();
+
+        // A database as an old build left it: the v1 columns only.
+        db.conn
+            .execute_batch(
+                "CREATE TABLE sessions (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    class       TEXT NOT NULL,
+                    title       TEXT NOT NULL DEFAULT '',
+                    workspace   TEXT,
+                    started_at  TEXT NOT NULL,
+                    ended_at    TEXT,
+                    duration_ms INTEGER DEFAULT 0
+                );
+                CREATE TABLE daily_summary (
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    date          TEXT NOT NULL,
+                    class         TEXT NOT NULL,
+                    total_ms      INTEGER NOT NULL DEFAULT 0,
+                    session_count INTEGER NOT NULL DEFAULT 0,
+                    UNIQUE(date, class)
+                );
+                CREATE TABLE ai_conversations (
+                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at TEXT NOT NULL,
+                    role       TEXT NOT NULL,
+                    content    TEXT NOT NULL,
+                    model      TEXT NOT NULL
+                );",
+            )
+            .unwrap();
+        db.conn
+            .execute_batch(
+                "INSERT INTO sessions (class, title, started_at, ended_at, duration_ms)
+                 VALUES ('kitty', 'good', '2025-03-04T10:00:00Z', '2025-03-04T10:30:00Z', 1800000),
+                        ('kitty', 'jumped', '2025-03-04T11:00:00Z', '2025-03-04T11:00:01Z', -5000);",
+            )
+            .unwrap();
+
+        db.migrate().unwrap();
+
+        let negative: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sessions WHERE duration_ms < 0",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(negative, 0, "the repair still happens");
+
+        let (total, count): (i64, i64) = db
+            .conn
+            .query_row(
+                "SELECT total_ms, session_count FROM daily_summary
+                 WHERE date = '2025-03-04' AND class = 'kitty'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .expect("the rebuilt summaries must not be empty");
+        assert_eq!(total, 1_800_000, "the surviving session is still counted");
+        assert_eq!(count, 2, "both sessions remain, the repaired one at 0 ms");
+
+        drop(db);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

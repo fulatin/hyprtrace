@@ -160,18 +160,24 @@ impl super::Database {
             return Ok(());
         }
 
+        // `focused_ms` is re-derived here instead of read from the session row,
+        // so a rebuild means "recompute with the rules in force now": that is
+        // what makes `focused_threshold_seconds` do something, and it is the
+        // rule the server's rebuild applies too (see the `daily_summary` rules
+        // in `crates/hyprtrace-server/src/db/retention.rs`). Both crates used to
+        // disagree — one summed the stored value, the other one re-derived it.
+        let threshold = self.focused_threshold_ms;
         let mut stmt = conn.prepare(
-            "SELECT started_at, class, duration_ms, COALESCE(focused_ms, 0)
+            "SELECT started_at, class, duration_ms
              FROM sessions
              WHERE ended_at IS NOT NULL AND duration_ms >= 0",
         )?;
-        let rows: Vec<(String, String, i64, i64)> = stmt
+        let rows: Vec<(String, String, i64)> = stmt
             .query_map([], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, i64>(2)?,
-                    row.get::<_, i64>(3)?,
                 ))
             })?
             .collect::<Result<_, _>>()?;
@@ -180,7 +186,7 @@ impl super::Database {
         // Bucket by the LOCAL calendar date of the session start.
         let mut daily: HashMap<(String, String), (i64, i64, i64, i64)> = HashMap::new();
         let mut hourly: HashMap<(String, u8, String), (i64, i64, i64)> = HashMap::new();
-        for (started_at, class, duration_ms, focused_ms) in rows {
+        for (started_at, class, duration_ms) in rows {
             if let Some(dt) = chrono::DateTime::parse_from_rfc3339(&started_at).ok() {
                 let local = dt.with_timezone(&chrono::Local);
                 let date = local.format("%Y-%m-%d").to_string();
@@ -190,6 +196,7 @@ impl super::Database {
                     }
                 }
                 let hour = local.hour() as u8;
+                let focused_ms = std::cmp::max(0, duration_ms - threshold);
                 let d = daily
                     .entry((date.clone(), class.clone()))
                     .or_insert((0, 0, 0, 0));

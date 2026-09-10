@@ -123,16 +123,13 @@ impl super::Database {
             |row| row.get(0),
         )?;
 
-        let activity_state: String = tx.query_row(
-            "SELECT activity_state FROM sessions WHERE id = ?1",
-            params![session_id],
-            |row| row.get(0),
-        )?;
-        let is_focused_session = if activity_state == "focused" {
-            1i64
-        } else {
-            0i64
-        };
+        // `focused_session_count` counts the sessions that contributed focus
+        // time, i.e. `focused_ms > 0`. It used to count the sessions whose
+        // `activity_state` happened to be "focused" when they ended, which is
+        // the idle monitor's state machine, not a measure of focus — and the
+        // rebuild path counted `focused_ms > 0`, so a rebuild silently changed
+        // the number. Both paths now use the same rule.
+        let is_focused_session = if focused_ms > 0 { 1i64 } else { 0i64 };
 
         tx.execute(
             "INSERT INTO daily_summary (date, class, total_ms, session_count, focused_ms, focused_session_count)

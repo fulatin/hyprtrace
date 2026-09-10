@@ -28,7 +28,12 @@ mod tests;
 
 // Re-exported so the route layer clamps a request with the same rule the query
 // applies, instead of echoing a page it did not actually serve.
-pub use sessions::{clamp_sessions_page, MAX_SESSIONS_PER_PAGE};
+//
+// Only what the shipped code reads is re-exported: a `pub use` of a name that
+// nothing outside `#[cfg(test)]` touches is an unused-import warning in a real
+// build, and `cargo test` never shows it. `MAX_SESSIONS_PER_PAGE` therefore
+// stays in `db::sessions`, where the tests reach it directly.
+pub use sessions::clamp_sessions_page;
 
 pub struct Database {
     conn: Connection,
