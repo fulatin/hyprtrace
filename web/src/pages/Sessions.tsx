@@ -178,10 +178,10 @@ export default function Sessions() {
             />
           ) : (
             /* Horizontal scroll container: the table needs ~880px for all
-               seven columns, and the sticky header still works inside it. */
+               six columns, and the sticky header still works inside it. */
             <div className="overflow-x-auto">
             <table className="w-full min-w-[760px] table-fixed text-sm">
-              {/* Fixed widths keep the seven columns stable while the title
+              {/* Fixed widths keep the six columns stable while the title
                   column absorbs the remaining space and truncates. */}
               <colgroup>
                 <col className="w-[26%]" />
@@ -189,8 +189,7 @@ export default function Sessions() {
                 <col className="w-[9%]" />
                 <col className="w-[9%]" />
                 <col className="w-[11%]" />
-                <col className="w-[15%]" />
-                <col className="hidden w-[9%] 2xl:table-column" />
+                <col className="w-[24%]" />
               </colgroup>
               <thead className="sticky top-0 z-10 bg-surface/95 backdrop-blur shadow-[0_1px_0_0_rgb(var(--c-line))]">
                 <tr className="border-b border-line">
@@ -199,8 +198,7 @@ export default function Sessions() {
                   <th className="px-3 py-3 text-left font-medium text-fg-muted">Start</th>
                   <th className="px-3 py-3 text-left font-medium text-fg-muted">End</th>
                   <th className="px-3 py-3 text-left font-medium text-fg-muted">State</th>
-                  <th className="px-3 py-3 text-right font-medium text-fg-muted">Duration</th>
-                  <th className="hidden px-3 py-3 text-right font-medium text-fg-muted last:rounded-tr-xl 2xl:table-cell">Focus</th>
+                  <th className="px-3 py-3 text-right font-medium text-fg-muted last:rounded-tr-xl">Duration</th>
                 </tr>
               </thead>
 
@@ -258,9 +256,6 @@ export default function Sessions() {
                               <ProgressBar pct={pct} color={color} height={5} />
                             </div>
                           </div>
-                        </td>
-                        <td className="hidden px-3 py-2.5 text-right text-xs tnum text-fg-faint 2xl:table-cell">
-                          {formatDurationFine(s.focused_ms)}
                         </td>
                       </motion.tr>
                     );
