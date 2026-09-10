@@ -23,7 +23,7 @@ export default function GoalsSection() {
   }, [storedGoals]);
 
   const handleAddGoal = () => {
-    setGoals([...goals, { name: '', target_type: 'all', target_key: '', daily_target_ms: 4 * 3600000, enabled: true }]);
+    setGoals([...goals, { id: null, name: '', target_type: 'all', target_key: '', daily_target_ms: 4 * 3600000, enabled: true }]);
   };
 
   const handleDeleteGoal = (idx: number) => {

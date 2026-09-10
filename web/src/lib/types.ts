@@ -1,56 +1,49 @@
-export interface TodaySummary {
-  date: string;
-  total_active_ms: number;
-  total_idle_ms: number;
-  total_focused_ms: number;
-  app_count: number;
-  session_count: number;
-  top_apps: AppRank[];
-}
+// The model types in this file are GENERATED from the Rust definitions — do not
+// write them by hand. `crates/hyprtrace-server/src/api_types.rs` renders
+// `./api-types.ts`, and a Rust test fails when the two disagree, so a manual
+// edit here only moves the failure to CI.
+//
+// This module re-exports them under the names the app already imports and adds
+// the shapes that exist only on the client side (request bodies and the
+// response wrappers around a generic payload).
+import type {
+  AppMetadata,
+  CategoryRule,
+  Goal,
+  GoalProgress,
+  Project,
+  ProjectRule,
+} from './api-types';
 
-export interface AppRank {
-  class: string;
-  total_ms: number;
-  percentage: number;
-  session_count: number;
-  focused_ms: number;
-  focused_session_count: number;
-  category?: string;
-}
-
-export interface CategoryRule {
-  id?: number | null;
-  pattern: string;
-  category: string;
-  priority?: number;
-}
+export type {
+  ActivityEvent,
+  AiMessage,
+  AppMetadata,
+  AppRank,
+  AppResource,
+  CategoryRule,
+  CurrentStatus,
+  DailyActivity,
+  DailyTrend,
+  DisruptionEvent,
+  EfficiencyScore,
+  Goal,
+  GoalProgress,
+  HourlyBucket,
+  Project,
+  ProjectRule,
+  ProjectStat,
+  SearchHit,
+  Session,
+  TitleStat,
+  TodaySummary,
+  TrendPrediction,
+  WorkspaceRecommendation,
+} from './api-types';
 
 export interface CategoriesResponse {
   rules: CategoryRule[];
   categories: string[];
-}
-
-export interface Project {
-  id?: number | null;
-  name: string;
-  color: string;
-  sort_order: number;
-}
-
-export interface ProjectRule {
-  id?: number | null;
-  project_id: number;
-  pattern: string;
-  priority: number;
-}
-
-export interface ProjectStat {
-  project_id: number | null;
-  name: string;
-  color: string;
-  total_ms: number;
-  session_count: number;
-  percentage: number;
 }
 
 export interface ProjectsResponse {
@@ -58,113 +51,9 @@ export interface ProjectsResponse {
   rules: ProjectRule[];
 }
 
-export interface AppResource {
-  class: string;
-  avg_cpu_pct: number;
-  peak_mem_kb: number;
-  sample_count: number;
-}
-
-export interface DisruptionEvent {
-  id: number;
-  kind: string;
-  app: string | null;
-  summary: string | null;
-  occurred_at: string;
-}
-
-export interface EfficiencyScore {
-  date: string;
-  score: number;
-  focus_ratio: number;
-  avg_session_secs: number;
-  late_night_pct: number;
-  disruption_count: number;
-  total_active_ms: number;
-}
-
-export interface Goal {
-  id?: number | null;
-  name: string;
-  target_type: string;
-  target_key?: string | null;
-  daily_target_ms: number;
-  enabled: boolean;
-}
-
-export interface GoalProgress {
-  goal: Goal;
-  today_ms: number;
-  pct: number;
-}
-
 export interface GoalsResponse {
   goals: Goal[];
   progress: GoalProgress[];
-}
-
-export interface TrendPrediction {
-  today_ms: number;
-  predicted_today_ms: number;
-  predicted_tomorrow_ms: number;
-  daily_avg_ms: number;
-  slope: number;
-  window_days: number;
-}
-
-export interface HourlyBucket {
-  hour: number;
-  total_ms: number;
-  session_count: number;
-  focused_ms: number;
-}
-
-export interface Session {
-  id: number;
-  class: string;
-  title: string;
-  workspace: string | null;
-  started_at: string;
-  ended_at: string | null;
-  duration_ms: number | null;
-  activity_state: string | null;
-  focused_ms: number | null;
-}
-
-/// One full-text hit: the session plus the matching title excerpt.
-export interface SearchHit extends Session {
-  snippet: string;
-}
-
-export interface DailyTrend {
-  date: string;
-  total_ms: number;
-  session_count: number;
-  focused_ms: number;
-}
-
-export interface DailyActivity {
-  date: string;
-  total_ms: number;
-  focused_ms: number;
-  session_count: number;
-}
-
-export interface TitleStat {
-  class: string;
-  title: string;
-  total_ms: number;
-  session_count: number;
-  last_used_at: string;
-}
-
-export interface AiMessage {
-  id: number;
-  created_at: string;
-  role: string;
-  content: string;
-  model: string;
-  complete: boolean | null;
 }
 
 export interface PaginatedResponse<T> {
@@ -214,21 +103,6 @@ export interface ConfigUpdateRequest {
   weekly_report_day?: number;
   weekly_report_hour?: number;
   weekly_report_minute?: number
-}
-
-export interface ActivityEvent {
-  id: number;
-  session_id: number | null;
-  state: string;
-  started_at: string;
-  ended_at: string | null;
-  duration_ms: number | null;
-}
-
-export interface AppMetadata {
-  desktop_id: string;
-  display_name: string;
-  icon: string;
 }
 
 export interface AppsMetadataResponse {

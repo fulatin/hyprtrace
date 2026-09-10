@@ -30,7 +30,7 @@ export default function ProjectsSection() {
   }, [stored]);
 
   const handleAddProject = () => {
-    setProjects([...projects, { id: undefined, name: '', color: '#22d3ee', sort_order: projects.length }]);
+    setProjects([...projects, { id: null, name: '', color: '#22d3ee', sort_order: projects.length }]);
   };
 
   const handleUpdateProject = (idx: number, field: 'name' | 'color', value: string) => {
@@ -54,7 +54,7 @@ export default function ProjectsSection() {
     // Use a negative temp id for unsaved projects: -1 → projects[0], -2 → projects[1], ...
     setProjectRules([
       ...projectRules,
-      { id: undefined, project_id: first.id ?? -1, pattern: '', priority: 0 },
+      { id: null, project_id: first.id ?? -1, pattern: '', priority: 0 },
     ]);
   };
 

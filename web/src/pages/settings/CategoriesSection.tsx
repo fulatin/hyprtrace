@@ -27,7 +27,7 @@ export default function CategoriesSection() {
   const categoryNames = categories.data?.categories ?? [];
 
   const handleAddCategory = () => {
-    setCategoryRules([...categoryRules, { pattern: '', category: 'other', priority: 0 }]);
+    setCategoryRules([...categoryRules, { id: null, pattern: '', category: 'other', priority: 0 }]);
   };
 
   const handleDeleteCategory = (idx: number) => {
