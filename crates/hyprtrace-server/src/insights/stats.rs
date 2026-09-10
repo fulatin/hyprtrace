@@ -206,3 +206,186 @@ pub(crate) fn robust_z(value: f64, window: &[f64]) -> (f64, f64) {
     };
     (med, if z.is_finite() { z } else { 0.0 })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::insights::forecast::forecast;
+    use chrono::{Duration as ChronoDuration, NaiveDate};
+    use std::collections::HashMap;
+
+    #[test]
+    fn ols_recovers_known_line() {
+        // y = 10 + 2x over 5 points: slope 2, intercept 10, perfect fit.
+        let values: Vec<f64> = (0..5).map(|x| 10.0 + 2.0 * x as f64).collect();
+        let fit = ols(&values);
+        assert!((fit.slope - 2.0).abs() < 1e-9, "slope {}", fit.slope);
+        assert!((fit.intercept - 10.0).abs() < 1e-9, "intercept {}", fit.intercept);
+        assert!((fit.r2 - 1.0).abs() < 1e-9, "r2 {}", fit.r2);
+        assert!(fit.mae < 1e-9, "mae {}", fit.mae);
+        assert!(fit.residual_std < 1e-9, "std {}", fit.residual_std);
+    }
+    #[test]
+    fn ols_r2_and_errors_on_noisy_series() {
+        // A flat series has no variance: r2 must be 0 rather than NaN.
+        let flat = vec![5.0, 5.0, 5.0, 5.0];
+        let fit = ols(&flat);
+        assert_eq!(fit.slope, 0.0);
+        assert_eq!(fit.r2, 0.0);
+        assert_eq!(fit.residual_std, 0.0);
+
+        // Perfectly anti-correlated series → slope negative, r2 = 1.
+        let down = vec![10.0, 8.0, 6.0, 4.0];
+        let fit = ols(&down);
+        assert!((fit.slope + 2.0).abs() < 1e-9);
+        assert!((fit.r2 - 1.0).abs() < 1e-9);
+
+        // One-point series: no slope information, intercept = the value.
+        let fit = ols(&[7.0]);
+        assert_eq!(fit.slope, 0.0);
+        assert_eq!(fit.intercept, 7.0);
+
+        // Empty input must not panic or produce NaN.
+        let fit = ols(&[]);
+        assert_eq!(fit.slope, 0.0);
+        assert_eq!(fit.intercept, 0.0);
+        assert!(fit.r2.is_finite() && fit.mae.is_finite() && fit.residual_std.is_finite());
+    }
+    #[test]
+    fn weekday_factors_scale_by_weekday_mean() {
+        // 2026-08-31 is a Monday. Give Mondays double the overall mean.
+        let dates = vec![
+            "2026-08-31".to_string(), // Mon
+            "2026-09-01".to_string(), // Tue
+            "2026-09-02".to_string(), // Wed
+            "2026-09-07".to_string(), // Mon
+            "2026-09-08".to_string(), // Tue
+            "2026-09-09".to_string(), // Wed
+        ];
+        let values = vec![200, 100, 100, 200, 100, 100];
+        let factors = weekday_factors(&dates, &values);
+        // overall mean = 133.33; Monday mean = 200 → 1.5
+        assert!((factors[0] - 1.5).abs() < 1e-9, "monday {}", factors[0]);
+        assert!((factors[1] - 0.75).abs() < 1e-9, "tuesday {}", factors[1]);
+        // Weekdays without data fall back to 1.0.
+        assert_eq!(factors[5], 1.0);
+        assert_eq!(factors[6], 1.0);
+    }
+    #[test]
+    fn weekday_factors_zero_mean_falls_back_to_one() {
+        let dates = vec!["2026-08-31".to_string(), "2026-09-01".to_string()];
+        let factors = weekday_factors(&dates, &[0, 0]);
+        assert!(factors.iter().all(|f| *f == 1.0));
+        let factors = weekday_factors(&[], &[]);
+        assert!(factors.iter().all(|f| *f == 1.0));
+    }
+    #[test]
+    fn weekday_factors_ignore_zero_filled_days_and_never_collapse_to_zero() {
+        // 14 continuous days ending 2026-09-09. Thursdays (2026-08-27 and
+        // 2026-09-03) have no activity at all, so the zero-filled series holds
+        // only zeros for weekday 3: its factor must be exactly 1.0, not 0.0.
+        let start = NaiveDate::parse_from_str("2026-08-27", "%Y-%m-%d").unwrap();
+        let mut dates = Vec::new();
+        let mut values = Vec::new();
+        for i in 0..14 {
+            let d = start + ChronoDuration::days(i);
+            let value: i64 = match weekday_mon0(d) {
+                3 => 0,          // Thursday: no active day in the window
+                0 => 10_000_000, // Monday: 2x the other active days
+                _ => 5_000_000,
+            };
+            dates.push(d.format("%Y-%m-%d").to_string());
+            values.push(value);
+        }
+
+        let factors = weekday_factors(&dates, &values);
+        assert_eq!(factors[3], 1.0, "zero-only weekday must be neutral");
+        assert!(
+            factors.iter().all(|f| f.is_finite() && *f > 0.0),
+            "all factors finite and positive: {factors:?}"
+        );
+        // An active weekday keeps its real factor: Monday mean 10M over an
+        // active-day mean of (10M + 5*5M)/6 = 5.833M → 12/7.
+        assert!(
+            (factors[0] - 12.0 / 7.0).abs() < 1e-9,
+            "monday factor {}",
+            factors[0]
+        );
+        assert!(factors[0] > 1.0, "monday should be above baseline");
+        assert!(factors[1] < 1.0, "tuesday should be below baseline");
+
+        // A future point on the zero-only weekday must still predict > 0.
+        let totals: HashMap<String, i64> =
+            dates.iter().cloned().zip(values.iter().cloned()).collect();
+        let r = forecast(&totals, "", "2026-09-09", 14, 7);
+        assert_eq!(r.forecast[0].date, "2026-09-10"); // a Thursday
+        assert!(
+            r.forecast[0].predicted_ms > 0,
+            "thursday forecast {:?}",
+            r.forecast[0]
+        );
+        assert!(r.tomorrow_projected_ms > 0, "tomorrow {}", r.tomorrow_projected_ms);
+        assert!(
+            r.weekday_factors.iter().all(|f| f.is_finite() && *f > 0.0),
+            "{:?}",
+            r.weekday_factors
+        );
+
+        // Empty input still yields seven neutral factors and no NaN.
+        let empty = weekday_factors(&[], &[]);
+        assert_eq!(empty, [1.0; 7]);
+    }
+    #[test]
+    fn weekday_factors_are_clamped_to_a_sane_range() {
+        // One enormous active day must not push its weekday factor to 1e9.
+        // With 7 active days a single huge Monday would otherwise score 7.0.
+        let dates = vec![
+            "2026-08-31".to_string(), // Mon, huge
+            "2026-09-01".to_string(),
+            "2026-09-02".to_string(),
+            "2026-09-03".to_string(),
+            "2026-09-04".to_string(),
+            "2026-09-05".to_string(),
+            "2026-09-06".to_string(),
+        ];
+        let values = vec![1_000_000_000i64, 1_000, 1_000, 1_000, 1_000, 1_000, 1_000];
+        let factors = weekday_factors(&dates, &values);
+        assert!((factors[0] - 5.0).abs() < 1e-9, "clamped high {}", factors[0]);
+        assert!((factors[1] - 0.2).abs() < 1e-9, "clamped low {}", factors[1]);
+    }
+    #[test]
+    fn pearson_sign_and_guards() {
+        let up = vec![1.0, 2.0, 3.0, 4.0];
+        let down = vec![4.0, 3.0, 2.0, 1.0];
+        assert!(pearson(&up, &down) < -0.99);
+        assert!(pearson(&up, &up) > 0.99);
+        // Zero variance → 0.0, not NaN.
+        assert_eq!(pearson(&[1.0, 1.0, 1.0], &up), 0.0);
+        // Fewer than 3 points → 0.0.
+        assert_eq!(pearson(&[1.0, 2.0], &[2.0, 1.0]), 0.0);
+        // Mismatched lengths are guarded too.
+        assert_eq!(pearson(&[1.0, 2.0, 3.0], &[1.0, 2.0]), 0.0);
+    }
+    #[test]
+    fn robust_z_score_ignores_single_spike() {
+        // Baseline 10 with one spike to 100: median 10, MAD small → the spike
+        // still scores high, but a normal day stays near 0.
+        let mut window: Vec<f64> = vec![10.0; 14];
+        window[13] = 100.0;
+        let (med, z_spike) = robust_z(100.0, &window);
+        assert_eq!(med, 10.0);
+        assert!(z_spike > 2.0, "spike z {}", z_spike);
+        let (_, z_normal) = robust_z(10.0, &window);
+        assert!(z_normal.abs() < 0.001, "normal z {}", z_normal);
+
+        // All-identical window → scale 0 → z 0 rather than NaN/Inf.
+        let (med, z) = robust_z(50.0, &[10.0; 7]);
+        assert_eq!(med, 10.0);
+        assert_eq!(z, 0.0);
+
+        // Empty window is guarded.
+        let (med, z) = robust_z(5.0, &[]);
+        assert_eq!(med, 0.0);
+        assert_eq!(z, 0.0);
+    }
+}

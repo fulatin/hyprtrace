@@ -186,3 +186,33 @@ pub(crate) fn finite(v: f64) -> f64 {
         0.0
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn forecast_trend_and_intervals_are_finite() {
+        let mut totals = HashMap::new();
+        // 10 rising days ending 2026-09-10.
+        for i in 0..10 {
+            let date = format!("2026-09-{:02}", i + 1);
+            totals.insert(date, (i as i64 + 1) * 1_000_000);
+        }
+        let r = forecast(&totals, "firefox", "2026-09-10", 10, 3);
+        assert_eq!(r.points.len(), 10);
+        assert_eq!(r.forecast.len(), 3);
+        assert!(r.slope_ms_per_day > 0.0);
+        assert_eq!(r.trend, "up");
+        assert!(r.points.iter().all(|p| p.lower_ms <= p.upper_ms));
+        assert!(r.forecast.iter().all(|p| p.lower_ms <= p.upper_ms));
+        // Empty data must not panic and must stay finite.
+        let r = forecast(&HashMap::new(), "", "2026-09-10", 30, 7);
+        assert_eq!(r.points.len(), 30);
+        assert_eq!(r.forecast.len(), 7);
+        assert_eq!(r.avg_ms, 0.0);
+        assert_eq!(r.trend, "flat");
+        assert!(r.slope_ms_per_day.is_finite() && r.residual_std_ms.is_finite());
+        assert!(r.points.iter().all(|p| p.lower_ms >= 0 && p.upper_ms >= 0));
+    }
+}

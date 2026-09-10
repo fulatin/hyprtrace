@@ -244,3 +244,62 @@ pub fn transitions(
         top_flows,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::insights::test_support::session;
+
+    #[test]
+    fn transition_matrix_rows_are_normalised() {
+        // kitty → firefox → kitty → kitty
+        let sessions = vec![
+            session("kitty", "2026-09-01T00:00:00Z", "2026-09-01T00:10:00Z", 600_000, "2026-09-01"),
+            session("firefox", "2026-09-01T00:11:00Z", "2026-09-01T00:20:00Z", 540_000, "2026-09-01"),
+            session("kitty", "2026-09-01T00:21:00Z", "2026-09-01T00:30:00Z", 540_000, "2026-09-01"),
+            session("kitty", "2026-09-01T00:31:00Z", "2026-09-01T00:40:00Z", 540_000, "2026-09-01"),
+        ];
+        let r = transitions(&sessions, "2026-09-01", "2026-09-01", 0, 12);
+        assert_eq!(r.total_transitions, 3);
+        assert_eq!(r.total_sessions, 4);
+        // kitty out = 3 (k→f, f→k, k→k is 2 from kitty: k→f and k→k); firefox out = 1
+        let kitty = r.nodes.iter().find(|n| n.class == "kitty").unwrap();
+        assert_eq!(kitty.out_total, 2);
+        assert!((kitty.self_probability - 0.5).abs() < 1e-9);
+        // Self edges are excluded from `edges`.
+        assert!(r.edges.iter().all(|e| e.from != e.to));
+        // Every matrix row sums to ~1 where the row has outgoing transitions.
+        for (i, row) in r.matrix.values.iter().enumerate() {
+            let sum: f64 = row.iter().sum();
+            let has_out = r.nodes[i].out_total > 0;
+            if has_out {
+                assert!((sum - 1.0).abs() < 1e-9, "row {i} sum {sum}");
+            } else {
+                assert_eq!(sum, 0.0);
+            }
+        }
+        // matrix[kitty][kitty] = 0.5 (self), matrix[kitty][firefox] = 0.5
+        let ki = r.matrix.classes.iter().position(|c| c == "kitty").unwrap();
+        let fi = r.matrix.classes.iter().position(|c| c == "firefox").unwrap();
+        assert!((r.matrix.values[ki][ki] - 0.5).abs() < 1e-9);
+        assert!((r.matrix.values[ki][fi] - 0.5).abs() < 1e-9);
+    }
+    #[test]
+    fn transition_edge_gap_is_clamped_and_probability_row_normalised() {
+        // firefox ends 00:10, kitty starts 00:05 → negative gap clamps to 0.
+        let sessions = vec![
+            session("firefox", "2026-09-01T00:00:00Z", "2026-09-01T00:10:00Z", 600_000, "2026-09-01"),
+            session("kitty", "2026-09-01T00:05:00Z", "2026-09-01T00:20:00Z", 900_000, "2026-09-01"),
+        ];
+        let r = transitions(&sessions, "2026-09-01", "2026-09-01", 0, 12);
+        assert_eq!(r.edges.len(), 1);
+        assert_eq!(r.edges[0].avg_gap_ms, 0);
+        assert!((r.edges[0].probability - 1.0).abs() < 1e-9);
+        assert_eq!(r.edges[0].from_out_total, 1);
+        // No sessions → valid empty response.
+        let empty = transitions(&[], "2026-09-01", "2026-09-01", 0, 12);
+        assert_eq!(empty.total_transitions, 0);
+        assert!(empty.nodes.is_empty() && empty.edges.is_empty());
+        assert!(empty.matrix.classes.is_empty() && empty.matrix.values.is_empty());
+    }
+}

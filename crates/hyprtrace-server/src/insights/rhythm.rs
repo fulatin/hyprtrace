@@ -77,3 +77,31 @@ pub fn rhythm(
         cells,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rhythm_averages_over_matching_weekdays() {
+        // 2026-08-31 (Mon) and 2026-09-07 (Mon) → 2 Mondays.
+        let rows = vec![
+            ("2026-08-31".to_string(), 9u8, 1_000_000i64),
+            ("2026-09-07".to_string(), 9, 3_000_000),
+            ("2026-09-01".to_string(), 9, 500_000), // Tuesday
+        ];
+        let r = rhythm(&rows, "2026-08-31", "2026-09-07");
+        let monday = r.cells.iter().find(|c| c.weekday == 0 && c.hour == 9).unwrap();
+        assert_eq!(monday.total_ms, 4_000_000);
+        assert_eq!(monday.days, 2);
+        assert_eq!(monday.avg_ms, 2_000_000);
+        let tuesday = r.cells.iter().find(|c| c.weekday == 1).unwrap();
+        assert_eq!(tuesday.days, 1);
+        assert_eq!(tuesday.avg_ms, 500_000);
+        assert_eq!(r.max_avg_ms, 2_000_000);
+        // Empty rows → valid empty response.
+        let empty = rhythm(&[], "2026-08-31", "2026-09-07");
+        assert!(empty.cells.is_empty());
+        assert_eq!(empty.max_avg_ms, 0);
+    }
+}
