@@ -1,5 +1,6 @@
 use chrono::Timelike;
 use rusqlite::params;
+use std::collections::HashSet;
 use std::time::Instant;
 
 impl super::Database {
@@ -299,6 +300,11 @@ impl super::Database {
     /// not available here (those markers live in memory only), so the duration
     /// is wall-clock based and can differ slightly from a session closed in
     /// flight — losing that precision is vastly better than losing the record.
+    ///
+    /// The summaries are recomputed for the affected days afterwards. Without
+    /// that step the finalised sessions were listed but counted in no total:
+    /// `daily_summary`/`hourly_summary` are maintained incrementally by
+    /// `end_session`, which this path does not go through.
     pub fn finalize_orphaned_sessions(&self) -> anyhow::Result<usize> {
         let mut stmt = self
             .conn
@@ -310,6 +316,19 @@ impl super::Database {
 
         let now = chrono::Utc::now();
         let mut count = 0usize;
+        // Local start dates whose summaries this run invalidates. Sessions are
+        // bucketed by their start date/hour (see `end_session`), so that is the
+        // only thing a retroactive close can change.
+        let mut affected_dates: HashSet<String> = HashSet::new();
+
+        // One transaction for the whole job. Closing the sessions and bringing
+        // the summaries in line with them must not be separable: an interruption
+        // in between would leave sessions that are listed but counted nowhere,
+        // which is precisely the bug this path used to have.
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
 
         for (id, started_at) in orphans {
             let started = chrono::DateTime::parse_from_rfc3339(&started_at)
@@ -346,15 +365,37 @@ impl super::Database {
             }
 
             let duration_ms = (ended - started).num_milliseconds().max(0);
+            // Same rule as `end_session` / `update_ongoing_focused_ms`, so a
+            // session closed here is indistinguishable from one closed in flight.
+            let focused_ms = std::cmp::max(0, duration_ms - self.focused_threshold_ms);
+            // Sessions are bucketed by their LOCAL start date (see `end_session`).
+            let start_date = started
+                .with_timezone(&chrono::Local)
+                .format("%Y-%m-%d")
+                .to_string();
 
-            self.conn.execute(
-                "UPDATE sessions SET ended_at = ?1, duration_ms = ?2 WHERE id = ?3",
-                params![ended.to_rfc3339(), duration_ms, id],
+            tx.execute(
+                "UPDATE sessions SET ended_at = ?1, duration_ms = ?2, focused_ms = ?3, date_local = ?4 WHERE id = ?5",
+                params![ended.to_rfc3339(), duration_ms, focused_ms, start_date, id],
             )?;
+            affected_dates.insert(start_date);
             count += 1;
         }
 
+        if !affected_dates.is_empty() {
+            self.write_summaries(&tx, Some(&affected_dates))?;
+        }
+        tx.commit()?;
+
+        if !affected_dates.is_empty() {
+            log::info!(
+                "Rebuilt summaries for {} day(s) affected by finalised sessions",
+                affected_dates.len()
+            );
+        }
+
         // No session is open any more; drop their monotonic start markers too.
+        // After the commit, so a rolled back transaction leaves them resumable.
         if let Ok(mut starts) = self.monotonic_starts.lock() {
             starts.clear();
         }

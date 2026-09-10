@@ -1,6 +1,6 @@
 use chrono::Timelike;
 use rusqlite::params;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 impl super::Database {
     /// Run idempotent schema migrations.
@@ -133,9 +133,34 @@ impl super::Database {
     ///
     /// The DELETE + INSERTs run inside a single transaction for the same reason
     /// as `backfill_date_local`: per-row autocommit statements cost a fsync
-    /// each and would otherwise hold the write lock for minutes at startup.
+    /// each and would otherwise hold the write lock for minutes.
     fn rebuild_summaries_from_sessions(&self) -> anyhow::Result<()> {
-        let mut stmt = self.conn.prepare(
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
+        self.write_summaries(&tx, None)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// The body of the rebuild, executed on a connection the caller already
+    /// owns a transaction for. Split out so `finalize_orphaned_sessions` can
+    /// close its sessions and fix the summaries in ONE transaction: closing them
+    /// and then being interrupted before the summaries follow would leave the
+    /// two disagreeing with no trace of it.
+    pub(super) fn write_summaries(
+        &self,
+        conn: &rusqlite::Connection,
+        only_dates: Option<&HashSet<String>>,
+    ) -> anyhow::Result<()> {
+        // An empty scope has nothing to delete and nothing to recompute; the
+        // `IN ()` it would produce is not valid SQL either.
+        if matches!(only_dates, Some(dates) if dates.is_empty()) {
+            return Ok(());
+        }
+
+        let mut stmt = conn.prepare(
             "SELECT started_at, class, duration_ms, COALESCE(focused_ms, 0)
              FROM sessions
              WHERE ended_at IS NOT NULL AND duration_ms >= 0",
@@ -159,6 +184,11 @@ impl super::Database {
             if let Some(dt) = chrono::DateTime::parse_from_rfc3339(&started_at).ok() {
                 let local = dt.with_timezone(&chrono::Local);
                 let date = local.format("%Y-%m-%d").to_string();
+                if let Some(dates) = only_dates {
+                    if !dates.contains(&date) {
+                        continue;
+                    }
+                }
                 let hour = local.hour() as u8;
                 let d = daily
                     .entry((date.clone(), class.clone()))
@@ -176,29 +206,46 @@ impl super::Database {
             }
         }
 
-        let tx = rusqlite::Transaction::new_unchecked(
-            &self.conn,
-            rusqlite::TransactionBehavior::Immediate,
-        )?;
-        tx.execute("DELETE FROM daily_summary", [])?;
+        // A scoped rebuild must only clear the days it is about to recompute —
+        // wiping the other days would erase them without putting anything back.
+        let mut scope: Vec<String> = match only_dates {
+            None => Vec::new(),
+            Some(dates) => dates.iter().cloned().collect(),
+        };
+        scope.sort();
+        let (daily_delete, hourly_delete) = if scope.is_empty() {
+            (
+                "DELETE FROM daily_summary".to_string(),
+                "DELETE FROM hourly_summary".to_string(),
+            )
+        } else {
+            let placeholders = vec!["?"; scope.len()].join(",");
+            (
+                format!("DELETE FROM daily_summary WHERE date IN ({placeholders})"),
+                format!("DELETE FROM hourly_summary WHERE date IN ({placeholders})"),
+            )
+        };
+        let scope_params: Vec<&dyn rusqlite::types::ToSql> = scope
+            .iter()
+            .map(|d| d as &dyn rusqlite::types::ToSql)
+            .collect();
+        conn.execute(&daily_delete, scope_params.as_slice())?;
         for ((date, class), (total_ms, session_count, focused_ms, focused_count)) in daily {
-            tx.execute(
+            conn.execute(
                 "INSERT INTO daily_summary (date, class, total_ms, session_count, focused_ms, focused_session_count)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![date, class, total_ms, session_count, focused_ms, focused_count],
             )?;
         }
 
-        tx.execute("DELETE FROM hourly_summary", [])?;
+        conn.execute(&hourly_delete, scope_params.as_slice())?;
         for ((date, hour, class), (total_ms, session_count, focused_ms)) in hourly {
-            tx.execute(
+            conn.execute(
                 "INSERT INTO hourly_summary (date, hour, class, total_ms, session_count, focused_ms)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![date, hour as i64, class, total_ms, session_count, focused_ms],
             )?;
         }
-        tx.commit()?;
-
         Ok(())
     }
 

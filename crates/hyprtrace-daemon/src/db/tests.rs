@@ -387,6 +387,103 @@
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// Closing the sessions a crash left open must reach the summary tables.
+    ///
+    /// They are maintained incrementally by `end_session`, a path finalisation
+    /// does not go through, so before this fix a finalised session was listed
+    /// in the UI but counted in no total until someone rebuilt the summaries by
+    /// hand. The rebuild is scoped to the affected days, and that scoping is
+    /// half the fix: a wider DELETE would erase days it does not recompute.
+    #[test]
+    fn finalize_orphaned_sessions_makes_the_summaries_count_them() {
+        let (dir, path) = temp_db("finalize-summaries");
+        let db = Database::open(&path, 20 * 60).unwrap();
+        db.migrate().unwrap();
+
+        // A summary row for an unrelated day, to prove the scoped rebuild does
+        // not clear days outside its scope.
+        db.conn
+            .execute(
+                "INSERT INTO daily_summary (date, class, total_ms, session_count, focused_ms, focused_session_count)
+                 VALUES ('2019-01-01', 'sentinel', 12345, 7, 0, 0)",
+                [],
+            )
+            .unwrap();
+
+        // An orphan started two hours ago whose last activity was 30 minutes in.
+        let started = chrono::Utc::now() - chrono::Duration::hours(2);
+        let last_activity = started + chrono::Duration::minutes(30);
+        let started_local = started.with_timezone(&chrono::Local);
+        let expected_date = started_local.format("%Y-%m-%d").to_string();
+        let expected_hour = started_local.hour() as i64;
+
+        db.conn
+            .execute(
+                "INSERT INTO sessions (class, title, workspace, started_at, activity_state, date_local)
+                 VALUES ('kitty', 'reboot', '5', ?1, 'active', ?2)",
+                params![started.to_rfc3339(), expected_date],
+            )
+            .unwrap();
+        let orphan_id = db.conn.last_insert_rowid();
+        db.conn
+            .execute(
+                "INSERT INTO activity_events (session_id, state, started_at, ended_at, duration_ms)
+                 VALUES (?1, 'active', ?2, ?2, 0)",
+                params![orphan_id, last_activity.to_rfc3339()],
+            )
+            .unwrap();
+
+        assert_eq!(db.finalize_orphaned_sessions().unwrap(), 1);
+
+        let expected_ms = 30 * 60 * 1000;
+        let (total_ms, session_count, focused_ms) = db
+            .conn
+            .query_row(
+                "SELECT total_ms, session_count, focused_ms FROM daily_summary
+                 WHERE date = ?1 AND class = 'kitty'",
+                params![expected_date],
+                |r| {
+                    Ok((
+                        r.get::<_, i64>(0)?,
+                        r.get::<_, i64>(1)?,
+                        r.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .expect("the finalised session must appear in daily_summary");
+        assert_eq!(total_ms, expected_ms, "the finalised duration is counted");
+        assert_eq!(session_count, 1);
+        assert_eq!(
+            focused_ms,
+            expected_ms - 20 * 60 * 1000,
+            "focused_ms uses the same rule as end_session"
+        );
+
+        let hourly_ms: i64 = db
+            .conn
+            .query_row(
+                "SELECT total_ms FROM hourly_summary
+                 WHERE date = ?1 AND hour = ?2 AND class = 'kitty'",
+                params![expected_date, expected_hour],
+                |r| r.get(0),
+            )
+            .expect("the finalised session must appear in hourly_summary");
+        assert_eq!(hourly_ms, expected_ms);
+
+        let sentinel: i64 = db
+            .conn
+            .query_row(
+                "SELECT total_ms FROM daily_summary WHERE date = '2019-01-01' AND class = 'sentinel'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("a day outside the scope must survive the scoped rebuild");
+        assert_eq!(sentinel, 12345);
+
+        drop(db);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[test]
     fn migrate_v6_repairs_negative_durations() {
         let dir = std::env::temp_dir().join(format!("hyprtrace-test4-{}", std::process::id()));
