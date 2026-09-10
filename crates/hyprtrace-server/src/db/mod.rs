@@ -10,9 +10,13 @@ use crate::models::{
 };
 use anyhow::Context;
 use chrono::Timelike;
+use like::like_match;
 use rusqlite::{params, Connection};
 use std::collections::HashMap;
 use std::path::Path;
+
+mod like;
+mod migrate;
 
 pub struct Database {
     conn: Connection,
@@ -35,172 +39,6 @@ impl Database {
             focused_threshold_ms: (focused_threshold_seconds * 1000) as i64,
         })
     }
-
-    /// Run idempotent schema migrations.
-    ///
-    /// The DDL is shared with the daemon through `schema/hyprtrace.sql` +
-    /// `include_str!` (see `crate::schema`), so there is no longer a second
-    /// hand-maintained copy to keep in sync.
-    pub fn migrate(&self) -> anyhow::Result<()> {
-        // Every statement in the shared file is `IF NOT EXISTS`: on a database
-        // written by an older build it creates only what is still missing, and
-        // the column upgrades below bring the existing tables up to date.
-        //
-        // This matters because the server can start before the daemon has ever
-        // run (install.sh enables both services with no ordering guarantee).
-        // Without these migrations every API would fail with "no such table"
-        // until the daemon writes the database once.
-        //
-        // Step order matters and mirrors the previous hand-written chain — in
-        // particular v6 (which may rebuild the summary tables) still runs
-        // before v7 (which adds and backfills `date_local`).
-        self.conn.execute_batch(crate::schema::SCHEMA_SQL)?;
-
-        self.migrate_v2()?;
-        self.migrate_v3()?;
-        self.migrate_v6()?;
-        self.migrate_v7()?;
-        Ok(())
-    }
-
-    fn migrate_v2(&self) -> anyhow::Result<()> {
-        self.add_column_if_missing("sessions", "activity_state", "TEXT", "'active'")?;
-        self.add_column_if_missing("sessions", "focused_ms", "INTEGER", "0")?;
-
-        self.add_column_if_missing("daily_summary", "focused_ms", "INTEGER", "0")?;
-        self.add_column_if_missing("daily_summary", "focused_session_count", "INTEGER", "0")?;
-
-        self.add_column_if_missing("ai_conversations", "complete", "INTEGER", "1")?;
-
-        // `activity_events` and `hourly_summary` come from the shared schema.
-        Ok(())
-    }
-
-    fn migrate_v3(&self) -> anyhow::Result<()> {
-        self.add_column_if_missing("sessions", "pid", "INTEGER", "NULL")?;
-        // `app_resources` comes from the shared schema.
-        Ok(())
-    }
-
-    /// The tables v4/v5 introduced (`disruptions`, `goals`) are created by the
-    /// shared schema file, so there is no per-step copy of their DDL here.
-
-    /// Mirrors the daemon's v6: clamp negative durations left by a wall-clock
-    /// jump and rebuild the summary tables from the repaired sessions. The
-    /// server can start before the daemon has ever run (no ordering guarantee
-    /// in install.sh), so it must run the same repair as the daemon, otherwise
-    /// negative summaries linger when only the server initialised the DB.
-    fn migrate_v6(&self) -> anyhow::Result<()> {
-        let sessions_repaired = self.conn.execute(
-            "UPDATE sessions SET duration_ms = 0, focused_ms = MAX(COALESCE(focused_ms, 0), 0)
-             WHERE duration_ms < 0",
-            [],
-        )?;
-        let events_repaired = self.conn.execute(
-            "UPDATE activity_events SET duration_ms = 0 WHERE duration_ms < 0",
-            [],
-        )?;
-        if sessions_repaired > 0 || events_repaired > 0 {
-            log::warn!(
-                "Clamped {} negative session duration(s) and {} negative activity_event duration(s) to 0",
-                sessions_repaired,
-                events_repaired
-            );
-        }
-
-        let negative_summary_rows: i64 = self.conn.query_row(
-            "SELECT (SELECT COUNT(*) FROM daily_summary WHERE total_ms < 0 OR focused_ms < 0)
-                  + (SELECT COUNT(*) FROM hourly_summary WHERE total_ms < 0 OR focused_ms < 0)",
-            [],
-            |row| row.get(0),
-        )?;
-
-        if sessions_repaired > 0 || events_repaired > 0 || negative_summary_rows > 0 {
-            self.rebuild_daily_summary()?;
-            self.rebuild_hourly_summary()?;
-        }
-        Ok(())
-    }
-
-    /// Mirrors the daemon's v7: add the local-calendar-date column to the
-    /// date-keyed tables and backfill existing rows, inside one transaction.
-    fn migrate_v7(&self) -> anyhow::Result<()> {
-        self.add_column_if_missing("sessions", "date_local", "TEXT", "''")?;
-        self.add_column_if_missing("disruptions", "date_local", "TEXT", "''")?;
-        self.add_column_if_missing("activity_events", "date_local", "TEXT", "''")?;
-        self.add_column_if_missing("app_resources", "date_local", "TEXT", "''")?;
-
-        self.backfill_date_local("sessions", "started_at")?;
-        self.backfill_date_local("disruptions", "occurred_at")?;
-        self.backfill_date_local("activity_events", "started_at")?;
-        self.backfill_date_local("app_resources", "sampled_at")?;
-        Ok(())
-    }
-
-    fn add_column_if_missing(
-        &self,
-        table: &str,
-        column: &str,
-        col_type: &str,
-        default: &str,
-    ) -> anyhow::Result<()> {
-        let exists: bool = {
-            let mut stmt = self
-                .conn
-                .prepare(&format!("PRAGMA table_info({})", table))?;
-            let rows: Vec<String> = stmt
-                .query_map([], |row| row.get::<_, String>(1))?
-                .filter_map(|r| r.ok())
-                .collect();
-            rows.iter().any(|name| name == column)
-        };
-        if !exists {
-            let sql = format!(
-                "ALTER TABLE {} ADD COLUMN {} {} DEFAULT {}",
-                table, column, col_type, default
-            );
-            self.conn.execute_batch(&sql)?;
-            log::info!("Added column {}.{} ({})", table, column, col_type);
-        }
-        Ok(())
-    }
-
-    /// Compute the local calendar date (`YYYY-MM-DD`) of a stored row from its
-    /// UTC timestamp column, for any rows whose `date_local` is still empty.
-    /// Runs in one transaction (a per-row autocommit loop would be far slower).
-    fn backfill_date_local(&self, table: &str, ts_col: &str) -> anyhow::Result<()> {
-        let mut stmt = self.conn.prepare(&format!(
-            "SELECT id, {ts_col} FROM {table} WHERE date_local = ''"
-        ))?;
-        let rows: Vec<(i64, String)> = stmt
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
-            .collect::<Result<_, _>>()?;
-        drop(stmt);
-        if rows.is_empty() {
-            return Ok(());
-        }
-
-        let tx = rusqlite::Transaction::new_unchecked(
-            &self.conn,
-            rusqlite::TransactionBehavior::Immediate,
-        )?;
-        let mut upd = tx.prepare(&format!("UPDATE {table} SET date_local = ?1 WHERE id = ?2"))?;
-        let mut updated = 0usize;
-        for (id, ts) in rows {
-            if let Some(date) = local_date_from_rfc3339(&ts) {
-                upd.execute(params![date, id])?;
-                updated += 1;
-            }
-        }
-        drop(upd);
-        tx.commit()?;
-
-        if updated > 0 {
-            log::info!("Backfilled date_local for {table}: {updated} row(s)");
-        }
-        Ok(())
-    }
-
     /// Create the app_categories table (if missing) and seed default rules.
     pub fn ensure_categories(&self) -> anyhow::Result<()> {
         self.conn.execute_batch(
@@ -268,7 +106,65 @@ impl Database {
         }
         Ok(())
     }
+    /// All category rules, highest priority first.
+    pub fn categories(&self) -> anyhow::Result<Vec<CategoryRule>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, pattern, category, priority FROM app_categories
+             ORDER BY priority DESC, id ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(CategoryRule {
+                id: Some(row.get(0)?),
+                pattern: row.get(1)?,
+                category: row.get(2)?,
+                priority: row.get(3)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
 
+    /// Replace all category rules with the given list.
+    pub fn set_categories(&self, rules: &[CategoryRule]) -> anyhow::Result<()> {
+        self.conn.execute("DELETE FROM app_categories", [])?;
+        let mut stmt = self.conn.prepare(
+            "INSERT INTO app_categories (pattern, category, priority) VALUES (?1, ?2, ?3)",
+        )?;
+        for r in rules {
+            stmt.execute(params![r.pattern.trim(), r.category.trim(), r.priority])?;
+        }
+        Ok(())
+    }
+
+    /// Classify an app class by matching rules (SQLite LIKE semantics, case-insensitive).
+    pub fn categorize(&self, class: &str) -> String {
+        let rules = match self.categories() {
+            Ok(r) => r,
+            Err(_) => return "other".to_string(),
+        };
+        for rule in rules {
+            if like_match(&rule.pattern, class) {
+                return rule.category;
+            }
+        }
+        "other".to_string()
+    }
+
+    pub fn known_categories() -> Vec<String> {
+        [
+            "development",
+            "browsing",
+            "gaming",
+            "social",
+            "media",
+            "productivity",
+            "utility",
+            "system",
+            "other",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
+    }
     /// Create the projects + project_rules tables (if missing).
     pub fn ensure_projects(&self) -> anyhow::Result<()> {
         self.conn.execute_batch(
@@ -478,67 +374,6 @@ impl Database {
         out.sort_by(|a, b| b.total_ms.cmp(&a.total_ms));
         Ok(out)
     }
-
-    /// All category rules, highest priority first.
-    pub fn categories(&self) -> anyhow::Result<Vec<CategoryRule>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, pattern, category, priority FROM app_categories
-             ORDER BY priority DESC, id ASC",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            Ok(CategoryRule {
-                id: Some(row.get(0)?),
-                pattern: row.get(1)?,
-                category: row.get(2)?,
-                priority: row.get(3)?,
-            })
-        })?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
-    }
-
-    /// Replace all category rules with the given list.
-    pub fn set_categories(&self, rules: &[CategoryRule]) -> anyhow::Result<()> {
-        self.conn.execute("DELETE FROM app_categories", [])?;
-        let mut stmt = self.conn.prepare(
-            "INSERT INTO app_categories (pattern, category, priority) VALUES (?1, ?2, ?3)",
-        )?;
-        for r in rules {
-            stmt.execute(params![r.pattern.trim(), r.category.trim(), r.priority])?;
-        }
-        Ok(())
-    }
-
-    /// Classify an app class by matching rules (SQLite LIKE semantics, case-insensitive).
-    pub fn categorize(&self, class: &str) -> String {
-        let rules = match self.categories() {
-            Ok(r) => r,
-            Err(_) => return "other".to_string(),
-        };
-        for rule in rules {
-            if like_match(&rule.pattern, class) {
-                return rule.category;
-            }
-        }
-        "other".to_string()
-    }
-
-    pub fn known_categories() -> Vec<String> {
-        [
-            "development",
-            "browsing",
-            "gaming",
-            "social",
-            "media",
-            "productivity",
-            "utility",
-            "system",
-            "other",
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect()
-    }
-
     pub fn today_summary(&self, date: &str) -> anyhow::Result<TodaySummary> {
         let total_active_ms: i64 = self.conn.query_row(
             "SELECT COALESCE(SUM(total_ms), 0) FROM daily_summary WHERE date = ?1",
@@ -658,7 +493,6 @@ impl Database {
         }
         Ok(out)
     }
-
     /// Aggregate finished sessions by window title over a date range, optionally
     /// restricted to one app class. Empty titles are ignored. Sorted by time desc.
     pub fn title_stats(
@@ -782,7 +616,6 @@ impl Database {
 
         Ok(results)
     }
-
     /// Aggregate resource samples by app class over a date range.
     pub fn resource_stats(
         &self,
@@ -837,7 +670,6 @@ impl Database {
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
-
     /// Compute a 0-100 efficiency score for a single day.
     ///
     /// Factors (each mapped to a sub-score, summed):
@@ -937,7 +769,6 @@ impl Database {
             total_active_ms,
         })
     }
-
     pub fn goals(&self) -> anyhow::Result<Vec<Goal>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, target_type, target_key, daily_target_ms, enabled FROM goals",
@@ -954,341 +785,6 @@ impl Database {
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
-
-    /// Build a Markdown usage report for a date range.
-    pub fn report(&self, from: &str, to: &str) -> anyhow::Result<String> {
-        let mut out = String::new();
-        out.push_str(&format!("# HyprTrace Usage Report\n\n"));
-        out.push_str(&format!("**Period:** {} → {}\n\n", from, to));
-
-        // Daily totals.
-        let total_ms: i64 = self.conn.query_row(
-            "SELECT COALESCE(SUM(total_ms), 0) FROM daily_summary WHERE date BETWEEN ?1 AND ?2",
-            params![from, to],
-            |r| r.get(0),
-        )?;
-        let focused_ms: i64 = self.conn.query_row(
-            "SELECT COALESCE(SUM(focused_ms), 0) FROM daily_summary WHERE date BETWEEN ?1 AND ?2",
-            params![from, to],
-            |r| r.get(0),
-        )?;
-        let sessions: i64 = self.conn.query_row(
-            "SELECT COALESCE(SUM(session_count), 0) FROM daily_summary WHERE date BETWEEN ?1 AND ?2",
-            params![from, to],
-            |r| r.get(0),
-        )?;
-        let hours = total_ms as f64 / 3_600_000.0;
-        out.push_str(&format!("**Total active time:** {:.1}h\n", hours));
-        out.push_str(&format!(
-            "**Focused time:** {:.1}h ({:.0}%)\n",
-            focused_ms as f64 / 3_600_000.0,
-            if total_ms > 0 {
-                focused_ms as f64 / total_ms as f64 * 100.0
-            } else {
-                0.0
-            }
-        ));
-        out.push_str(&format!("**Sessions:** {}\n", sessions));
-        if total_ms > 0 {
-            out.push_str(&format!(
-                "**Avg session length:** {:.1} min\n",
-                total_ms as f64 / sessions.max(1) as f64 / 60_000.0
-            ));
-        }
-        out.push_str("\n");
-
-        // Top apps.
-        out.push_str("## Top Apps\n\n");
-        out.push_str("| App | Time | % | Focused |\n|---|---|---|---|\n");
-        let apps = self.app_ranking(from, to, 15)?;
-        for app in apps {
-            out.push_str(&format!(
-                "| {} | {:.1}h | {:.1}% | {:.1}h |\n",
-                app.class,
-                app.total_ms as f64 / 3_600_000.0,
-                app.percentage,
-                app.focused_ms as f64 / 3_600_000.0,
-            ));
-        }
-        out.push_str("\n");
-
-        // Daily breakdown.
-        out.push_str("## Daily Breakdown\n\n");
-        out.push_str("| Date | Active | Focused | Sessions |\n|---|---|---|---|\n");
-        let mut stmt = self.conn.prepare(
-            "SELECT date, SUM(total_ms), SUM(focused_ms), SUM(session_count)
-             FROM daily_summary WHERE date BETWEEN ?1 AND ?2
-             GROUP BY date ORDER BY date",
-        )?;
-        let rows = stmt.query_map(params![from, to], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, i64>(1)?,
-                r.get::<_, i64>(2)?,
-                r.get::<_, i64>(3)?,
-            ))
-        })?;
-        for r in rows {
-            let (date, t, f, s) = r?;
-            out.push_str(&format!(
-                "| {} | {:.1}h | {:.1}h | {} |\n",
-                date,
-                t as f64 / 3_600_000.0,
-                f as f64 / 3_600_000.0,
-                s
-            ));
-        }
-        out.push_str("\n");
-
-        // Interruptions.
-        let notifications: i64 = self.conn.query_row(
-            "SELECT COALESCE(COUNT(*), 0) FROM disruptions
-             WHERE date_local BETWEEN ?1 AND ?2 AND kind = 'notification'",
-            params![from, to],
-            |r| r.get(0),
-        )?;
-        let copies: i64 = self.conn.query_row(
-            "SELECT COALESCE(COUNT(*), 0) FROM disruptions
-             WHERE date_local BETWEEN ?1 AND ?2 AND kind = 'clipboard'",
-            params![from, to],
-            |r| r.get(0),
-        )?;
-        out.push_str(&format!(
-            "## Interruptions\n\nNotifications: {}\n\nClipboard copies: {}\n",
-            notifications, copies
-        ));
-
-        Ok(out)
-    }
-
-    /// Compact weekly totals for the scheduled report notification:
-    /// `(total_ms across all classes, top class by total_ms)`.
-    pub fn weekly_totals(&self, from: &str, to: &str) -> anyhow::Result<(i64, String)> {
-        let total_ms: i64 = self.conn.query_row(
-            "SELECT COALESCE(SUM(total_ms), 0) FROM daily_summary WHERE date BETWEEN ?1 AND ?2",
-            params![from, to],
-            |r| r.get(0),
-        )?;
-        let top_class: String = self.conn.query_row(
-            "SELECT COALESCE((SELECT class FROM daily_summary
-                 WHERE date BETWEEN ?1 AND ?2
-                 GROUP BY class ORDER BY SUM(total_ms) DESC LIMIT 1), '')",
-            params![from, to],
-            |r| r.get(0),
-        )?;
-        Ok((total_ms, top_class))
-    }
-
-    /// Predict today's remaining and tomorrow's usage via linear regression over
-    /// the past `window` days of daily active time.
-    pub fn predict(&self, window: i64) -> anyhow::Result<TrendPrediction> {
-        let window = window.clamp(3, 30);
-        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-        let start = (chrono::Local::now() - chrono::Duration::days(window - 1))
-            .format("%Y-%m-%d")
-            .to_string();
-
-        let mut stmt = self.conn.prepare(
-            "SELECT date, COALESCE(SUM(total_ms), 0) FROM daily_summary
-             WHERE date BETWEEN ?1 AND ?2 GROUP BY date ORDER BY date",
-        )?;
-        let rows = stmt.query_map(params![start, today], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
-        })?;
-        let mut daily: Vec<(String, i64)> = Vec::new();
-        for r in rows {
-            daily.push(r?);
-        }
-
-        let today_ms = daily
-            .iter()
-            .find(|(d, _)| *d == today)
-            .map(|(_, ms)| *ms)
-            .unwrap_or(0);
-
-        // Linear regression y = a + b*x over the last `window` days.
-        let n = daily.len() as f64;
-        let (sum_x, sum_y, sum_xy, sum_xx) = daily.iter().enumerate().fold(
-            (0.0f64, 0.0f64, 0.0f64, 0.0f64),
-            |(sx, sy, sxy, sxx), (i, (_, y))| {
-                let x = i as f64;
-                (sx + x, sy + *y as f64, sxy + x * *y as f64, sxx + x * x)
-            },
-        );
-        let (slope, intercept) = if n > 1.0 {
-            let denom = n * sum_xx - sum_x * sum_x;
-            if denom.abs() > f64::EPSILON {
-                let b = (n * sum_xy - sum_x * sum_y) / denom;
-                let a = (sum_y - b * sum_x) / n;
-                (b, a)
-            } else {
-                (0.0, if n > 0.0 { sum_y / n } else { 0.0 })
-            }
-        } else {
-            (0.0, if n > 0.0 { sum_y / n } else { 0.0 })
-        };
-
-        let daily_avg = if n > 0.0 { (sum_y / n) as i64 } else { 0 };
-        // Next day index = n (tomorrow). Clamp predictions to [0, 16h].
-        let clamp = |v: f64| (v.round() as i64).clamp(0, 16 * 3600 * 1000);
-        let predicted_tomorrow_ms = clamp(intercept + slope * n);
-        // Today's predicted full-day value; keep at least what we've recorded.
-        let predicted_today_full = clamp(intercept + slope * (n - 1.0));
-        let predicted_today_ms = predicted_today_full.max(today_ms);
-
-        Ok(TrendPrediction {
-            today_ms,
-            predicted_today_ms,
-            predicted_tomorrow_ms,
-            daily_avg_ms: daily_avg,
-            slope,
-            window_days: window,
-        })
-    }
-
-    /// Compact live status for lightweight consumers (e.g. Waybar).
-    pub fn current_status(&self) -> anyhow::Result<CurrentStatus> {
-        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-
-        let current_app: String = self.conn.query_row(
-            "SELECT class FROM sessions WHERE ended_at IS NULL ORDER BY started_at DESC LIMIT 1",
-            [],
-            |r| r.get(0),
-        ).unwrap_or_else(|_| "—".to_string());
-
-        let current_session_min: i64 = self.conn.query_row(
-            "SELECT COALESCE(CAST((julianday('now') - julianday(started_at)) * 1440 AS INTEGER), 0)
-             FROM sessions WHERE ended_at IS NULL ORDER BY started_at DESC LIMIT 1",
-            [],
-            |r| r.get(0),
-        ).unwrap_or(0);
-
-        let today_ms: i64 = self
-            .conn
-            .query_row(
-                "SELECT COALESCE(SUM(total_ms), 0) FROM daily_summary WHERE date = ?1",
-                params![today],
-                |r| r.get(0),
-            )
-            .unwrap_or(0);
-        let today_focused_ms: i64 = self
-            .conn
-            .query_row(
-                "SELECT COALESCE(SUM(focused_ms), 0) FROM daily_summary WHERE date = ?1",
-                params![today],
-                |r| r.get(0),
-            )
-            .unwrap_or(0);
-
-        // First enabled goal (target) for a progress bar.
-        let (goal_name, goal_ms): (Option<String>, i64) = self
-            .conn
-            .query_row(
-                "SELECT name, daily_target_ms FROM goals WHERE enabled = 1 ORDER BY id LIMIT 1",
-                [],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .map(|(n, m): (String, i64)| (Some(n), m))
-            .unwrap_or((None, 0));
-
-        let today_pct_goal = if goal_ms > 0 {
-            (today_ms as f64 / goal_ms as f64) * 100.0
-        } else {
-            0.0
-        };
-
-        let efficiency_score = self.efficiency_score(&today).ok().map(|e| e.score);
-
-        Ok(CurrentStatus {
-            current_app,
-            current_session_min,
-            today_ms,
-            today_focused_ms,
-            today_pct_goal,
-            goal_name,
-            efficiency_score,
-        })
-    }
-
-    /// Analyze historical sessions to recommend which workspace each app should
-    /// live on, based on where the user spends the most time per app.
-    pub fn workspace_recommendations(
-        &self,
-        days: i64,
-    ) -> anyhow::Result<Vec<WorkspaceRecommendation>> {
-        let from = (chrono::Local::now() - chrono::Duration::days(days))
-            .format("%Y-%m-%d")
-            .to_string();
-        let to = chrono::Local::now().format("%Y-%m-%d").to_string();
-
-        // App × workspace totals over the window.
-        let mut stmt = self.conn.prepare(
-            "SELECT class, workspace, SUM(duration_ms), COUNT(*)
-             FROM sessions
-             WHERE ended_at IS NOT NULL AND duration_ms > 0 AND workspace IS NOT NULL
-               AND date_local BETWEEN ?1 AND ?2
-             GROUP BY class, workspace",
-        )?;
-        let rows = stmt.query_map(params![from, to], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, i64>(2)?,
-                r.get::<_, i64>(3)?,
-            ))
-        })?;
-
-        // Sum per app first, then per app find the dominant workspace.
-        let mut app_total: std::collections::HashMap<String, i64> =
-            std::collections::HashMap::new();
-        let mut app_ws: std::collections::HashMap<(String, String), (i64, i64)> =
-            std::collections::HashMap::new();
-        for r in rows {
-            let (class, ws, ms, count) = r?;
-            if ws.is_empty() {
-                continue;
-            }
-            *app_total.entry(class.clone()).or_insert(0) += ms;
-            let e = app_ws.entry((class, ws)).or_insert((0, 0));
-            e.0 += ms;
-            e.1 += count;
-        }
-
-        let mut out = Vec::new();
-        for (class, total) in app_total {
-            let best = app_ws
-                .iter()
-                .filter(|((c, _), _)| *c == class)
-                .max_by_key(|(_, (ms, _))| *ms)
-                .map(|((_, ws), (ms, count))| (ws.clone(), *ms, *count));
-            if let Some((ws, ws_ms, count)) = best {
-                let pct = if total > 0 {
-                    ws_ms as f64 / total as f64 * 100.0
-                } else {
-                    0.0
-                };
-                let confidence = if pct >= 70.0 {
-                    "high".to_string()
-                } else if pct >= 40.0 {
-                    "medium".to_string()
-                } else {
-                    "low".to_string()
-                };
-                out.push(WorkspaceRecommendation {
-                    app: class,
-                    workspace: ws,
-                    time_pct: pct,
-                    session_count: count,
-                    total_ms: ws_ms,
-                    confidence,
-                });
-            }
-        }
-
-        out.sort_by(|a, b| b.total_ms.cmp(&a.total_ms));
-        Ok(out)
-    }
-
     /// Persist goals, either replacing the whole table or merging by scope.
     ///
     /// `replace_all = true` keeps the historical "the caller owns the full
@@ -1432,7 +928,336 @@ impl Database {
         }
         Ok(out)
     }
+    /// Build a Markdown usage report for a date range.
+    pub fn report(&self, from: &str, to: &str) -> anyhow::Result<String> {
+        let mut out = String::new();
+        out.push_str(&format!("# HyprTrace Usage Report\n\n"));
+        out.push_str(&format!("**Period:** {} → {}\n\n", from, to));
 
+        // Daily totals.
+        let total_ms: i64 = self.conn.query_row(
+            "SELECT COALESCE(SUM(total_ms), 0) FROM daily_summary WHERE date BETWEEN ?1 AND ?2",
+            params![from, to],
+            |r| r.get(0),
+        )?;
+        let focused_ms: i64 = self.conn.query_row(
+            "SELECT COALESCE(SUM(focused_ms), 0) FROM daily_summary WHERE date BETWEEN ?1 AND ?2",
+            params![from, to],
+            |r| r.get(0),
+        )?;
+        let sessions: i64 = self.conn.query_row(
+            "SELECT COALESCE(SUM(session_count), 0) FROM daily_summary WHERE date BETWEEN ?1 AND ?2",
+            params![from, to],
+            |r| r.get(0),
+        )?;
+        let hours = total_ms as f64 / 3_600_000.0;
+        out.push_str(&format!("**Total active time:** {:.1}h\n", hours));
+        out.push_str(&format!(
+            "**Focused time:** {:.1}h ({:.0}%)\n",
+            focused_ms as f64 / 3_600_000.0,
+            if total_ms > 0 {
+                focused_ms as f64 / total_ms as f64 * 100.0
+            } else {
+                0.0
+            }
+        ));
+        out.push_str(&format!("**Sessions:** {}\n", sessions));
+        if total_ms > 0 {
+            out.push_str(&format!(
+                "**Avg session length:** {:.1} min\n",
+                total_ms as f64 / sessions.max(1) as f64 / 60_000.0
+            ));
+        }
+        out.push_str("\n");
+
+        // Top apps.
+        out.push_str("## Top Apps\n\n");
+        out.push_str("| App | Time | % | Focused |\n|---|---|---|---|\n");
+        let apps = self.app_ranking(from, to, 15)?;
+        for app in apps {
+            out.push_str(&format!(
+                "| {} | {:.1}h | {:.1}% | {:.1}h |\n",
+                app.class,
+                app.total_ms as f64 / 3_600_000.0,
+                app.percentage,
+                app.focused_ms as f64 / 3_600_000.0,
+            ));
+        }
+        out.push_str("\n");
+
+        // Daily breakdown.
+        out.push_str("## Daily Breakdown\n\n");
+        out.push_str("| Date | Active | Focused | Sessions |\n|---|---|---|---|\n");
+        let mut stmt = self.conn.prepare(
+            "SELECT date, SUM(total_ms), SUM(focused_ms), SUM(session_count)
+             FROM daily_summary WHERE date BETWEEN ?1 AND ?2
+             GROUP BY date ORDER BY date",
+        )?;
+        let rows = stmt.query_map(params![from, to], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, i64>(3)?,
+            ))
+        })?;
+        for r in rows {
+            let (date, t, f, s) = r?;
+            out.push_str(&format!(
+                "| {} | {:.1}h | {:.1}h | {} |\n",
+                date,
+                t as f64 / 3_600_000.0,
+                f as f64 / 3_600_000.0,
+                s
+            ));
+        }
+        out.push_str("\n");
+
+        // Interruptions.
+        let notifications: i64 = self.conn.query_row(
+            "SELECT COALESCE(COUNT(*), 0) FROM disruptions
+             WHERE date_local BETWEEN ?1 AND ?2 AND kind = 'notification'",
+            params![from, to],
+            |r| r.get(0),
+        )?;
+        let copies: i64 = self.conn.query_row(
+            "SELECT COALESCE(COUNT(*), 0) FROM disruptions
+             WHERE date_local BETWEEN ?1 AND ?2 AND kind = 'clipboard'",
+            params![from, to],
+            |r| r.get(0),
+        )?;
+        out.push_str(&format!(
+            "## Interruptions\n\nNotifications: {}\n\nClipboard copies: {}\n",
+            notifications, copies
+        ));
+
+        Ok(out)
+    }
+
+    /// Compact weekly totals for the scheduled report notification:
+    /// `(total_ms across all classes, top class by total_ms)`.
+    pub fn weekly_totals(&self, from: &str, to: &str) -> anyhow::Result<(i64, String)> {
+        let total_ms: i64 = self.conn.query_row(
+            "SELECT COALESCE(SUM(total_ms), 0) FROM daily_summary WHERE date BETWEEN ?1 AND ?2",
+            params![from, to],
+            |r| r.get(0),
+        )?;
+        let top_class: String = self.conn.query_row(
+            "SELECT COALESCE((SELECT class FROM daily_summary
+                 WHERE date BETWEEN ?1 AND ?2
+                 GROUP BY class ORDER BY SUM(total_ms) DESC LIMIT 1), '')",
+            params![from, to],
+            |r| r.get(0),
+        )?;
+        Ok((total_ms, top_class))
+    }
+    /// Predict today's remaining and tomorrow's usage via linear regression over
+    /// the past `window` days of daily active time.
+    pub fn predict(&self, window: i64) -> anyhow::Result<TrendPrediction> {
+        let window = window.clamp(3, 30);
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let start = (chrono::Local::now() - chrono::Duration::days(window - 1))
+            .format("%Y-%m-%d")
+            .to_string();
+
+        let mut stmt = self.conn.prepare(
+            "SELECT date, COALESCE(SUM(total_ms), 0) FROM daily_summary
+             WHERE date BETWEEN ?1 AND ?2 GROUP BY date ORDER BY date",
+        )?;
+        let rows = stmt.query_map(params![start, today], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+        })?;
+        let mut daily: Vec<(String, i64)> = Vec::new();
+        for r in rows {
+            daily.push(r?);
+        }
+
+        let today_ms = daily
+            .iter()
+            .find(|(d, _)| *d == today)
+            .map(|(_, ms)| *ms)
+            .unwrap_or(0);
+
+        // Linear regression y = a + b*x over the last `window` days.
+        let n = daily.len() as f64;
+        let (sum_x, sum_y, sum_xy, sum_xx) = daily.iter().enumerate().fold(
+            (0.0f64, 0.0f64, 0.0f64, 0.0f64),
+            |(sx, sy, sxy, sxx), (i, (_, y))| {
+                let x = i as f64;
+                (sx + x, sy + *y as f64, sxy + x * *y as f64, sxx + x * x)
+            },
+        );
+        let (slope, intercept) = if n > 1.0 {
+            let denom = n * sum_xx - sum_x * sum_x;
+            if denom.abs() > f64::EPSILON {
+                let b = (n * sum_xy - sum_x * sum_y) / denom;
+                let a = (sum_y - b * sum_x) / n;
+                (b, a)
+            } else {
+                (0.0, if n > 0.0 { sum_y / n } else { 0.0 })
+            }
+        } else {
+            (0.0, if n > 0.0 { sum_y / n } else { 0.0 })
+        };
+
+        let daily_avg = if n > 0.0 { (sum_y / n) as i64 } else { 0 };
+        // Next day index = n (tomorrow). Clamp predictions to [0, 16h].
+        let clamp = |v: f64| (v.round() as i64).clamp(0, 16 * 3600 * 1000);
+        let predicted_tomorrow_ms = clamp(intercept + slope * n);
+        // Today's predicted full-day value; keep at least what we've recorded.
+        let predicted_today_full = clamp(intercept + slope * (n - 1.0));
+        let predicted_today_ms = predicted_today_full.max(today_ms);
+
+        Ok(TrendPrediction {
+            today_ms,
+            predicted_today_ms,
+            predicted_tomorrow_ms,
+            daily_avg_ms: daily_avg,
+            slope,
+            window_days: window,
+        })
+    }
+    /// Compact live status for lightweight consumers (e.g. Waybar).
+    pub fn current_status(&self) -> anyhow::Result<CurrentStatus> {
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+
+        let current_app: String = self.conn.query_row(
+            "SELECT class FROM sessions WHERE ended_at IS NULL ORDER BY started_at DESC LIMIT 1",
+            [],
+            |r| r.get(0),
+        ).unwrap_or_else(|_| "—".to_string());
+
+        let current_session_min: i64 = self.conn.query_row(
+            "SELECT COALESCE(CAST((julianday('now') - julianday(started_at)) * 1440 AS INTEGER), 0)
+             FROM sessions WHERE ended_at IS NULL ORDER BY started_at DESC LIMIT 1",
+            [],
+            |r| r.get(0),
+        ).unwrap_or(0);
+
+        let today_ms: i64 = self
+            .conn
+            .query_row(
+                "SELECT COALESCE(SUM(total_ms), 0) FROM daily_summary WHERE date = ?1",
+                params![today],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        let today_focused_ms: i64 = self
+            .conn
+            .query_row(
+                "SELECT COALESCE(SUM(focused_ms), 0) FROM daily_summary WHERE date = ?1",
+                params![today],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+
+        // First enabled goal (target) for a progress bar.
+        let (goal_name, goal_ms): (Option<String>, i64) = self
+            .conn
+            .query_row(
+                "SELECT name, daily_target_ms FROM goals WHERE enabled = 1 ORDER BY id LIMIT 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .map(|(n, m): (String, i64)| (Some(n), m))
+            .unwrap_or((None, 0));
+
+        let today_pct_goal = if goal_ms > 0 {
+            (today_ms as f64 / goal_ms as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        let efficiency_score = self.efficiency_score(&today).ok().map(|e| e.score);
+
+        Ok(CurrentStatus {
+            current_app,
+            current_session_min,
+            today_ms,
+            today_focused_ms,
+            today_pct_goal,
+            goal_name,
+            efficiency_score,
+        })
+    }
+    /// Analyze historical sessions to recommend which workspace each app should
+    /// live on, based on where the user spends the most time per app.
+    pub fn workspace_recommendations(
+        &self,
+        days: i64,
+    ) -> anyhow::Result<Vec<WorkspaceRecommendation>> {
+        let from = (chrono::Local::now() - chrono::Duration::days(days))
+            .format("%Y-%m-%d")
+            .to_string();
+        let to = chrono::Local::now().format("%Y-%m-%d").to_string();
+
+        // App × workspace totals over the window.
+        let mut stmt = self.conn.prepare(
+            "SELECT class, workspace, SUM(duration_ms), COUNT(*)
+             FROM sessions
+             WHERE ended_at IS NOT NULL AND duration_ms > 0 AND workspace IS NOT NULL
+               AND date_local BETWEEN ?1 AND ?2
+             GROUP BY class, workspace",
+        )?;
+        let rows = stmt.query_map(params![from, to], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, i64>(3)?,
+            ))
+        })?;
+
+        // Sum per app first, then per app find the dominant workspace.
+        let mut app_total: std::collections::HashMap<String, i64> =
+            std::collections::HashMap::new();
+        let mut app_ws: std::collections::HashMap<(String, String), (i64, i64)> =
+            std::collections::HashMap::new();
+        for r in rows {
+            let (class, ws, ms, count) = r?;
+            if ws.is_empty() {
+                continue;
+            }
+            *app_total.entry(class.clone()).or_insert(0) += ms;
+            let e = app_ws.entry((class, ws)).or_insert((0, 0));
+            e.0 += ms;
+            e.1 += count;
+        }
+
+        let mut out = Vec::new();
+        for (class, total) in app_total {
+            let best = app_ws
+                .iter()
+                .filter(|((c, _), _)| *c == class)
+                .max_by_key(|(_, (ms, _))| *ms)
+                .map(|((_, ws), (ms, count))| (ws.clone(), *ms, *count));
+            if let Some((ws, ws_ms, count)) = best {
+                let pct = if total > 0 {
+                    ws_ms as f64 / total as f64 * 100.0
+                } else {
+                    0.0
+                };
+                let confidence = if pct >= 70.0 {
+                    "high".to_string()
+                } else if pct >= 40.0 {
+                    "medium".to_string()
+                } else {
+                    "low".to_string()
+                };
+                out.push(WorkspaceRecommendation {
+                    app: class,
+                    workspace: ws,
+                    time_pct: pct,
+                    session_count: count,
+                    total_ms: ws_ms,
+                    confidence,
+                });
+            }
+        }
+
+        out.sort_by(|a, b| b.total_ms.cmp(&a.total_ms));
+        Ok(out)
+    }
     pub fn hourly_breakdown(&self, date: &str) -> anyhow::Result<Vec<HourlyBucket>> {
         // Fast path: pre-aggregated hourly_summary (maintained by daemon + rebuild endpoint).
         // Only trust it if it actually has rows for this date — otherwise fall back
@@ -1509,7 +1334,6 @@ impl Database {
 
         Ok(results)
     }
-
     pub fn sessions_paginated(
         &self,
         from: &str,
@@ -1705,7 +1529,6 @@ impl Database {
         }
         Ok(results)
     }
-
     pub fn save_ai_message(&self, role: &str, content: &str, model: &str) -> anyhow::Result<()> {
         let now = chrono::Utc::now().to_rfc3339();
         self.conn.execute(
@@ -1767,7 +1590,6 @@ impl Database {
         self.conn.execute("DELETE FROM ai_conversations", [])?;
         Ok(())
     }
-
     /// Delete child rows first (FK integrity), then the matching finished
     /// sessions, then rebuild both summary tables from the remaining sessions.
     fn delete_matching_sessions(
@@ -1906,7 +1728,6 @@ impl Database {
 
         Ok(())
     }
-
     // -----------------------------------------------------------------------
     // /api/insights/* — read-only analytics. The SQL stays here; every formula
     // lives in `crate::insights` as a pure, unit-tested helper.
@@ -2235,85 +2056,6 @@ impl Database {
             &inputs, from, to, window, threshold,
         ))
     }
-}
-
-/// Local calendar date (`YYYY-MM-DD`) of a stored UTC RFC3339 timestamp.
-fn local_date_from_rfc3339(ts: &str) -> Option<String> {
-    chrono::DateTime::parse_from_rfc3339(ts).ok().map(|dt| {
-        dt.with_timezone(&chrono::Local)
-            .format("%Y-%m-%d")
-            .to_string()
-    })
-}
-
-/// One unit of a LIKE pattern.
-enum LikeUnit {
-    /// `%` — matches any sequence, including an empty one.
-    AnySeq,
-    /// `_` — matches exactly one character.
-    AnyChar,
-    /// Anything else, including a wildcard that was escaped with `\`.
-    Literal(char),
-}
-
-/// Decode the pattern unit starting at `i`, plus how many chars it consumed.
-/// A backslash escapes `%`, `_` and itself, matching SQLite's `LIKE ... ESCAPE
-/// '\'`. A trailing lone backslash is a literal backslash.
-fn like_unit(p: &[char], i: usize) -> Option<(LikeUnit, usize)> {
-    let c = *p.get(i)?;
-    match c {
-        '\\' if i + 1 < p.len() => Some((LikeUnit::Literal(p[i + 1]), 2)),
-        '%' => Some((LikeUnit::AnySeq, 1)),
-        '_' => Some((LikeUnit::AnyChar, 1)),
-        _ => Some((LikeUnit::Literal(c), 1)),
-    }
-}
-
-/// SQLite LIKE-style pattern match: `%` = any sequence, `_` = one char, `\`
-/// escapes either of them. Case-insensitive. Used for app-category rules.
-///
-/// Two things differ from the previous implementation. `?` used to be accepted
-/// as a second single-char wildcard even though SQLite's LIKE has no `?`
-/// operator, so a rule written `Code?` silently also matched `Coder`; it is a
-/// literal question mark now. And `%` is checked before literal equality, so a
-/// pattern `%` no longer matches a class that happens to contain a percent
-/// sign — the wildcard always wins, and a literal `%` is spelled `\%`.
-fn like_match(pattern: &str, text: &str) -> bool {
-    let p: Vec<char> = pattern.to_lowercase().chars().collect();
-    let t: Vec<char> = text.to_lowercase().chars().collect();
-    let (mut pi, mut ti) = (0usize, 0usize);
-    // Position of the most recent `%` and the text offset it will retry from.
-    let (mut star, mut mark) = (usize::MAX, 0usize);
-    while ti < t.len() {
-        match like_unit(&p, pi) {
-            Some((LikeUnit::AnySeq, _)) => {
-                star = pi;
-                mark = ti;
-                pi += 1;
-            }
-            Some((LikeUnit::AnyChar, w)) => {
-                pi += w;
-                ti += 1;
-            }
-            Some((LikeUnit::Literal(c), w)) if c == t[ti] => {
-                pi += w;
-                ti += 1;
-            }
-            // Pattern exhausted or a literal mismatch: backtrack to the last
-            // `%` and have it absorb one more character.
-            _ if star != usize::MAX => {
-                pi = star + 1;
-                mark += 1;
-                ti = mark;
-            }
-            _ => return false,
-        }
-    }
-    // Trailing `%`s match the empty tail.
-    while let Some((LikeUnit::AnySeq, w)) = like_unit(&p, pi) {
-        pi += w;
-    }
-    pi == p.len()
 }
 
 #[cfg(test)]
