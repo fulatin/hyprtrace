@@ -1,5 +1,5 @@
 import { motion, useReducedMotion } from 'framer-motion';
-import { useMemo, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 import { Link2 } from 'lucide-react';
 import type { AppMetadata, CooccurrenceResponse } from '../../lib/types';
 import { formatSpan } from '../../lib/format';
@@ -20,7 +20,7 @@ const R = 128;
  * volume; lift tells you whether the pairing is more than coincidence
  * (lift > 1 means they appear together more often than chance would predict).
  */
-export default function CooccurrenceGraph({ data, metadata }: CooccurrenceGraphProps) {
+function CooccurrenceGraph({ data, metadata }: CooccurrenceGraphProps) {
   const reduced = useReducedMotion();
   const [hoverPair, setHoverPair] = useState<string | null>(null);
 
@@ -174,3 +174,5 @@ export default function CooccurrenceGraph({ data, metadata }: CooccurrenceGraphP
     </div>
   );
 }
+
+export default memo(CooccurrenceGraph);

@@ -1,6 +1,6 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
-import { AnimatePresence, motion } from 'framer-motion';
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import {
   LayoutDashboard,
   BarChart3,
@@ -16,6 +16,7 @@ import {
   Activity,
 } from 'lucide-react';
 import ThemeToggle from './ui/ThemeToggle';
+import { SkeletonPanel, SkeletonStats } from './ui/Feedback';
 import { pageTransition, spring } from '../lib/motion';
 
 const navItems = [
@@ -31,6 +32,24 @@ const navItems = [
 ];
 
 const COLLAPSE_KEY = 'hyprtrace.sidebar.collapsed';
+
+/**
+ * Skeleton for a route whose lazy chunk is still being fetched. It lives inside
+ * the animated page container, so the shell (sidebar, header, ambient wash)
+ * never unmounts while the route loads.
+ */
+function RouteFallback() {
+  return (
+    <div className="space-y-5" aria-busy="true" aria-live="polite">
+      <div className="skeleton h-8 w-56" />
+      <SkeletonStats count={4} />
+      <div className="grid gap-5 lg:grid-cols-2">
+        <SkeletonPanel height="h-52" />
+        <SkeletonPanel height="h-52" />
+      </div>
+    </div>
+  );
+}
 
 export default function Layout() {
   const location = useLocation();
@@ -62,18 +81,38 @@ export default function Layout() {
     item.to === '/' ? location.pathname === '/' : location.pathname.startsWith(item.to),
   );
 
+  // The CSS reduced-motion rule in index.css only covers CSS animations; a
+  // framer transition is JavaScript and would still fade the whole page in.
+  // `Reveal`/`CountUp` already honour the preference — the route transition is
+  // the largest motion in the app, so it must too.
+  const reducedMotion = useReducedMotion();
+
   return (
     <div className="relative flex h-screen overflow-hidden bg-bg">
-      {/* Ambient depth: two very soft colour washes behind everything. */}
+      {/* Ambient depth: two very soft colour washes behind everything.
+          Pre-baked radial gradients (see .wash-* in index.css) instead of a
+          `blur(120px)` filter on a solid disc: visually equivalent, but no
+          420px layer has to be rasterised through a filter before the first
+          frame — and the whole chrome sits on top of it. */}
       <div className="pointer-events-none fixed inset-0 overflow-hidden">
-        <div className="absolute -left-32 -top-32 h-[420px] w-[420px] rounded-full bg-accent/10 blur-[120px]" />
-        <div className="absolute -bottom-40 right-0 h-[380px] w-[380px] rounded-full bg-accent-2/10 blur-[120px]" />
+        <div className="wash-accent absolute -left-32 -top-32 h-[420px] w-[420px] rounded-full" />
+        <div className="wash-accent-2 absolute -bottom-40 right-0 h-[380px] w-[380px] rounded-full" />
       </div>
 
-      <motion.aside
-        animate={{ width: collapsed ? 68 : 236 }}
-        transition={spring}
-        className="relative z-10 flex flex-shrink-0 flex-col border-r border-line bg-surface/70 backdrop-blur-xl"
+      {/*
+        The width is a plain CSS transition, not a framer spring.
+        Collapsing the sidebar re-lays-out the whole content pane, and therefore
+        resizes every ResponsiveContainer chart — that is unavoidable. What is
+        avoidable is spending main-thread frames on JS animation bookkeeping
+        (plus framer's projection tree, which `layoutId="nav-pill"` keeps active)
+        while the browser is already re-laying-out and re-rendering charts on the
+        same frames. The stylesheet transition keeps the same easing and lets the
+        style/layout phase own it. `overflow-hidden` clips the labels that are
+        still fading out while the rail narrows.
+      */}
+      <aside
+        style={{ width: collapsed ? 68 : 236 }}
+        className="relative z-10 flex flex-shrink-0 flex-col overflow-hidden border-r border-line bg-surface/70 backdrop-blur-xl transition-[width] duration-200 ease-spring"
       >
         <div className="flex h-16 items-center gap-2.5 border-b border-line px-4">
           <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-accent to-accent-2 text-bg shadow-glow">
@@ -161,7 +200,7 @@ export default function Layout() {
             </button>
           </div>
         </div>
-      </motion.aside>
+      </aside>
 
       <div className="relative z-10 flex min-w-0 flex-1 flex-col">
         {/* Slim context bar: always shows which section is open. */}
@@ -181,7 +220,17 @@ export default function Layout() {
           </div>
         </header>
 
-        <main ref={mainRef} className="min-h-0 flex-1 overflow-y-auto">
+        {/*
+          `scrollbar-gutter: stable` reserves the scrollbar's width for good.
+          Without it the content pane gets ~8px wider every time a page's
+          skeleton is replaced by tall content (or a filter narrows a list),
+          which resizes every ResponsiveContainer chart mid-entrance — the
+          classic "the dashboard twitches right after loading" artefact.
+        */}
+        <main
+          ref={mainRef}
+          className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]"
+        >
           {/*
             Entrance-only page transition, on purpose. An exit animation has to
             keep the previous route mounted, and because <Outlet/> is driven by
@@ -195,11 +244,15 @@ export default function Layout() {
           <motion.div
             key={location.pathname}
             variants={pageTransition}
-            initial="hidden"
+            initial={reducedMotion ? false : 'hidden'}
             animate="show"
             className="mx-auto w-full max-w-[1600px] p-6"
           >
-            <Outlet />
+            {/* Routes are lazy (see App.tsx); the boundary sits inside the
+                animated container so the shell stays put while a chunk loads. */}
+            <Suspense fallback={<RouteFallback />}>
+              <Outlet />
+            </Suspense>
           </motion.div>
         </main>
       </div>

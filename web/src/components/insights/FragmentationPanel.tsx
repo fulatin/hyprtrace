@@ -1,4 +1,5 @@
 import { motion } from 'framer-motion';
+import { memo } from 'react';
 import {
   Bar,
   CartesianGrid,
@@ -13,6 +14,7 @@ import { ArrowDownRight, ArrowUpRight, Layers, Minus } from 'lucide-react';
 import type { FragmentationResponse } from '../../lib/types';
 import { formatShortDate, formatSpan } from '../../lib/format';
 import { pct } from './shared';
+import { CHART_RESIZE_DEBOUNCE } from '../ui/chartResize';
 
 interface FragmentationPanelProps {
   data: FragmentationResponse;
@@ -22,7 +24,7 @@ interface FragmentationPanelProps {
  * Context-switching cost: how often focus is broken, how long sessions last,
  * and the estimated re-orientation time lost to each switch.
  */
-export default function FragmentationPanel({ data }: FragmentationPanelProps) {
+function FragmentationPanel({ data }: FragmentationPanelProps) {
   // Sessions here are frequently sub-minute, so the trend line uses seconds:
   // rounding to whole minutes would flatten almost every day to zero.
   const rows = data.days.map((d) => ({
@@ -103,7 +105,7 @@ export default function FragmentationPanel({ data }: FragmentationPanelProps) {
           </span>
         </div>
 
-        <ResponsiveContainer width="100%" height={210}>
+        <ResponsiveContainer width="100%" height={210} debounce={CHART_RESIZE_DEBOUNCE}>
           <ComposedChart data={rows} margin={{ top: 6, right: 8, bottom: 0, left: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="rgb(var(--c-line))" vertical={false} />
             <XAxis
@@ -180,3 +182,5 @@ export default function FragmentationPanel({ data }: FragmentationPanelProps) {
     </div>
   );
 }
+
+export default memo(FragmentationPanel);

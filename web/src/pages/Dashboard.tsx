@@ -50,6 +50,12 @@ interface CompareState {
 
 const EMPTY_COMPARE: CompareState = { summary: null, efficiency: null };
 
+// Module-level formatters: the tile memo compares props by identity, and a
+// fresh inline arrow per render would defeat it (and restart CountUp's tween).
+const formatCount = (n: number) => String(Math.round(n));
+const formatScore = (n: number) => `${Math.round(n)}`;
+const formatPoints = (n: number) => `${Math.abs(Math.round(n))} pts`;
+
 export default function Dashboard() {
   const today = format(new Date(), 'yyyy-MM-dd');
   const [selectedDate, setSelectedDate] = useState(today);
@@ -143,63 +149,70 @@ export default function Dashboard() {
     ? summary.total_focused_ms / Math.max(summary.total_active_ms, 1)
     : 0;
 
-  const cards = [
-    {
-      icon: <Clock size={15} />,
-      label: 'Active time',
-      value: summary?.total_active_ms ?? 0,
-      format: formatDuration,
-      delta: { value: activeDeltaMs, format: formatDelta },
-      spark,
-      accent: 'accent' as const,
-    },
-    {
-      icon: <BrainCircuit size={15} />,
-      label: 'Focus time',
-      value: summary?.total_focused_ms ?? 0,
-      format: formatDuration,
-      delta: { value: focusDeltaMs, format: formatDelta },
-      subtext: `${Math.round(focusRatio * 100)}% of active time`,
-      accent: 'good' as const,
-    },
-    {
-      icon: <AppWindow size={15} />,
-      label: 'Apps',
-      value: summary?.app_count ?? 0,
-      format: (n: number) => String(Math.round(n)),
-      subtext: 'used today',
-      accent: 'accent-2' as const,
-    },
-    {
-      icon: <Hash size={15} />,
-      label: 'Sessions',
-      value: summary?.session_count ?? 0,
-      format: (n: number) => String(Math.round(n)),
-      subtext: summary
-        ? `${Math.round((summary.total_active_ms ?? 0) / Math.max(summary.session_count, 1) / 60000)}m average`
-        : undefined,
-      accent: 'accent-2' as const,
-    },
-    {
-      icon: <Moon size={15} />,
-      label: 'Idle time',
-      value: summary?.total_idle_ms ?? 0,
-      format: formatDuration,
-      subtext: 'away from keyboard',
-      accent: 'warn' as const,
-    },
-    {
-      icon: <Gauge size={15} />,
-      label: 'Efficiency',
-      value: efficiency?.score ?? 0,
-      format: (n: number) => `${Math.round(n)}`,
-      delta: { value: efficiencyDelta, format: (n: number) => `${Math.abs(Math.round(n))} pts` },
-      subtext: efficiency
-        ? `${Math.round(efficiency.focus_ratio * 100)}% focus · ${Math.round(efficiency.avg_session_secs / 60)}m/session`
-        : 'no score yet',
-      accent: 'accent' as const,
-    },
-  ];
+  // Memoized so the six tiles keep identical props (and skip re-rendering)
+  // when this page re-renders for an unrelated reason — the page issues ~11
+  // state updates while loading, each of which used to rebuild every card with
+  // fresh icons, deltas and formatters.
+  const cards = useMemo(
+    () => [
+      {
+        icon: <Clock size={15} />,
+        label: 'Active time',
+        value: summary?.total_active_ms ?? 0,
+        format: formatDuration,
+        delta: { value: activeDeltaMs, format: formatDelta },
+        spark,
+        accent: 'accent' as const,
+      },
+      {
+        icon: <BrainCircuit size={15} />,
+        label: 'Focus time',
+        value: summary?.total_focused_ms ?? 0,
+        format: formatDuration,
+        delta: { value: focusDeltaMs, format: formatDelta },
+        subtext: `${Math.round(focusRatio * 100)}% of active time`,
+        accent: 'good' as const,
+      },
+      {
+        icon: <AppWindow size={15} />,
+        label: 'Apps',
+        value: summary?.app_count ?? 0,
+        format: formatCount,
+        subtext: 'used today',
+        accent: 'accent-2' as const,
+      },
+      {
+        icon: <Hash size={15} />,
+        label: 'Sessions',
+        value: summary?.session_count ?? 0,
+        format: formatCount,
+        subtext: summary
+          ? `${Math.round((summary.total_active_ms ?? 0) / Math.max(summary.session_count, 1) / 60000)}m average`
+          : undefined,
+        accent: 'accent-2' as const,
+      },
+      {
+        icon: <Moon size={15} />,
+        label: 'Idle time',
+        value: summary?.total_idle_ms ?? 0,
+        format: formatDuration,
+        subtext: 'away from keyboard',
+        accent: 'warn' as const,
+      },
+      {
+        icon: <Gauge size={15} />,
+        label: 'Efficiency',
+        value: efficiency?.score ?? 0,
+        format: formatScore,
+        delta: { value: efficiencyDelta, format: formatPoints },
+        subtext: efficiency
+          ? `${Math.round(efficiency.focus_ratio * 100)}% focus · ${Math.round(efficiency.avg_session_secs / 60)}m/session`
+          : 'no score yet',
+        accent: 'accent' as const,
+      },
+    ],
+    [summary, efficiency, spark, activeDeltaMs, focusDeltaMs, efficiencyDelta, focusRatio],
+  );
 
   return (
     <div className="space-y-6">

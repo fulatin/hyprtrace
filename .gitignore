@@ -6,6 +6,9 @@ target/
 node_modules/
 web/dist/
 web/tsconfig.tsbuildinfo
+# npm must run with --cache inside the workspace (the sandbox only allows writes
+# there), so the cache directory lands next to the repo — never commit it.
+.npm-cache/
 
 # IDE
 .idea/

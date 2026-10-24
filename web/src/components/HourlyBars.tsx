@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { memo, useMemo } from 'react';
 import {
   Bar,
   BarChart,
@@ -13,6 +13,7 @@ import type { HourlyBucket } from '../lib/types';
 import { formatDuration } from '../lib/format';
 import { Panel } from './ui/Card';
 import { EmptyState } from './ui/Feedback';
+import { CHART_RESIZE_DEBOUNCE } from './ui/chartResize';
 
 interface HourlyBarsProps {
   data: HourlyBucket[];
@@ -23,7 +24,7 @@ interface HourlyBarsProps {
  * a long day made of unfocused time looks very different from a shorter one
  * spent in flow.
  */
-export default function HourlyBars({ data }: HourlyBarsProps) {
+function HourlyBars({ data }: HourlyBarsProps) {
   const { rows, peak } = useMemo(() => {
     const chart = data
       .map((bucket) => {
@@ -80,7 +81,7 @@ export default function HourlyBars({ data }: HourlyBarsProps) {
         </div>
       }
     >
-      <ResponsiveContainer width="100%" height={220}>
+      <ResponsiveContainer width="100%" height={220} debounce={CHART_RESIZE_DEBOUNCE}>
         <BarChart data={rows} margin={{ top: 6, right: 8, bottom: 0, left: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="rgb(var(--c-line))" vertical={false} />
           <XAxis
@@ -134,3 +135,5 @@ export default function HourlyBars({ data }: HourlyBarsProps) {
     </Panel>
   );
 }
+
+export default memo(HourlyBars);

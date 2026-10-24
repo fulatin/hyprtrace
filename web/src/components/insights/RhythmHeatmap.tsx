@@ -1,5 +1,5 @@
 import { motion, useReducedMotion } from 'framer-motion';
-import { useMemo, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 import { Moon, Sunrise } from 'lucide-react';
 import type { RhythmResponse } from '../../lib/types';
 import { formatDuration, formatHour } from '../../lib/format';
@@ -14,7 +14,7 @@ interface RhythmHeatmapProps {
  * tracked in that hour on matching weekdays, so it reads as "what a typical
  * Tuesday looks like" rather than a raw sum.
  */
-export default function RhythmHeatmap({ data }: RhythmHeatmapProps) {
+function RhythmHeatmap({ data }: RhythmHeatmapProps) {
   const reduced = useReducedMotion();
   const [hover, setHover] = useState<{ weekday: number; hour: number } | null>(null);
 
@@ -138,3 +138,5 @@ export default function RhythmHeatmap({ data }: RhythmHeatmapProps) {
     </div>
   );
 }
+
+export default memo(RhythmHeatmap);

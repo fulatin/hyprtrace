@@ -1,4 +1,5 @@
 import { motion } from 'framer-motion';
+import { memo } from 'react';
 import { AlertOctagon, AlertTriangle, Info, Moon } from 'lucide-react';
 import type { AnomaliesResponse, AnomalyDay } from '../../lib/types';
 import { formatDuration, formatRelativeDate, formatSpan } from '../../lib/format';
@@ -101,7 +102,7 @@ function AnomalyCard({ day, index }: { day: AnomalyDay; index: number }) {
 }
 
 /** Days that broke the user's own routine — ranked by severity. */
-export default function AnomalyList({ data }: AnomalyListProps) {
+function AnomalyList({ data }: AnomalyListProps) {
   if (data.days.length === 0) {
     return (
       <EmptyState
@@ -129,3 +130,5 @@ export default function AnomalyList({ data }: AnomalyListProps) {
     </div>
   );
 }
+
+export default memo(AnomalyList);

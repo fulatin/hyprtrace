@@ -1,11 +1,14 @@
 import { motion } from 'framer-motion';
 import { ArrowDown, ArrowUp } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { memo, type ReactNode } from 'react';
 import CountUp from './ui/CountUp';
 import Sparkline from './ui/Sparkline';
 import { fadeUp, hoverLift } from '../lib/motion';
 
 type Accent = 'accent' | 'accent-2' | 'good' | 'warn' | 'bad';
+
+/** Stable fallback: an inline arrow here would change identity every render. */
+const formatInteger = (n: number) => String(Math.round(n));
 
 const ACCENT_TEXT: Record<Accent, string> = {
   accent: 'text-accent',
@@ -42,8 +45,13 @@ interface StatCardProps {
  * Headline metric tile. Numbers count up on mount, the sparkline draws itself,
  * and the whole card lifts on hover — the three cues that make a dashboard feel
  * alive without being distracting.
+ *
+ * Memoized: a dashboard re-renders on every unrelated state change (a date
+ * picker keystroke, a hovering chart slice), and a tile whose props are
+ * unchanged must not re-render — its CountUp would otherwise be handed a new
+ * `format` identity and restart mid-count.
  */
-export default function StatCard({
+function StatCard({
   icon,
   label,
   value,
@@ -72,7 +80,7 @@ export default function StatCard({
       <div className="flex items-end justify-between gap-3">
         <div className="text-2xl font-semibold leading-none tnum text-fg">
           {typeof value === 'number' ? (
-            <CountUp value={value} format={format ?? ((n) => String(Math.round(n)))} />
+            <CountUp value={value} format={format ?? formatInteger} />
           ) : (
             value
           )}
@@ -102,3 +110,5 @@ export default function StatCard({
     </motion.div>
   );
 }
+
+export default memo(StatCard);

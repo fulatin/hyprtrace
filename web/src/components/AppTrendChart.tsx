@@ -7,9 +7,11 @@ import {
   ResponsiveContainer,
   CartesianGrid,
 } from 'recharts';
+import { memo } from 'react';
 import type { TooltipProps } from 'recharts';
 import type { DailyTrend } from '../lib/types';
 import { formatDuration } from '../lib/format';
+import { CHART_RESIZE_DEBOUNCE } from './ui/chartResize';
 
 /**
  * Recharts writes colours straight into SVG attributes, so tokens are passed as
@@ -49,7 +51,7 @@ function TrendTooltip({ active, payload }: TrendTooltipProps) {
   );
 }
 
-export default function AppTrendChart({ data, range }: AppTrendChartProps) {
+function AppTrendChart({ data, range }: AppTrendChartProps) {
   if (data.length === 0) {
     return <p className="p-4 text-sm text-fg-muted">No trend data available</p>;
   }
@@ -73,7 +75,7 @@ export default function AppTrendChart({ data, range }: AppTrendChartProps) {
         {range === 'week' && <span className="panel-sub">(past 7 days)</span>}
         {range === 'month' && <span className="panel-sub">(past 30 days)</span>}
       </div>
-      <ResponsiveContainer width="100%" height={180}>
+      <ResponsiveContainer width="100%" height={180} debounce={CHART_RESIZE_DEBOUNCE}>
         <AreaChart data={chartData}>
           <defs>
             <linearGradient id={FILL_ID} x1="0" y1="0" x2="0" y2="1">
@@ -122,3 +124,5 @@ export default function AppTrendChart({ data, range }: AppTrendChartProps) {
     </div>
   );
 }
+
+export default memo(AppTrendChart);

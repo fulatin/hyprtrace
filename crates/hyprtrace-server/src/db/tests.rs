@@ -176,6 +176,38 @@
         assert_eq!(rows.len(), 2, "a normal page size is left alone");
     }
 
+    /// Ordering contract of `insight_sessions`, pinned because the pure
+    /// analytics walk consecutive rows: dropping the `ORDER BY started_at` (or
+    /// switching to `id`) would silently change which sessions fall into one
+    /// co-occurrence window instead of failing a test.
+    ///
+    /// The SQL sorts by the *text* column; `insights::cooccurrence` sorts each
+    /// day by parsed start instant on top of that, so it does not depend on the
+    /// spellings being uniform. Both orders are asserted here for the daemon's
+    /// uniform `RFC3339 +00:00` format.
+    #[test]
+    fn insight_sessions_are_returned_in_start_order() {
+        let db = test_db();
+        // Inserted out of order on purpose, and with a date range around them.
+        insert_session(&db, "kitty", "2026-09-01T09:00:00+00:00", None);
+        insert_session(&db, "firefox", "2026-09-01T07:00:00.500+00:00", None);
+        insert_session(&db, "kitty", "2026-09-01T08:00:00Z", None);
+        insert_session(&db, "zed", "2026-09-02T06:00:00+00:00", None);
+
+        let rows = db.insight_sessions("2026-09-01", "2026-09-01", 0).unwrap();
+        assert_eq!(rows.len(), 3, "the range still filters by date_local");
+        let starts: Vec<&str> = rows.iter().map(|s| s.started_at.as_str()).collect();
+        let mut text_sorted = starts.clone();
+        text_sorted.sort_unstable();
+        assert_eq!(starts, text_sorted, "insight_sessions must ORDER BY started_at");
+
+        let instants: Vec<i64> = rows.iter().map(|s| s.start_ms().unwrap()).collect();
+        assert!(
+            instants.windows(2).all(|w| w[0] <= w[1]),
+            "for daemon-written timestamps the text order is the instant order"
+        );
+    }
+
     #[test]
     fn like_match_wildcards() {
         assert!(like_match("firefox", "firefox"));

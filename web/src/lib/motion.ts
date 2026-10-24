@@ -51,13 +51,19 @@ export const scaleIn: Variants = {
  * mounted, and because <Outlet/> is driven by the live router context it
  * re-renders the NEW page inside the exiting container (double mount). If a
  * nested AnimatePresence is mid-flight the exit can stall, leaving the content
- * area empty until a refresh. See Layout.tsx. */
+ * area empty until a refresh. See Layout.tsx.
+ *
+ * opacity + transform only. This used to also animate `filter: blur(4px)`; a
+ * filter on the page container makes the compositor re-rasterise the *entire*
+ * subtree — every SVG chart, the 371-cell heatmap, every table row — on each of
+ * the ~18 frames of the entrance, which is the stutter you feel when switching
+ * routes. Compositor-only properties keep the same feel at a fraction of the
+ * cost; the blur was worth less than the frames it ate. */
 export const pageTransition: Variants = {
-  hidden: { opacity: 0, y: 10, filter: 'blur(4px)' },
+  hidden: { opacity: 0, y: 10 },
   show: {
     opacity: 1,
     y: 0,
-    filter: 'blur(0px)',
     transition: { duration: 0.3, ease: [0.22, 1, 0.36, 1] },
   },
 };

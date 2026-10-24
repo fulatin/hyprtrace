@@ -191,7 +191,11 @@ export default function Sessions() {
                 <col className="w-[11%]" />
                 <col className="w-[24%]" />
               </colgroup>
-              <thead className="sticky top-0 z-10 bg-surface/95 backdrop-blur shadow-[0_1px_0_0_rgb(var(--c-line))]">
+              {/* Opaque surface, not `bg-surface/95 backdrop-blur`: a blurred
+                  sticky header re-samples the scrolling rows on every frame.
+                  `bg-surface` is exactly the card background, so the header
+                  still reads as part of the card. */}
+              <thead className="sticky top-0 z-10 bg-surface shadow-[0_1px_0_0_rgb(var(--c-line))]">
                 <tr className="border-b border-line">
                   <th className="px-3 py-3 text-left font-medium text-fg-muted first:rounded-tl-xl">App</th>
                   <th className="px-3 py-3 text-left font-medium text-fg-muted">Title</th>

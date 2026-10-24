@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import HeatMap from '@uiw/react-heat-map';
 import { motion } from 'framer-motion';
 import { CalendarDays } from 'lucide-react';
@@ -37,7 +37,7 @@ function heatDate(iso: string): string {
   return `${y}/${m}/${d}`;
 }
 
-export default function ActivityHeatmap({ data }: ActivityHeatmapProps) {
+export default memo(function ActivityHeatmap({ data }: ActivityHeatmapProps) {
   const { theme } = useTheme();
   const scale = theme === 'light' ? SCALE_LIGHT : SCALE_DARK;
   const containerRef = useRef<HTMLDivElement>(null);
@@ -100,6 +100,48 @@ export default function ActivityHeatmap({ data }: ActivityHeatmapProps) {
     return { value, startDate, endDate, totals: { totalMs, activeDays, busiest, countByDate } };
   }, [data]);
 
+  // Stable element identity: while its inputs are unchanged React bails out of
+  // re-rendering this subtree, so a parent re-render does not make the library
+  // rebuild its ~371 <rect> cells. Only a resize (rectSize) or theme change
+  // produces a new element.
+  const heatMap = useMemo(() => {
+    if (!totals) return null;
+    const { countByDate } = totals;
+    return (
+      <HeatMap
+        value={value}
+        startDate={startDate}
+        endDate={endDate}
+        rectSize={rectSize}
+        space={3}
+        // Without an explicit width the library's <svg> falls back to the
+        // 300px intrinsic default and only renders ~17 of the 53 weeks.
+        style={{ width: '100%' }}
+        // Disable the library's built-in legend (its cell gap is fixed at 1px
+        // and looks cramped); we render our own with a wider gap below.
+        legendCellSize={0}
+        panelColors={scale}
+        // Accessibility: every cell exposes its date + active time, and the
+        // tooltip uses the shared formatter.
+        rectRender={(props, valueItem) => {
+          const ms = countByDate.get(valueItem.date) ?? 0;
+          const minutes = valueItem.count ?? 0;
+          return (
+            <rect
+              {...props}
+              fill={fillFor(minutes, theme === 'light')}
+              rx={3}
+              role="gridcell"
+              aria-label={`${valueItem.date}: ${formatDuration(ms)}`}
+            >
+              <title>{`${valueItem.date}: ${formatDuration(ms)}`}</title>
+            </rect>
+          );
+        }}
+      />
+    );
+  }, [value, startDate, endDate, rectSize, scale, theme, totals]);
+
   if (!totals || value.length === 0) {
     return (
       <Panel
@@ -122,37 +164,7 @@ export default function ActivityHeatmap({ data }: ActivityHeatmapProps) {
       hint={`last ${data.length} days · ${totals.activeDays} active · ${formatDuration(totals.totalMs)} tracked`}
     >
       <div ref={containerRef} className="overflow-x-auto pb-1">
-        <HeatMap
-          value={value}
-          startDate={startDate}
-          endDate={endDate}
-          rectSize={rectSize}
-          space={3}
-          // Without an explicit width the library's <svg> falls back to the
-          // 300px intrinsic default and only renders ~17 of the 53 weeks.
-          style={{ width: '100%' }}
-          // Disable the library's built-in legend (its cell gap is fixed at 1px
-          // and looks cramped); we render our own with a wider gap below.
-          legendCellSize={0}
-          panelColors={scale}
-          // Accessibility: every cell exposes its date + active time, and the
-          // tooltip uses the shared formatter.
-          rectRender={(props, valueItem) => {
-            const ms = totals.countByDate.get(valueItem.date) ?? 0;
-            const minutes = valueItem.count ?? 0;
-            return (
-              <rect
-                {...props}
-                fill={fillFor(minutes, theme === 'light')}
-                rx={3}
-                role="gridcell"
-                aria-label={`${valueItem.date}: ${formatDuration(ms)}`}
-              >
-                <title>{`${valueItem.date}: ${formatDuration(ms)}`}</title>
-              </rect>
-            );
-          }}
-        />
+        {heatMap}
       </div>
 
       {/* Custom legend with a comfortable gap between the intensity cells. */}
@@ -183,4 +195,4 @@ export default function ActivityHeatmap({ data }: ActivityHeatmapProps) {
       )}
     </Panel>
   );
-}
+});

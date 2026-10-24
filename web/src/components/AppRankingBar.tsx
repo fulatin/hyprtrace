@@ -8,10 +8,12 @@ import {
   CartesianGrid,
   Cell,
 } from 'recharts';
+import { memo } from 'react';
 import type { TooltipProps } from 'recharts';
 import type { AppRank } from '../lib/types';
 import { formatDuration } from '../lib/format';
 import { EmptyState } from './ui/Feedback';
+import { CHART_RESIZE_DEBOUNCE } from './ui/chartResize';
 
 /**
  * Recharts only accepts concrete colour values (it writes them into SVG
@@ -63,7 +65,7 @@ function RankTooltip({ active, payload }: RankTooltipProps) {
   );
 }
 
-export default function AppRankingBar({ data }: AppRankingBarProps) {
+function AppRankingBar({ data }: AppRankingBarProps) {
   if (data.length === 0) {
     return (
       <EmptyState
@@ -83,7 +85,7 @@ export default function AppRankingBar({ data }: AppRankingBarProps) {
 
   return (
     <div className="card p-4">
-      <ResponsiveContainer width="100%" height={data.length * 40 + 40}>
+      <ResponsiveContainer width="100%" height={data.length * 40 + 40} debounce={CHART_RESIZE_DEBOUNCE}>
         <BarChart data={chartData} layout="vertical" margin={{ left: 80, right: 40 }}>
           <defs>
             {/* Subtle accent wash reserved for the #1 app. */}
@@ -131,3 +133,7 @@ export default function AppRankingBar({ data }: AppRankingBarProps) {
     </div>
   );
 }
+
+// Selecting a ranking row re-renders the Apps page; the chart itself only
+// depends on `data`, so it should not be rebuilt for that.
+export default memo(AppRankingBar);

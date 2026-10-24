@@ -144,6 +144,11 @@ impl super::Database {
         Ok(crate::insights::fragmentation(&sessions, from, to))
     }
 
+    /// `insight_sessions` already orders by `started_at`, but that is a *text*
+    /// order; `insights::cooccurrence` re-sorts every day by parsed start
+    /// instant (a stable sort, a no-op for this SQL order) and that sort is what
+    /// makes the metric independent of the row order and of `Z`/`+00:00`
+    /// spellings. Do not remove it while "optimising" the query.
     pub fn insight_cooccurrence(
         &self,
         from: &str,

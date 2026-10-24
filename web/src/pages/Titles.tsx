@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { forwardRef, memo, useEffect, useMemo, useState } from 'react';
 import { format, subDays } from 'date-fns';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { FileText, Layers, Search, SearchX, Trophy } from 'lucide-react';
@@ -24,6 +24,67 @@ function colorForClass(cls: string): string {
 }
 
 const formatCount = (n: number) => String(Math.round(n));
+
+/**
+ * One title row. Memoized because filtering re-renders the page on every
+ * keystroke: with a memo row only the rows whose membership actually changed
+ * mount/unmount, instead of all ~200 rows re-rendering each time.
+ *
+ * `forwardRef` is required: `AnimatePresence mode="popLayout"` clones its
+ * direct children with a ref so it can measure and pin an exiting row.
+ */
+const TitleRow = memo(
+  forwardRef<HTMLDivElement, {
+    stat: TitleStat;
+    color: string;
+    share: number;
+    totalMs: number;
+    metadata: AppMetadata | null;
+  }>(function TitleRow({ stat, color, share, totalMs, metadata }, ref) {
+    return (
+      <motion.div
+        ref={ref}
+        layout
+        variants={listItem}
+        exit={{ opacity: 0, x: -12, transition: { duration: 0.2 } }}
+        whileHover={{ y: -2, transition: spring }}
+        className="card-interactive p-3"
+      >
+        <div className="flex items-center gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-sm text-fg" title={stat.title}>
+              {stat.title}
+            </div>
+            <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-fg-faint">
+              <AppName cls={stat.class} metadata={metadata} />
+              <span>·</span>
+              <span className="tnum">
+                {stat.session_count} session{stat.session_count === 1 ? '' : 's'}
+              </span>
+              <span>·</span>
+              <span>{formatRelativeDate(stat.last_used_at)}</span>
+            </div>
+            <div className="mt-2 h-1 w-full overflow-hidden rounded-full bg-surface-3">
+              <motion.div
+                className="h-full rounded-full"
+                style={{ backgroundColor: color }}
+                initial={{ width: 0 }}
+                animate={{ width: `${share}%` }}
+                transition={barTransition}
+              />
+            </div>
+          </div>
+          <div className="shrink-0 text-right">
+            <div className="text-sm tnum text-accent">{formatDuration(stat.total_ms)}</div>
+            <div className="text-[10px] tnum text-fg-faint">
+              {formatPercent(stat.total_ms / (totalMs || 1), 1)}
+            </div>
+          </div>
+        </div>
+      </motion.div>
+    );
+  }),
+);
 
 export default function Titles() {
   const today = format(new Date(), 'yyyy-MM-dd');
@@ -74,8 +135,9 @@ export default function Titles() {
     };
   }, [from, to, cls]);
 
-  const filtered = titles.filter((t) =>
-    t.title.toLowerCase().includes(search.trim().toLowerCase())
+  const filtered = useMemo(
+    () => titles.filter((t) => t.title.toLowerCase().includes(search.trim().toLowerCase())),
+    [titles, search],
   );
 
   // Totals for the summary strip, over the rows actually loaded.
@@ -206,52 +268,16 @@ export default function Titles() {
               animate="show"
             >
               <AnimatePresence initial={false} mode="popLayout">
-                {filtered.map((t) => {
-                  const color = colorForClass(t.class);
-                  const share = topMs > 0 ? (t.total_ms / topMs) * 100 : 0;
-                  return (
-                    <motion.div
-                      key={`${t.class}:${t.title}`}
-                      layout
-                      variants={listItem}
-                      exit={{ opacity: 0, x: -12, transition: { duration: 0.2 } }}
-                      whileHover={{ y: -2, transition: spring }}
-                      className="card-interactive p-3"
-                    >
-                      <div className="flex items-center gap-3">
-                        <div className="min-w-0 flex-1">
-                          <div className="truncate text-sm text-fg" title={t.title}>
-                            {t.title}
-                          </div>
-                          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-fg-faint">
-                            <AppName cls={t.class} metadata={appMetadata[t.class] ?? null} />
-                            <span>·</span>
-                            <span className="tnum">
-                              {t.session_count} session{t.session_count === 1 ? '' : 's'}
-                            </span>
-                            <span>·</span>
-                            <span>{formatRelativeDate(t.last_used_at)}</span>
-                          </div>
-                          <div className="mt-2 h-1 w-full overflow-hidden rounded-full bg-surface-3">
-                            <motion.div
-                              className="h-full rounded-full"
-                              style={{ backgroundColor: color }}
-                              initial={{ width: 0 }}
-                              animate={{ width: `${share}%` }}
-                              transition={barTransition}
-                            />
-                          </div>
-                        </div>
-                        <div className="shrink-0 text-right">
-                          <div className="text-sm tnum text-accent">{formatDuration(t.total_ms)}</div>
-                          <div className="text-[10px] tnum text-fg-faint">
-                            {formatPercent(t.total_ms / (summary.totalMs || 1), 1)}
-                          </div>
-                        </div>
-                      </div>
-                    </motion.div>
-                  );
-                })}
+                {filtered.map((t) => (
+                  <TitleRow
+                    key={`${t.class}:${t.title}`}
+                    stat={t}
+                    color={colorForClass(t.class)}
+                    share={topMs > 0 ? (t.total_ms / topMs) * 100 : 0}
+                    totalMs={summary.totalMs}
+                    metadata={appMetadata[t.class] ?? null}
+                  />
+                ))}
               </AnimatePresence>
             </motion.div>
           )}

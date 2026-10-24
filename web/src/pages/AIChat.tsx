@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
   AlertTriangle,
@@ -81,6 +81,134 @@ function TypingDots({ className = "" }: { className?: string }) {
     </span>
   );
 }
+
+/** Loose view of an AI SDK UI message: parts are dispatched on their `type`. */
+interface ChatPartLike {
+  type?: string;
+  text?: string;
+  toolCallId?: string;
+}
+
+interface ChatMessageLike {
+  id: string;
+  role: string;
+  parts?: ChatPartLike[];
+}
+
+/** Streaming flags, only meaningful on the last bubble. */
+interface BubbleTail {
+  isLast: boolean;
+  isLoading: boolean;
+  stillGenerating: boolean;
+  pollTimedOut: boolean;
+}
+
+/**
+ * Constant tail for every bubble that is not last: a stable reference keeps
+ * those bubbles prop-equal, so they are skipped while the answer streams.
+ */
+const NO_TAIL: BubbleTail = {
+  isLast: false,
+  isLoading: false,
+  stillGenerating: false,
+  pollTimedOut: false,
+};
+
+/**
+ * One chat bubble.
+ *
+ * Memoized because a single streamed token replaces the last message and
+ * re-renders the page: without this, every historical bubble re-rendered and
+ * `streamdown` re-parsed the markdown of every finished answer on every token.
+ * Only the last bubble gets a changing `tail` (and a changing message), so all
+ * earlier ones bail out of rendering.
+ */
+const MessageBubble = memo(function MessageBubble({
+  message,
+  tail,
+  reduced,
+  onStop,
+}: {
+  message: ChatMessageLike;
+  tail: BubbleTail;
+  reduced: boolean;
+  onStop: () => void;
+}) {
+  const { isLast, isLoading, stillGenerating, pollTimedOut } = tail;
+  const text = extractText(message);
+  const isUser = message.role === "user";
+  const bubbleTransition = reduced ? { duration: 0 } : spring;
+
+  return (
+    <motion.div
+      initial={reduced ? { opacity: 0 } : { opacity: 0, y: 12, scale: 0.98 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={reduced ? { opacity: 0 } : { opacity: 0, scale: 0.98, y: -6 }}
+      transition={bubbleTransition}
+      className={isUser ? "flex justify-end" : "flex justify-start"}
+    >
+      <div
+        className={
+          isUser
+            ? "max-w-[80%] rounded-2xl rounded-br-md border border-accent/25 bg-accent/10 px-4 py-3 text-sm text-fg"
+            : "max-w-[80%] rounded-2xl rounded-bl-md border border-line bg-surface-2 px-4 py-3 text-sm text-fg"
+        }
+      >
+        {isUser ? (
+          <p className="whitespace-pre-wrap">{text}</p>
+        ) : (
+          <>
+            {message.parts?.map((part, i) => {
+              if (part.type === "text") {
+                return (
+                  <Streamdown
+                    key={i}
+                    isAnimating={isLoading && isLast}
+                    className="text-fg"
+                  >
+                    {part.text ?? ""}
+                  </Streamdown>
+                );
+              }
+              if (
+                typeof part.type === "string" &&
+                part.type.startsWith("tool-")
+              ) {
+                return <ToolCallCard key={part.toolCallId ?? i} part={part} />;
+              }
+              return null;
+            })}
+            {isLast && isLoading && (
+              <span className="mt-2 flex items-center gap-2">
+                <TypingDots />
+                <button
+                  onClick={onStop}
+                  title="Stop generating"
+                  aria-label="Stop generating"
+                  className="btn btn-ghost px-1.5 py-0.5"
+                >
+                  <Square size={11} />
+                </button>
+              </span>
+            )}
+          </>
+        )}
+        {isLast && stillGenerating && (
+          <div className="mt-2 flex items-center gap-1.5 text-xs text-accent">
+            <Loader2 size={12} className="animate-spin" />
+            Still generating server-side…
+          </div>
+        )}
+        {isLast && pollTimedOut && (
+          <div className="mt-2 flex items-center gap-1.5 text-xs text-warn">
+            <AlertTriangle size={12} />
+            Generation was interrupted — send a message to continue
+          </div>
+        )}
+      </div>
+    </motion.div>
+  );
+});
 
 /**
  * Identifier for client-side message objects.
@@ -529,81 +657,19 @@ export default function AIChat() {
         ) : null}
 
         <AnimatePresence initial={false}>
-          {messages.map((message, idx) => {
-            const text = extractText(message);
-            const isLast = idx === messages.length - 1;
-            const isUser = message.role === "user";
-            return (
-              <motion.div
-                key={message.id}
-                initial={reduced ? { opacity: 0 } : { opacity: 0, y: 12, scale: 0.98 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={reduced ? { opacity: 0 } : { opacity: 0, scale: 0.98, y: -6 }}
-                transition={bubbleTransition}
-                className={isUser ? "flex justify-end" : "flex justify-start"}
-              >
-                <div
-                  className={
-                    isUser
-                      ? "max-w-[80%] rounded-2xl rounded-br-md border border-accent/25 bg-accent/10 px-4 py-3 text-sm text-fg"
-                      : "max-w-[80%] rounded-2xl rounded-bl-md border border-line bg-surface-2 px-4 py-3 text-sm text-fg"
-                  }
-                >
-                  {isUser ? (
-                    <p className="whitespace-pre-wrap">{text}</p>
-                  ) : (
-                    <>
-                      {(message as any).parts?.map((part: any, i: number) => {
-                        if (part.type === "text") {
-                          return (
-                            <Streamdown
-                              key={i}
-                              isAnimating={isLoading && isLast}
-                              className="text-fg"
-                            >
-                              {part.text}
-                            </Streamdown>
-                          );
-                        }
-                        if (
-                          typeof part.type === "string" &&
-                          part.type.startsWith("tool-")
-                        ) {
-                          return <ToolCallCard key={part.toolCallId ?? i} part={part} />;
-                        }
-                        return null;
-                      })}
-                      {isLast && isLoading && (
-                        <span className="mt-2 flex items-center gap-2">
-                          <TypingDots />
-                          <button
-                            onClick={stop}
-                            title="Stop generating"
-                            aria-label="Stop generating"
-                            className="btn btn-ghost px-1.5 py-0.5"
-                          >
-                            <Square size={11} />
-                          </button>
-                        </span>
-                      )}
-                    </>
-                  )}
-                  {isLast && stillGenerating && (
-                    <div className="mt-2 flex items-center gap-1.5 text-xs text-accent">
-                      <Loader2 size={12} className="animate-spin" />
-                      Still generating server-side…
-                    </div>
-                  )}
-                  {isLast && pollTimedOut && (
-                    <div className="mt-2 flex items-center gap-1.5 text-xs text-warn">
-                      <AlertTriangle size={12} />
-                      Generation was interrupted — send a message to continue
-                    </div>
-                  )}
-                </div>
-              </motion.div>
-            );
-          })}
+          {messages.map((message, idx) => (
+            <MessageBubble
+              key={message.id}
+              message={message as unknown as ChatMessageLike}
+              tail={
+                idx === messages.length - 1
+                  ? { isLast: true, isLoading, stillGenerating, pollTimedOut }
+                  : NO_TAIL
+              }
+              reduced={!!reduced}
+              onStop={stop}
+            />
+          ))}
         </AnimatePresence>
 
         <AnimatePresence initial={false}>

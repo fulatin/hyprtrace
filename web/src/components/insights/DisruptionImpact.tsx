@@ -1,5 +1,5 @@
 import { motion, useReducedMotion } from 'framer-motion';
-import { useMemo, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 import { AlertTriangle, BellRing, Sparkles } from 'lucide-react';
 import type { DisruptionImpactResponse } from '../../lib/types';
 import { formatDuration } from '../../lib/format';
@@ -18,7 +18,7 @@ const PAD = { top: 12, right: 14, bottom: 26, left: 34 };
  * y = efficiency score. The dashed line is the least-squares fit; the chips
  * below quantify the same relationship three different ways.
  */
-export default function DisruptionImpact({ data }: DisruptionImpactProps) {
+function DisruptionImpact({ data }: DisruptionImpactProps) {
   const reduced = useReducedMotion();
   const [hover, setHover] = useState<string | null>(null);
 
@@ -241,3 +241,5 @@ export default function DisruptionImpact({ data }: DisruptionImpactProps) {
     </div>
   );
 }
+
+export default memo(DisruptionImpact);

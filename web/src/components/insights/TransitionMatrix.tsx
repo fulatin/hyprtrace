@@ -1,5 +1,5 @@
 import { motion, useReducedMotion } from 'framer-motion';
-import { useMemo, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 import type { AppMetadata, TransitionMatrix as Matrix } from '../../lib/types';
 import { appColor, displayName, pct } from './shared';
 
@@ -17,7 +17,7 @@ interface TransitionMatrixProps {
  * app is j given the current app is i. Intensity encodes probability, so a hot
  * row means "this app almost always leads somewhere predictable".
  */
-export default function TransitionMatrix({
+function TransitionMatrix({
   matrix,
   nodes,
   metadata,
@@ -154,3 +154,7 @@ export default function TransitionMatrix({
     </div>
   );
 }
+
+// Insights re-renders the whole page when the focus filter or the forecast
+// scope changes; none of these panels depend on that state.
+export default memo(TransitionMatrix);

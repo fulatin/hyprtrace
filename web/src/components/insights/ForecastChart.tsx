@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { useMemo } from 'react';
+import { memo, useMemo } from 'react';
 import {
   Area,
   CartesianGrid,
@@ -15,6 +15,7 @@ import { TrendingDown, TrendingUp, Minus } from 'lucide-react';
 import type { AppMetadata, ForecastResponse } from '../../lib/types';
 import { formatDuration, formatShortDate } from '../../lib/format';
 import { WEEKDAYS, displayName, pct } from './shared';
+import { CHART_RESIZE_DEBOUNCE } from '../ui/chartResize';
 
 interface ForecastChartProps {
   data: ForecastResponse;
@@ -40,7 +41,7 @@ const TREND_META = {
  * the dashed line is the fitted model (slope + weekday factors), and the shaded
  * band widens into the future where the model has no data.
  */
-export default function ForecastChart({ data, metadata }: ForecastChartProps) {
+function ForecastChart({ data, metadata }: ForecastChartProps) {
   const rows = useMemo<Row[]>(() => {
     const history: Row[] = data.points.map((p) => ({
       date: p.date,
@@ -90,7 +91,7 @@ export default function ForecastChart({ data, metadata }: ForecastChartProps) {
         </span>
       </div>
 
-      <ResponsiveContainer width="100%" height={260}>
+      <ResponsiveContainer width="100%" height={260} debounce={CHART_RESIZE_DEBOUNCE}>
         <ComposedChart data={rows} margin={{ top: 8, right: 12, bottom: 0, left: 4 }}>
           <defs>
             <linearGradient id="fc-band" x1="0" y1="0" x2="0" y2="1">
@@ -223,3 +224,5 @@ export default function ForecastChart({ data, metadata }: ForecastChartProps) {
     </div>
   );
 }
+
+export default memo(ForecastChart);

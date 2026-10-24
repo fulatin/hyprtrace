@@ -208,6 +208,28 @@
     background-size: 22px 22px;
   }
 
+  /* Ambient colour washes behind the app chrome (Layout.tsx).
+     A pre-baked radial gradient replaces `bg-accent/10` + `blur(120px)`: a
+     filter on a 420px layer costs a full-screen offscreen raster before the
+     first paint and again whenever the backdrop changes, while the gradient is
+     just a paint. Kept as a token-driven utility so a theme change still
+     recolours it. */
+  .wash-accent {
+    background-image: radial-gradient(
+      closest-side,
+      rgb(var(--c-accent) / 0.16),
+      rgb(var(--c-accent) / 0)
+    );
+  }
+
+  .wash-accent-2 {
+    background-image: radial-gradient(
+      closest-side,
+      rgb(var(--c-accent-2) / 0.16),
+      rgb(var(--c-accent-2) / 0)
+    );
+  }
+
   .glow-accent {
     box-shadow: 0 0 24px -4px rgb(var(--c-accent) / var(--glow-opacity));
   }

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts';
 import { PieChart as PieIcon } from 'lucide-react';
@@ -7,6 +7,7 @@ import { formatDuration } from '../lib/format';
 import { Panel } from './ui/Card';
 import { EmptyState } from './ui/Feedback';
 import CountUp from './ui/CountUp';
+import { CHART_RESIZE_DEBOUNCE } from './ui/chartResize';
 
 const COLORS = [
   '#22d3ee',
@@ -26,7 +27,7 @@ interface AppUsagePieProps {
   metadata?: Record<string, AppMetadata>;
 }
 
-export default function AppUsagePie({ data, metadata }: AppUsagePieProps) {
+function AppUsagePie({ data, metadata }: AppUsagePieProps) {
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
 
   const chartData = useMemo(
@@ -63,7 +64,7 @@ export default function AppUsagePie({ data, metadata }: AppUsagePieProps) {
       hint={`${chartData.length} apps · ${formatDuration(total)}`}
     >
       <div className="relative">
-        <ResponsiveContainer width="100%" height={240}>
+        <ResponsiveContainer width="100%" height={240} debounce={CHART_RESIZE_DEBOUNCE}>
           <PieChart>
             <Pie
               data={chartData}
@@ -148,3 +149,7 @@ export default function AppUsagePie({ data, metadata }: AppUsagePieProps) {
     </Panel>
   );
 }
+
+// The pie is one of the most expensive subtrees on the Dashboard: skip it when
+// the page re-renders but its data/metadata references are unchanged.
+export default memo(AppUsagePie);

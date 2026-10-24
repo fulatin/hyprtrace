@@ -1,5 +1,5 @@
 import { motion, useReducedMotion } from 'framer-motion';
-import { useMemo, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 import type { AppMetadata, TransitionEdge, TransitionNode } from '../../lib/types';
 import { appColor, displayName, pct } from './shared';
 
@@ -23,7 +23,7 @@ const GAP = 8;
  * wide ribbons are the paths the user actually walks most often.
  * Self-transitions are excluded from ribbons and shown as a badge instead.
  */
-export default function FlowDiagram({ nodes, edges, metadata, focus, onFocus }: FlowDiagramProps) {
+function FlowDiagram({ nodes, edges, metadata, focus, onFocus }: FlowDiagramProps) {
   const reduced = useReducedMotion();
   const [hoverEdge, setHoverEdge] = useState<string | null>(null);
   const [hoverNode, setHoverNode] = useState<string | null>(null);
@@ -234,3 +234,5 @@ export default function FlowDiagram({ nodes, edges, metadata, focus, onFocus }: 
     </div>
   );
 }
+
+export default memo(FlowDiagram);
