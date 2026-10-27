@@ -63,46 +63,116 @@ export interface PaginatedResponse<T> {
   per_page: number;
 }
 
+/* --------------------------------------------------------------------------
+   AI runtime (/api/ai/*) — DeepSeek Harness is the only runtime.
+
+   These types are client-side only: the Rust models that back them are the
+   plain `serde_json::json!` values in `routes/ai.rs` / `routes/config.rs`, not
+   the generated `api-types.ts` surface. Keep them in sync with CONTRACT.md
+   §2/§3.
+   -------------------------------------------------------------------------- */
+
 export interface AiChatRequest {
-  provider?: string;
   message: string;
-  include_data?: boolean;
-  date_range?: string;
+  /** Routes the turn to a DSH session; a new uuid means a new conversation. */
+  conversation_id?: string;
+  /** Model override for this turn; omitted → the configured `ai.dsh.model`. */
+  model?: string;
+}
+
+/** One DSH model route currently selected by the server. */
+export interface AiCurrentRoute {
+  provider: string;
+  model: string;
+}
+
+/**
+ * Runtime health, returned verbatim by `GET /api/ai/status` and nested as
+ * `status` in `GET /api/ai/models` / `ai_status` in `GET /api/config`.
+ */
+export interface AiStatus {
+  enabled: boolean;
+  ready: boolean;
+  provider: string;
+  model: string;
+  bridge_connected: boolean;
+  tool_count: number;
+  error: string | null;
 }
 
 export interface AiModelsResponse {
   providers: Record<string, string[]>;
   default: string;
+  current: AiCurrentRoute;
+  status: AiStatus;
+}
+
+/** One tool exposed by the harness (`GET /api/ai/tools`). */
+export interface AiTool {
+  name: string;
+  description: string;
+}
+
+export interface AiToolsResponse {
+  tools: AiTool[];
+}
+
+/**
+ * `[ai.dsh]` in `config.toml` as serialised by `GET /api/config`.
+ *
+ * The advanced knobs (`base_url` … `extra_args`) are declared optional because
+ * the Rust model skips `None` fields on serialisation: a config file that does
+ * not set them omits the keys entirely.
+ */
+export interface AiDshConfig {
+  enabled: boolean;
+  command: string;
+  profile: string;
+  provider: string;
+  model: string;
+  api_key_env: string;
+  request_timeout_seconds: number;
+  base_url?: string | null;
+  api?: string | null;
+  cwd?: string | null;
+  tools_script?: string | null;
+  overlay_template?: string | null;
+  tools_prefix?: string;
+  extra_args?: string[];
+}
+
+/** The `[ai]` section: the DSH runtime plus the proactive-insight cadence. */
+export interface AiConfig {
+  proactive_interval_minutes: number;
+  dsh: AiDshConfig;
 }
 
 export interface ConfigResponse {
-  openai_url: string;
-  openai_model: string;
-  openai_configured: boolean;
-  ollama_url: string;
-  ollama_model: string;
-  default_provider: string;
+  ai?: AiConfig;
+  /** Same shape as `GET /api/ai/status`. */
+  ai_status?: AiStatus;
   record_titles: boolean;
   retention_days: number;
   weekly_report_enabled: boolean;
   weekly_report_day: number;
   weekly_report_hour: number;
-  weekly_report_minute: number
+  weekly_report_minute: number;
+}
+
+/** Partial `[ai]` update: `PUT /api/config` merges only the keys sent. */
+export interface AiConfigUpdate {
+  proactive_interval_minutes?: number;
+  dsh?: Partial<AiDshConfig>;
 }
 
 export interface ConfigUpdateRequest {
-  openai_url?: string;
-  openai_api_key?: string;
-  openai_model?: string;
-  ollama_url?: string;
-  ollama_model?: string;
-  default_provider?: string;
+  ai?: AiConfigUpdate;
   record_titles?: boolean;
   retention_days?: number;
   weekly_report_enabled?: boolean;
   weekly_report_day?: number;
   weekly_report_hour?: number;
-  weekly_report_minute?: number
+  weekly_report_minute?: number;
 }
 
 export interface AppsMetadataResponse {

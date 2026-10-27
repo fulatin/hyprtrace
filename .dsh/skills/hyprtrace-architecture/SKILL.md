@@ -52,7 +52,9 @@ crates/hyprtrace-server/src/
   auth.rs                   Origin 白名单 + 可选静态 token
   desktop.rs                .desktop 解析 → 应用友好名/图标（OnceLock 全局缓存）
   proactive.rs / retention.rs / weekly_report.rs     三个后台任务
-  ai/{mod,ollama,openai,tools}.rs                    provider 抽象 / 流式解析 / 29 个 agent 工具
+  ai/{mod,service,bridge}.rs  DeepSeek Harness 运行时：spawn `dsh --profile sdk`（stdio JSON-RPC）、
+                             多会话/流式/取消/模型工具清单、Unix-socket 桥、overlay 渲染
+integrations/dsh/           overlay 模板 + MCP 工具 server（21 只读）+ bridge 插件（流式/取消）
 
 web/src/
   lib/api.ts         所有 REST 调用（含 insights 命名空间与 search）
@@ -117,7 +119,9 @@ schema/expected-columns.txt   全新库 schema 快照，两个 crate 的 migrate
 | 新增派生指标/公式 | 纯函数放 `server/insights.rs`（便于单测），SQL 放 `server/db.rs` |
 | 新的图表/页面 | `web/src/pages/` + `web/src/components/`，先读 `web/DESIGN.md` |
 | 主题/配色/动效 | `web/src/index.css`（CSS 变量）、`tailwind.config.js`、`web/src/lib/motion.ts` |
-| AI 能查什么 | `server/ai/tools.rs`（工具定义 + 派发）与 `server/ai/mod.rs`（system prompt、信任边界） |
+| AI 能查什么 | `integrations/dsh/hyprtrace-mcp.mjs`（21 个只读 MCP 工具，名 `mcp__hyprtrace__*`）；人设/信任边界在 `integrations/dsh/overlay.template.yml` |
+| AI 聊天由谁驱动 | `server/ai/service.rs::AiService`（DSH 子进程 + `routes/ai.rs::run_ai_agent`）；流式/取消/清单走 `server/ai/bridge.rs` + `integrations/dsh/hyprtrace-bridge.mjs` |
+| AI 前端契约 | `server/ai/service.rs::AiEvent`（7 种 NDJSON 事件）+ `web/src/lib/transport.ts`；`conversation_id` 即 DSH session id |
 | 安装/服务/打包 | `scripts/*.sh`、`scripts/*.service`、`.aur/`（gitignore，不提交） |
 
 ## 常用验证命令

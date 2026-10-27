@@ -13,16 +13,9 @@ declare global {
 interface ChatInputProps {
   onSend: (message: string) => void;
   disabled?: boolean;
-  includeData: boolean;
-  onToggleData: () => void;
 }
 
-export default function ChatInput({
-  onSend,
-  disabled,
-  includeData,
-  onToggleData,
-}: ChatInputProps) {
+export default function ChatInput({ onSend, disabled }: ChatInputProps) {
   const [message, setMessage] = useState('');
   const [listening, setListening] = useState(false);
   const recognitionRef = useRef<any>(null);
@@ -88,15 +81,12 @@ export default function ChatInput({
   return (
     <form onSubmit={handleSubmit} className="border-t border-line bg-surface/60 p-4 backdrop-blur-xl">
       <div className="mb-2 flex flex-wrap items-center gap-3">
-        <label className="flex cursor-pointer items-center gap-2 text-xs text-fg-muted transition-colors hover:text-fg">
-          <input
-            type="checkbox"
-            checked={includeData}
-            onChange={onToggleData}
-            className="h-3.5 w-3.5 rounded border-line bg-surface-3 accent-accent focus:ring-2 focus:ring-accent/25"
-          />
-          Include usage data
-        </label>
+        {/* The agent reaches the data through read-only MCP tools, so there is
+            no "include usage data" toggle any more — every question runs with
+            the same tool surface. */}
+        <span className="text-xs text-fg-faint">
+          Data is read through the assistant&apos;s read-only tools.
+        </span>
 
         <AnimatePresence initial={false}>
           {listening && (

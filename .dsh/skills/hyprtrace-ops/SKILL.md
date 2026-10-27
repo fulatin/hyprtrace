@@ -11,7 +11,7 @@ whenToUse: 需要构建、运行、重启、部署、调试运行中的实例、
 ```bash
 cargo build --release                # 两个二进制：target/release/hyprtrace-{daemon,server}
 cargo check --workspace              # CI 第一步
-cargo test --workspace               # CI 第二步（daemon 47 + server 58）
+cargo test --workspace               # CI 第二步（daemon 54 + server 103）
 cd web && npx tsc --noEmit -p tsconfig.json && npm run build   # CI 第三步（npm ci 更严格）
 ```
 
@@ -35,8 +35,22 @@ cd web && npx tsc --noEmit -p tsconfig.json && npm run build   # CI 第三步（
 
 ```bash
 ISO=/tmp/hyprtrace-iso; mkdir -p "$ISO/config/hyprtrace" "$ISO/home"
-# 从真实配置派生时务必去掉 [ai.openai].api_key（里面有真密钥，别把它带进临时目录或日志）
-cp ~/.config/hyprtrace/config.toml "$ISO/config/hyprtrace/config.toml"
+# 建议直接写最小配置（不要 cp 真实 config：里面有历史 API key，虽然 server 已忽略旧键）
+cat > "$ISO/config/hyprtrace/config.toml" <<'TOML'
+[daemon]
+db_path = "'"$ISO"'/copy.db"
+[server]
+host = "127.0.0.1"
+port = 9421
+retention_days = 0
+weekly_report_enabled = false
+[ai]
+proactive_interval_minutes = 100000
+[ai.dsh]
+enabled = true
+provider = "opencode-go"
+model = "deepseek-v4.1-flash"
+TOML
 sqlite3 ~/.local/share/hyprtrace/hyprtrace.db ".backup '$ISO/copy.db'"   # WAL 一致性快照；不要裸 cp
 # 编辑副本：db_path 用绝对路径；[server] port = 9421；
 #           weekly_report_enabled = false；retention_days = 0
@@ -45,6 +59,9 @@ HOME="$ISO/home" XDG_CONFIG_HOME="$ISO/config" ./target/release/hyprtrace-server
 
 注意点：
 
+- AI 运行时是 **DSH 子进程**：隔离实例会 spawn `dsh --profile sdk`，默认用真实 `~/.dsh`（凭据来源）。
+  想完全隔离就把 `DSH_HOME` 指向工作区内拷贝（`cp -r ~/.dsh/profiles/sdk $DSH_HOME/profiles/` 并 symlink
+  `.credentials.yaml`），详见 `docs/dsh-integration.md`。
 - **PROACTIVE_AI 无法关闭**（间隔会被 `max(.., 15min)` 抬起）→ 临时实例必须隔离 `HOME`，否则会**花 API 额度并往桌面发通知**。
 - `retention_days > 0` 会**真删数据**；`weekly_report_enabled` 会写文件并通知。
 - server **不会**创建 db 的父目录，先 `mkdir -p`。
@@ -120,7 +137,7 @@ journalctl --user -u hyprtrace-server -n 50
 1. 不要 `pkill hyprtrace-server`/随便重启——那是用户正在用的实例；要重启就走 systemd，并在做之前想清楚影响。
 2. **不要用真实配置起第二个 daemon**：它不解析参数、共用同一 config 与 db，会双写会话并在桌面弹提醒。
 3. 不要把 `~/.local/share/hyprtrace/web` 当源码改；也不要删掉它不管（会让运行中的服务 404）。
-4. 不要 `cat`/复制/打印 `~/.config/hyprtrace/config.toml`——里面有真实的 `[ai.openai].api_key`。
+4. 不要 `cat`/复制/打印 `~/.config/hyprtrace/config.toml`——历史版本可能仍留有真实的 `[ai.openai].api_key`（现已不被 server 读取，但仍是凭据）。
 5. 不要删 `web/node_modules` 或 `web/package-lock.json`；`npm ci` 需要网络（npm 缓存默认在 `~/.npm`，沙箱内可能需要 `--cache` 指到工作区内）。
 6. 不要把 `.aur/`、`.dsh-diag/`、`target/`、`web/dist/`、`node_modules/` 提交进仓库。
 7. 改 schema 只改一处：daemon 与 server **各有一份迁移**，`scripts/repair-negative-durations.sh` 也依赖列名。

@@ -2,7 +2,7 @@
 
 > Hyprland Window Time Tracker — 追踪你的窗口使用时间，用数据提升效率
 
-HyprTrace 是一个 Hyprland 窗口时间追踪系统，持续记录你在每个应用上花费的时间，提供美观的 Web 仪表盘进行数据分析，并集成本地 Ollama 和云端 OpenAI 兼容 API 的 AI 分析功能。
+HyprTrace 是一个 Hyprland 窗口时间追踪系统，持续记录你在每个应用上花费的时间，提供美观的 Web 仪表盘进行数据分析，AI 分析由本机的 DeepSeek Harness 驱动。
 
 ## 预览
 
@@ -41,7 +41,7 @@ Hyprland IPC Socket
 **三个组件：**
 
 - **`hyprtrace-daemon`** — Rust 后台守护进程，监听 Hyprland 事件记录窗口焦点会话，同时运行空闲检测（loginctl + 可选的 evdev 输入监控）、资源采样、目标/作息提醒、通知与剪贴板打断采集
-- **`hyprtrace-server`** — Rust Axum HTTP API 服务器，读取 SQLite 数据，暴露 REST 接口（数据查询 + AI agent 对话），提供前端静态文件服务，并运行 AI 主动监控后台任务
+- **`hyprtrace-server`** — Rust Axum HTTP API 服务器，读取 SQLite 数据，暴露 REST 接口（数据查询 + AI agent 对话），提供前端静态文件服务，并运行 AI 主动监控后台任务；AI 运行时是常驻的 DeepSeek Harness 子进程
 - **`hyprtrace-web`** — React + TypeScript + Tailwind CSS + Recharts + framer-motion 前端 SPA，包含仪表盘、洞察分析、应用排行、时间线、会话浏览、目标管理和 AI 分析面板，支持深色/浅色/跟随系统主题
 
 ## 功能
@@ -68,7 +68,7 @@ Hyprland IPC Socket
   - **异常日检测** — 基于中位数 + MAD 的稳健基线，标出偏离日常习惯的日子及原因
 - **主题与动效** — 深色/浅色/跟随系统三种主题（CSS 变量驱动，切换无需刷新），页面切换、卡片入场、数字滚动、图表绘制等动画均遵循 `prefers-reduced-motion`
 - **周报导出** — 一键导出 Markdown 格式周报，或让 AI 生成带洞察的分析报告
-- **AI 分析** — 集成 Ollama 本地模型和 OpenAI 兼容 API，AI agent 可实时查询 Hyprland 状态与历史数据
+- **AI 分析** — 由本机 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 驱动：token 级流式输出、可折叠思考过程、可随时停止；21 个只读工具直接查询历史使用数据
 - **AI 主动监控** — 后台任务定时分析使用模式，发现异常（熬夜、游戏超时、目标告急）时主动推送建议
 - **语音输入** — AI 聊天支持 Web Speech API 语音转文字
 - **Waybar 模块** — 状态栏实时显示当前应用、会话时长和当日目标进度
@@ -167,42 +167,61 @@ port = 9420
 auth_token = ""                         # 可选：API 访问令牌。留空则仅需本机访问；若绑定局域网地址（0.0.0.0 等）请务必设置
 
 [ai]
-default_provider = "ollama"
 proactive_interval_minutes = 120        # AI 主动监控间隔
 
-[ai.ollama]
-base_url = "http://localhost:11434"
-default_model = "qwen2.5:7b"
-
-[ai.openai]
-api_key = ""
-base_url = "https://api.openai.com/v1"
-default_model = "gpt-4o-mini"
+# AI 运行时：本机 DeepSeek Harness（见下方「AI 集成」）
+[ai.dsh]
+enabled = true
+command = "dsh"                          # 需要 PATH 里能找到 dsh（systemd 下建议绝对路径）
+profile = "sdk"
+provider = "opencode-go"                 # 你的 dsh 里已配置的模型路由
+model = "deepseek-v4.1-flash"
+api_key_env = "OPENCODE_GO_API_KEY"      # dsh 凭据库里解析的凭据引用名
+request_timeout_seconds = 300
 ```
 
 也可以在 Web 设置页面直接修改配置，无需手动编辑文件。除配置文件外，每日目标可以在设置页的 **Daily Goals** 区管理，应用分类规则在 **App Categories** 区管理。
 
 ## AI 集成
 
-AI 聊天采用 **agent 模式**：模型可以通过工具实时查询 Hyprland 状态（活动窗口、工作区、监视器、输入设备等）和历史使用数据（汇总、排行、会话、小时分布等），支持多轮工具调用，并可将分析结果写成每日目标或发送桌面提醒。
+HyprTrace 的 AI 部分整体运行在本机的
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）上：
+`hyprtrace-server` 不实现自己的 LLM provider、agent 循环或工具执行器，而是常驻一个
+`dsh --profile sdk` 子进程，通过它面向外部程序的 SDK 协议（stdio JSON-RPC）驱动 agent；
+模型路由、工具调用、会话历史、上下文压缩和取消都由 harness 负责。
 
-### Ollama（本地）
+- **流式体验**：回答文本与思考过程（reasoning）都按 token 增量推送；工具调用实时展示。
+- **可停止**：停止按钮/关闭页面即向 harness 发取消，模型立刻停下。
+- **数据工具**：`integrations/dsh/hyprtrace-mcp.mjs` 把 HyprTrace 的 21 个只读查询
+  （汇总/排行/会话/时间线/标题搜索/效率/预测/目标/分类/项目/洞察/报告）暴露给模型；
+  bash/文件/web 等编码工具在 profile 里全部禁用。
+- **模型下拉**来自 harness 的实际模型清单；选择不同模型会自动重启 harness 并恢复该对话。
+- **周报与主动提醒**也走同一个 harness 运行时。
 
-```bash
-# 安装 Ollama 并拉取模型
-ollama pull qwen2.5:7b
+### 前置条件
+
+1. `dsh` CLI 在 `PATH` 中，Node ≥ 18。
+2. `~/.dsh` 里已有可用的模型路由：默认 `opencode-go` / `deepseek-v4.1-flash`
+   （凭据引用 `OPENCODE_GO_API_KEY`）；用别的路由改 `[ai.dsh] provider/model/api_key_env`。
+3. `dsh --profile sdk` 首次使用会自动初始化 profile，不需要手工创建。
+
+### 启用
+
+```toml
+[ai]
+proactive_interval_minutes = 120
+
+[ai.dsh]
+enabled = true
+command = "dsh"
+profile = "sdk"
+provider = "opencode-go"
+model = "deepseek-v4.1-flash"
+api_key_env = "OPENCODE_GO_API_KEY"
 ```
 
-### OpenAI / 兼容 API
-
-支持所有 OpenAI 兼容 API，例如：
-
-- **OpenAI**: `https://api.openai.com/v1`
-- **DeepSeek**: `https://api.deepseek.com/v1`
-- **Groq**: `https://api.groq.com/openai/v1`
-- **本地代理**: `http://localhost:8080/v1`
-
-在 Web 设置页面填入 API 地址、密钥和模型名称即可。AI 页面支持语音输入、模型/供应商下拉选择（选择会记忆），并有一键生成 AI 周报和主动监控提醒功能。
+也可以在 Web 设置页的 **AI** 区修改这些字段并查看运行时状态（ready / 工具数 / 错误）。
+细节、架构图、排障与验证方式见 [docs/dsh-integration.md](docs/dsh-integration.md)。
 
 ## 开发
 
@@ -271,7 +290,7 @@ GitHub Actions 在每次 push / pull request 时运行 `cargo check`、`cargo te
 | 前端 | React 18, TypeScript, Vite, Tailwind CSS 3, Recharts, framer-motion, Lucide Icons |
 | AI 前端 | @ai-sdk/react, streamdown, Web Speech API |
 | 数据库 | SQLite (WAL mode) |
-| AI 后端 | Ollama (本地 NDJSON 流), OpenAI 兼容 API (云端 SSE 流), agent 工具调用 |
+| AI 后端 | DeepSeek Harness（`dsh --profile sdk`，stdio JSON-RPC + Unix-socket 桥；21 个只读 MCP 工具） |
 
 ## License
 

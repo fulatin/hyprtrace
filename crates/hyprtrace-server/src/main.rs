@@ -56,12 +56,23 @@ async fn main() -> anyhow::Result<()> {
             Err(e) => return Err(e).context("Failed to initialize database"),
         }
     }
-    let ai = ai::AiManager::from_config(&cfg.ai);
+    // The MCP/bridge helpers are local child processes: they must reach the
+    // API through loopback even when the server binds a wildcard address.
+    let api_base = format!(
+        "http://{}:{}",
+        loopback_host(&cfg.server.host),
+        cfg.server.port
+    );
+    let ai = std::sync::Arc::new(ai::AiService::new(
+        cfg.ai.dsh.clone(),
+        api_base,
+        cfg.server.auth_token.clone(),
+    ));
 
     let state = Arc::new(routes::AppState {
         db: tokio::sync::Mutex::new(db),
         config: tokio::sync::Mutex::new(cfg.clone()),
-        ai: tokio::sync::Mutex::new(ai),
+        ai,
     });
 
     proactive::spawn_proactive_monitor(state.clone(), cfg.ai.proactive_interval_minutes);
@@ -98,6 +109,16 @@ async fn main() -> anyhow::Result<()> {
     axum::serve(listener, router).await?;
 
     Ok(())
+}
+
+/// Host a local child process can use to reach this server: wildcard binds
+/// become loopback, everything else is used verbatim (bracketing IPv6).
+fn loopback_host(host: &str) -> String {
+    match host {
+        "0.0.0.0" | "::" | "[::]" | "*" => "127.0.0.1".to_string(),
+        host if host.contains(':') => format!("[{host}]"),
+        host => host.to_string(),
+    }
 }
 
 /// Resolve the directory that holds the built web UI.

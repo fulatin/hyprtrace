@@ -3,7 +3,6 @@ mod config;
 mod data;
 mod insights;
 
-use crate::ai::AiManager;
 use crate::config::Config;
 use crate::db::Database;
 use axum::Router;
@@ -12,7 +11,8 @@ use std::sync::Arc;
 pub struct AppState {
     pub db: tokio::sync::Mutex<Database>,
     pub config: tokio::sync::Mutex<Config>,
-    pub ai: tokio::sync::Mutex<AiManager>,
+    /// DeepSeek Harness runtime: the one and only AI engine.
+    pub ai: std::sync::Arc<crate::ai::AiService>,
 }
 
 pub fn create_router(state: Arc<AppState>) -> Router {
@@ -60,13 +60,10 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/projects", axum::routing::put(data::put_projects))
         .route("/projects/stats", axum::routing::get(data::project_stats))
         .route("/ai/models", axum::routing::get(ai::ai_models))
+        .route("/ai/status", axum::routing::get(ai::ai_status))
+        .route("/ai/cancel", axum::routing::post(ai::ai_cancel))
         .route("/ai/tools", axum::routing::get(ai::ai_tools))
         .route("/ai/chat", axum::routing::post(ai::ai_chat))
-        .route("/ai/chat/stream", axum::routing::post(ai::chat_stream))
-        .route(
-            "/ai/chat/stream/text",
-            axum::routing::post(ai::chat_stream_text),
-        )
         .route("/ai/chat/agent", axum::routing::post(ai::chat_agent))
         .route(
             "/ai/report/weekly",

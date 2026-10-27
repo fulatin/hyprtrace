@@ -93,17 +93,13 @@ async fn build_insight(state: &Arc<crate::routes::AppState>) -> anyhow::Result<S
         snapshot
     );
 
-    let messages = vec![
-        crate::ai::ChatMessage::new("system", "You are a concise productivity assistant."),
-        crate::ai::ChatMessage::new("user", prompt),
-    ];
-
-    // Snapshot under the lock, call outside it: a single slow inference
-    // must not block chat/model-listing/config updates elsewhere.
-    let ai = {
-        let ai = state.ai.lock().await;
-        ai.snapshot()
-    };
-    let reply = ai.chat(&ai.default_provider, None, &messages).await?;
+    // The harness is the only AI runtime; run the watchdog as a dedicated
+    // conversation so it never mixes with the user's chat history.
+    let brief = format!(
+        "System: You are a concise productivity assistant.\n\n{}",
+        prompt
+    );
+    let session = format!("{}-proactive", state.ai.default_session().await);
+    let reply = state.ai.complete(&session, &brief).await?;
     Ok(reply.trim().trim_matches('"').to_string())
 }

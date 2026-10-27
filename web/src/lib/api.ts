@@ -8,6 +8,8 @@ import type {
   DailyTrend,
   AiMessage,
   AiModelsResponse,
+  AiStatus,
+  AiToolsResponse,
   ConfigResponse,
   ConfigUpdateRequest,
   PaginatedResponse,
@@ -121,10 +123,40 @@ export const api = {
       `/api/app/${encodeURIComponent(cls)}/trend?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}${granularity ? `&granularity=${granularity}` : ''}`
     ),
 
-  aiModels: () =>
-    fetchJSON<AiModelsResponse>('/api/ai/models'),
+  /**
+   * GET /api/ai/models — model inventory straight from the harness. Without
+   * `refresh` this never boots the harness (a page load must not pay a
+   * multi-second child start); `refresh=1` starts it if needed, which is the
+   * Settings page's "test connection" action.
+   */
+  aiModels: (refresh = false) =>
+    fetchJSON<AiModelsResponse>(
+      `/api/ai/models${refresh ? '?refresh=1' : ''}`,
+      // `refresh=1` may have to boot the harness (a child process), which can
+      // take well over the default 15s on a cold machine.
+      refresh ? { signal: AbortSignal.timeout(60_000) } : undefined
+    ),
 
+  /** GET /api/ai/status — DSH runtime health (enabled/ready/bridge/tool count). */
+  aiStatus: () =>
+    fetchJSON<AiStatus>('/api/ai/status'),
 
+  /** GET /api/ai/tools — tools the harness actually exposes this session. */
+  aiTools: () =>
+    fetchJSON<AiToolsResponse>('/api/ai/tools'),
+
+  /**
+   * POST /api/ai/cancel — ask the server to cancel the in-flight turn of a
+   * conversation. Aborting the NDJSON fetch is the primary stop path (the
+   * server treats a disconnect as a cancel); this is the explicit backup.
+   */
+  aiCancel: (conversationId: string) =>
+    fetchJSON<{ status: 'ok' | 'not_found' }>('/api/ai/cancel', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ conversation_id: conversationId }),
+      // The default 15s timeout is fine here; the call answers immediately.
+    }),
 
   aiConversations: () =>
     fetchJSON<AiMessage[]>('/api/ai/conversations'),
@@ -272,10 +304,16 @@ export const api = {
     URL.revokeObjectURL(url);
   },
 
-  weeklyReport: (provider: string, model?: string) =>
+  /**
+   * POST /api/ai/report/weekly — server-side weekly report written by DSH.
+   * The `model` override is optional; the response is the Markdown text.
+   */
+  weeklyReport: (model?: string) =>
     fetchJSON<{ report: string }>('/api/ai/report/weekly', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ provider, model }),
+      body: JSON.stringify(model ? { model } : {}),
+      // The report is a full model turn (often ~30-60s), not a quick API read.
+      signal: AbortSignal.timeout(120_000),
     }),
 };

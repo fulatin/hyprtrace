@@ -1,16 +1,16 @@
 ---
 name: hyprtrace-server
-description: hyprtrace-server 参考：全部 /api 端点与其参数钳制、SQL 层与日期列约定、每个派生指标的确切公式（效率分、趋势预测、洞察七件套）、鉴权与 Origin 白名单、三个后台任务、AI provider 与 29 个 agent 工具、以及会踩坑的不变量。
-whenToUse: 新增或修改 REST 端点、改派生指标/统计算法、排查接口数据不对、处理鉴权/CORS、改 AI 集成或 agent 工具、改配置读写时。
+description: hyprtrace-server 参考：全部 /api 端点与其参数钳制、SQL 层与日期列约定、每个派生指标的确切公式（效率分、趋势预测、洞察七件套）、鉴权与 Origin 白名单、三个后台任务、DeepSeek Harness 运行时与 21 个只读 MCP 工具、以及会踩坑的不变量。
+whenToUse: 新增或修改 REST 端点、改派生指标/统计算法、排查接口数据不对、处理鉴权/CORS、改 AI 集成（DSH 运行时/MCP 工具）、改配置读写时。
 ---
 
 # hyprtrace-server 参考
 
-Axum 0.7 + tokio，binary-only（无 `lib.rs`，测试全是内联单测）。`Arc<AppState>{ db: tokio::Mutex<Database>, config: tokio::Mutex<Config>, ai: tokio::Mutex<AiManager> }`，`Database` 内部是**一个 rusqlite 连接**（无连接池，也不套 `spawn_blocking`）。
+Axum 0.7 + tokio，binary-only（无 `lib.rs`，测试全是内联单测）。`Arc<AppState>{ db: tokio::Mutex<Database>, config: tokio::Mutex<Config>, ai: Arc<ai::AiService> }`，`Database` 内部是**一个 rusqlite 连接**（无连接池，也不套 `spawn_blocking`）。
 
 ## 一、HTTP 表面
 
-**约定**：多数 handler 是 `Result<Json<T>, Json<Value>>`，失败也返回 **HTTP 200 + `{"error": ...}`**。只有 `PUT /api/projects`（400/500）、`/api/ai/chat/stream/text` 与 `/api/ai/chat/agent`（400）会返回真实状态码。未匹配的 `/api/*` → 404 JSON；其余路径落到 SPA fallback（200 + index.html，故意用 `.fallback()` 而不是 `.not_found_service()`，否则前端路由刷新会 404）。
+**约定**：多数 handler 是 `Result<Json<T>, Json<Value>>`，失败也返回 **HTTP 200 + `{"error": ...}`**。只有 `PUT /api/projects`（400/500）与 `/api/ai/chat/agent`（400，空消息/未启用）会返回真实状态码。未匹配的 `/api/*` → 404 JSON；其余路径落到 SPA fallback（200 + index.html，故意用 `.fallback()` 而不是 `.not_found_service()`，否则前端路由刷新会 404）。
 
 数据端点（`routes/data.rs`）：
 
@@ -46,9 +46,9 @@ Axum 0.7 + tokio，binary-only（无 `lib.rs`，测试全是内联单测）。`A
 | `cooccurrence` | from/to, `window_minutes`(30 → 1..1440), `limit`(10 → 1..100) |
 | `anomalies` | from/to, `window`(14 → 1..90), `threshold`(2.0 → 0.5..5.0) |
 
-配置：`GET /api/config`（**永不返回 API key**）；`PUT /api/config` 走 toml_edit 读改写（保留未知键与注释），`openai_api_key:""` 表示删除该键，改完重建 `AiManager`。**`auth_token` 不可通过 API 修改**，只能编辑 config.toml；`weekly_report_day` 无校验，写 >7 会静默关闭周报。
+配置：`GET /api/config`（**永不返回 API key**）；`PUT /api/config` 走 toml_edit 读改写（保留未知键与注释），更新 `[ai.dsh]` 后会丢弃并懒重启 harness（`AiService::reconfigure`）。**`auth_token` 不可通过 API 修改**，只能编辑 config.toml；`weekly_report_day` 无校验，写 >7 会静默关闭周报。
 
-AI：`/api/ai/models`、`/tools`、`/chat`（普通）、`/chat/stream`（SSE，**无 `[DONE]`、无 error 事件**）、`/chat/stream/text`（纯文本）、`/chat/agent`（**NDJSON**，事件恰好五种：`text` / `tool_call` / `tool_result` / `done` / `error`，前端 `web/src/lib/transport.ts` 按此解析）、`/report/weekly`、`/conversations`（GET/DELETE）。
+AI：`/api/ai/models[?refresh=1]`（DSH 实际模型清单 + status）、`/status`（enabled/ready/bridge_connected/tool_count/error）、`/tools`（harness 真实工具表）、`/chat/agent`（**NDJSON**，事件七种：`text` / `reasoning` / `tool_call` / `tool_result` / `done` / `cancelled` / `error`）、`/cancel`、`/chat`（非流式）、`/report/weekly`、`/conversations`（GET/DELETE）。**已删除** `/chat/stream`、`/chat/stream/text`。
 
 ## 二、SQL 层（`db/`）
 
@@ -104,31 +104,58 @@ HYPRTRACE_WRITE_TYPES=1 cargo test -p hyprtrace-server api_types
 - **retention**：首次 5 分钟后，之后每 6 小时；`retention_days = 0` 时跳过；否则删除严格早于 cutoff 的**已结束**会话并重建汇总。
 - **weekly_report**：每 60s 检查，`try_lock` 拿不到 config 就跳过本轮；开启且到点（星期匹配且时间 ≥ 设定值）时生成 markdown 到 `~/.local/share/hyprtrace/reports/` 并发通知；用内存 `HashSet` 去重（重启会重发同一周）。
 
-## 六、AI 集成
+## 六、AI 集成（DeepSeek Harness 是唯一运行时）
 
-- `AiManager` 固定注册 `ollama` 与 `openai` 两个 provider（key 可回退 `OPENAI_API_KEY` 环境变量）。**调用 provider 前先 `snapshot()` 取副本，不要在持锁状态下发请求**。
-- 流式差异：ollama 是 NDJSON，`tool_calls` **一次给全**；openai 是 SSE，`tool_calls` **跨 delta 分片**，在流结束后才 flush。两者 HTTP client 的总超时都是 300s。
-- agent 循环：`MAX_ROUNDS = 6`、`MAX_TOOL_CALLS = 20`，首轮失败会以 `tools_enabled=false` 重试一次，超预算/截断都会发 `{"type":"error"}`。
-- 29 个工具定义在 `ai/tools.rs`（含 `search_titles`：对窗口标题做子串全文搜索，走 `db::search` 的 FTS5 索引）：DB 类（查汇总/排行/会话/目标/分类，以及 `set_goal`/`delete_goal`/`send_reminder`）+ 只读 Hyprland 类。**未知工具名会落到 Hyprland 分支**并返回 `Unknown tool`。system prompt 里编码了信任边界（窗口标题、通知文本、DB 值都当作不可信数据）与"未经明确要求不得调用 `set_goal(replace_all=true)`/`delete_goal`/`send_reminder`"的约束——不要削弱。
-- 会话持久化：`ai_conversations.complete` 标记流式行是否完成；历史重建跳过"未完成且内容为空"的行，但**未完成但非空**的行会原样回灌进下一次 prompt。
+server 里**没有**进程内 LLM provider、agent 循环或工具执行器。`ai/service.rs::AiService` 常驻一个
+`dsh --profile sdk --patch <渲染后的 overlay>` 子进程；`ai/bridge.rs` 通过 Unix socket 接 harness 内的
+插件 `integrations/dsh/hyprtrace-bridge.mjs`，补齐官方 SDK 不给的能力（token 流、reasoning、取消、清单）。
+
+- **SDK 协议**：stdio NDJSON JSON-RPC 2.0 —— `initialize` / `session/prompt` / `session/resume`；
+  通知 `session.event`、`session.status`。子进程 stdout 只读 JSON-RPC，日志走 stderr（`RUST_LOG=debug` 可见 `dsh:` 前缀）。
+- **bridge 协议**（冻结在 `docs/dsh-integration.md` / `.dsh-diag/deep-fusion/CONTRACT.md`）：
+  插件→服务端 `hello` / `stream`（`agent/assistant-stream` 原样 frame）/ `status` / `agent-error` / `session-created`；
+  服务端→插件 `cancel` / `models` / `tools` / `ping`。socket 路径 `$XDG_DATA_HOME/hyprtrace/dsh/bridge.sock`（0600），
+  经 env `HYPRTRACE_BRIDGE_SOCK` 传给 dsh；插件 500ms 退避重连。
+- **事件映射**（`ai/service.rs::TurnState`）：bridge `text-delta`→`text`、`reasoning-delta`→`reasoning`；
+  SDK `tool/call`/`tool/result`→`tool_call`/`tool_result`；`turn/end` completed/aborted/error→`done`/`cancelled`/`error`；
+  bridge 未连时用 `assistant/message` 兜底（按 `(turn,step)` 去重，避免重复文本）。七种事件是前端硬契约。
+- **会话**：`conversation_id` 直接当 DSH session id（缺省用 data dir 里持久化的默认 id）；子进程重启/模型切换后
+  该对话首轮 `session/resume`。`DELETE /api/ai/conversations` 清历史并 `cancel_all`。
+- **模型切换**：请求里的 `model` 与当前运行时不同 → 重启子进程并以该模型 `initialize`（会话 resume）；
+  `GET /api/ai/models?refresh=1` 才启动 harness 取真实清单，不带 refresh 不启动（页面加载不付子进程启动成本）。
+- **取消**：`POST /api/ai/cancel` 或客户端断连（`run_ai_agent` 监听 `ndjson_tx.closed()`）→ bridge
+  `agent.cancel({kind:'user'},{keepInbox:true})`；流以 `cancelled` 终止（不再有 done）。
+- **容错**：子进程 stdout EOF 用 `watch` 立即发现并中断本轮；`request_timeout_seconds` 超时丢弃子进程；
+  每轮 `request/header` 的工具面守卫（必须含 `[ai.dsh].tools_prefix`，默认 `mcp__hyprtrace__`）防止 MCP 桥坏掉时模型裸答。
+- **资产**：`integrations/dsh/overlay.template.yml`（6 占位符：`{{PROVIDER}} {{MODEL}} {{PROVIDER_OPTIONS}} {{API_KEY_ENV_LINE}} {{TOOLS_SCRIPT}} {{BRIDGE_SCRIPT}}`；
+  渲染成 data dir 的 `overlay.yml`，0600；`{{PROVIDER_OPTIONS}}` 行模板自带 8 空格，Rust 只给续行加缩进）、
+  `hyprtrace-mcp.mjs`（21 个只读 GET 工具，模型侧名 `mcp__hyprtrace__*`）、`hyprtrace-bridge.mjs`。
+  `resolve_asset` 搜索：显式配置 → `$HYPRTRACE_DSH_DIR` → 用户 data dir → `/usr/share/hyprtrace/dsh` → 仓库检出 → 当前目录。
+- **环境变量**：`HYPRTRACE_API_BASE`（按 `[server] host/port` 推导，0.0.0.0→127.0.0.1）、`HYPRTRACE_AUTH_TOKEN`、
+  `HYPRTRACE_BRIDGE_SOCK`，由 server spawn dsh 时注入；overlay 用 `!!js "process.env.…"` 透传给 MCP/bridge 子进程。
+- **周报/主动提醒**也走 `AiService::complete`；`ai_conversations` 只用于前端历史展示（model 列写 `dsh`）。
+- **已删除的旧栈**：`ai/{ollama,openai,tools}.rs`、`AiManager`、`run_agent`、`/api/ai/chat/stream*`；
+  `[ai.ollama]`/`[ai.openai]`/`[ai] default_provider` 等旧键被安全忽略。
+- 细节/排障/E2E 配方：`docs/dsh-integration.md`；单测 `cargo test -p hyprtrace-server ai::`。
 
 ## 七、不变量（改之前先读）
 
-1. **config ↔ ai 锁序死锁**：`GET /api/config` 先 config 后 ai，`PUT` 释放 config 后再取 ai 却仍持有 ai …… 并发 GET+PUT 有死锁风险。新 handler 要么遵守 config→ai 顺序，要么绝不跨 await 持锁。
+1. **config ↔ AI 锁序**：`GET /api/config` 先克隆 config 再取 `ai.status()`；`PUT` 先落盘并 `drop(config)` 再 `ai.reconfigure()`。任何新 handler 都不要跨 await 持 config 锁。
 2. 单连接单锁：不要在锁内做长任务；新增长查询要考虑它会阻塞所有端点。
 3. `Database` 方法都是 `&self` + `unchecked_transaction()`，互斥完全依赖外层 Mutex。
 4. **重建非事务**（先 DELETE 后 INSERT）→ 中断会留下空/半截汇总表，且 `hourly_breakdown` 会静默信任它。修的时候要和 daemon 的增量 upsert 语义对齐。
 5. LIMIT 钳制是安全措施（负 LIMIT = 无限制）。`/api/sessions` 的 `page`/`per_page` 曾在 handler 与 SQL 两层都没有钳制，且 `offset` 是不可检查的 u32 乘法（debug 下 panic、release 下**静默回绕**到错误窗口）；现在统一由 `db::clamp_sessions_page`（1..500）处理，handler 与查询各调一次。新端点必须在两层都钳。
 6. 日期语义：请求用本地日期，原始表用 `date_local`，汇总表用本地 `date`；时区变更会重切历史桶。
 7. **200 + `{"error":...}`** 的约定：前端只检查非 2xx，改这里会连带改前端。
-8. 前端契约：`web/src/lib/api.ts` 调用的端点清单、NDJSON 五种事件名、`X-Auth-Token` 头，都是硬契约。`PUT /api/goals` 是整体替换，而 AI 工具路径必须用合并语义——**不要统一**。
-9. AI 工具依赖的字段名（手写 JSON 的 `get_today_summary`/`get_goals`，以及 `models.rs` 里所有 serde 名）改动即改模型可见契约。
+8. 前端契约：`web/src/lib/api.ts` 调用的端点清单、NDJSON **七种**事件名（text/reasoning/tool_call/tool_result/done/cancelled/error）、`conversation_id`、`X-Auth-Token` 头，都是硬契约。`PUT /api/goals` 是整体替换，而 AI 工具路径（MCP，只读）无此问题。
+9. AI 工具 schema 在 `integrations/dsh/hyprtrace-mcp.mjs`（21 个只读 GET 代理），改参数名/描述即改模型可见契约；`models.rs` 的 serde 名仍是前端契约。
 10. `Config::load()` 解析失败 = 启动失败（不是回退默认值）。`ensure_categories`/`ensure_projects` 的启动重试循环是防 systemd 崩溃循环的，新增启动写入要放进那个循环里。
+11. DSH 相关硬契约：7 种 NDJSON 事件（`AiEvent::to_json` 有单测）；`TurnState` 里 `tool/result` 的 name 来自先前 `tool/call` 的 callId 配对（不要改成无状态）；overlay 模板的 6 个占位符名/位置与 `render_overlay` 匹配（`{{PROVIDER_OPTIONS}}` 行自带 8 空格缩进）；bridge 协议见 `docs/dsh-integration.md`，改字段要同步插件与 Rust。
 
 ## 八、测试
 
 ```bash
-cargo test -p hyprtrace-server    # 58 passed（auth 4 / config 7 / db 19 / desktop 7 / insights 18 / ai 2）
+cargo test -p hyprtrace-server    # 103 passed（auth 4 / config 7 / db 19 / desktop 7 / insights 18 / ai::bridge 3 / ai::service 15）
 ```
 
-未覆盖：`efficiency_score`、`predict`、`workspace_recommendations`、`current_status`、所有 `insight_*` 的 SQL 方法、七个洞察 handler、鉴权端到端、config PUT 的 HTTP 往返、AI 流式解析器、`run_agent` 循环。新增 SQL/公式时，优先把**纯函数**放进 `insights.rs`（已有 18 个用例的模式），SQL 只做取数。
+未覆盖：`efficiency_score`、`predict`、`workspace_recommendations`、`current_status`、所有 `insight_*` 的 SQL 方法、七个洞察 handler、鉴权端到端、config PUT 的 HTTP 往返、`run_ai_agent` 的完整 HTTP 往返（DSH 子进程只能在真机跑，E2E 配方见 `docs/dsh-integration.md`）。新增 SQL/公式时，优先把**纯函数**放进 `insights.rs`（已有 18 个用例的模式），SQL 只做取数。

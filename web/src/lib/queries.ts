@@ -14,6 +14,8 @@ import type { CategoryRule, ConfigUpdateRequest, Goal, Project, ProjectRule, Ses
 export const queryKeys = {
   health: ['health'] as const,
   aiModels: ['ai-models'] as const,
+  aiStatus: ['ai-status'] as const,
+  aiTools: ['ai-tools'] as const,
   config: ['config'] as const,
   categories: ['categories'] as const,
   goals: ['goals'] as const,
@@ -54,9 +56,21 @@ export function useHealth() {
   return useQuery({ queryKey: queryKeys.health, queryFn: api.health });
 }
 
-/** GET /api/ai/models — provider list for the AI providers panel. */
+/** GET /api/ai/models — DSH model routes plus the current route and status. */
 export function useAiModels() {
-  return useQuery({ queryKey: queryKeys.aiModels, queryFn: api.aiModels });
+  // Wrap instead of passing `api.aiModels` directly: react-query hands the
+  // query context as the first argument, which would read as `refresh = true`.
+  return useQuery({ queryKey: queryKeys.aiModels, queryFn: () => api.aiModels() });
+}
+
+/** GET /api/ai/status — runtime health for the Settings status panel. */
+export function useAiStatus() {
+  return useQuery({ queryKey: queryKeys.aiStatus, queryFn: api.aiStatus });
+}
+
+/** GET /api/ai/tools — the tools the harness exposes to the model. */
+export function useAiTools() {
+  return useQuery({ queryKey: queryKeys.aiTools, queryFn: api.aiTools });
 }
 
 /** GET /api/config — one entry shared by the AI, weekly-report and privacy sections. */

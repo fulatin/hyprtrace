@@ -84,7 +84,7 @@ export default function Settings() {
       <header className="mb-6">
         <h2 className="text-xl font-bold">Settings</h2>
         <p className="mt-1 text-sm text-fg-muted">
-          AI providers, categories, projects, goals, reporting and local data controls.
+          AI runtime, categories, projects, goals, reporting and local data controls.
         </p>
       </header>
 

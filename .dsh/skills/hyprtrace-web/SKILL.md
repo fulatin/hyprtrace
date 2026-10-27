@@ -18,7 +18,7 @@ src/lib/api.ts          fetchJSON + 全部 REST（含 api.insights.* 与 api.sea
 src/lib/api-types.ts    **生成物**：由 Rust 模型渲染，勿手改（见下）
 src/lib/types.ts        再导出生成类型 + 只属于客户端的请求体/包装类型
 src/lib/queries.ts      react-query 数据层：一个端点一个 key，保存后 invalidate
-src/lib/transport.ts    /api/ai/chat/agent 的 NDJSON → AI SDK 消息流（只认 5 种 type）
+src/lib/transport.ts    /api/ai/chat/agent 的 NDJSON → AI SDK 消息流（7 种 type：text/reasoning/tool_call/tool_result/done/cancelled/error）
 src/lib/auth.ts         X-Auth-Token（localStorage: hyprtrace_auth_token）
 src/lib/theme.tsx       深色/浅色/跟随系统（localStorage: hyprtrace.theme）
 src/lib/motion.ts       动效预设
@@ -70,7 +70,14 @@ src/pages/              Dashboard, Insights, Apps, Timeline, Sessions, Titles, S
 - **后端多数错误是 HTTP 200 + `{"error":...}`**，`fetchJSON` 不会抛，会在组件里才炸——新增调用点要考虑这点。
 - 洞察页用 `api.insights.*`；`forecast` **没有 from/to**（服务端固定到今天）。
 - `api.search(q, from, to, limit)` 是唯一**没有默认日期窗口**的列表调用：from/to 传空串＝搜全历史。返回值里的 `snippet` 就是命中标题本身（服务端不用 `snippet()`，见其 `db/search.rs` 注释）。
-- AI 对话走 `lib/transport.ts`，只认 NDJSON 的 `text` / `tool_call` / `tool_result` / `done` / `error`。
+- AI 对话走 `lib/transport.ts`，认 NDJSON 的 `text` / `reasoning` / `tool_call` / `tool_result` / `done` / `cancelled` / `error`；
+  `reasoning` 是 DSH 的思考增量（AIChat 用折叠面板展示），`cancelled` 是终止事件（停止按钮/断连触发）。
+- AI 页面请求体带 `conversation_id`（localStorage 持久化；"新对话"= 清空历史 + 换新 id），模型下拉的数据来自
+  `/api/ai/models`（DSH 真实清单）；停止按钮 = abort fetch，服务端会把断连当作取消。
+- Settings 的 AI 区读写 `[ai.dsh]`（enabled/command/profile/provider/model/api_key_env/request_timeout_seconds）
+  并展示 `/api/ai/status`；旧的 ollama/openai 表单项已删除。
+- **冷启动不是故障**：server 重启后 `status.ready=false` 但 `enabled=true && error=null` 时，daemon 未起 harness，
+  首条消息会懒启动；AIChat 只在 `!enabled` 或 `status.error` 时禁用发送，并在一轮结束后 `loadRuntime()` 刷新徽章。
 - 时间戳是 UTC RFC3339，展示前用 `date-fns` 转本地；日期字符串（`date_local` 系列）本来就是本地日期，不要再用 `new Date()` 当作 UTC 解析。
 
 ## 构建与验证

@@ -1,12 +1,14 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
   AlertTriangle,
+  ArrowRight,
   Bot,
-  Loader2,
-  Trash2,
-  Square,
+  MessageSquarePlus,
+  RefreshCw,
   Sparkles,
+  Square,
 } from "lucide-react";
 import { Streamdown } from "streamdown";
 import "streamdown/styles.css";
@@ -14,9 +16,10 @@ import { useChat } from "@ai-sdk/react";
 import { NdjsonChatTransport } from "../lib/transport";
 import { api } from "../lib/api";
 import { authHeaders } from "../lib/auth";
-import type { AiMessage, AiModelsResponse } from "../lib/types";
+import type { AiMessage, AiStatus } from "../lib/types";
 import { easeOut, spring } from "../lib/motion";
 import ChatInput from "../components/ChatInput";
+import ReasoningPanel from "../components/ReasoningPanel";
 import ToolCallCard from "../components/ToolCallCard";
 import { EmptyState, Skeleton } from "../components/ui/Feedback";
 import { Reveal, RevealItem } from "../components/ui/Reveal";
@@ -86,6 +89,8 @@ function TypingDots({ className = "" }: { className?: string }) {
 interface ChatPartLike {
   type?: string;
   text?: string;
+  /** `streaming` while the part is still being written. */
+  state?: string;
   toolCallId?: string;
 }
 
@@ -99,8 +104,10 @@ interface ChatMessageLike {
 interface BubbleTail {
   isLast: boolean;
   isLoading: boolean;
-  stillGenerating: boolean;
-  pollTimedOut: boolean;
+  /** This turn was cancelled (user stop, /api/ai/cancel, or server cancel). */
+  stopped: boolean;
+  /** The turn was loaded from history with `complete: false`. */
+  interrupted: boolean;
 }
 
 /**
@@ -110,8 +117,8 @@ interface BubbleTail {
 const NO_TAIL: BubbleTail = {
   isLast: false,
   isLoading: false,
-  stillGenerating: false,
-  pollTimedOut: false,
+  stopped: false,
+  interrupted: false,
 };
 
 /**
@@ -134,7 +141,7 @@ const MessageBubble = memo(function MessageBubble({
   reduced: boolean;
   onStop: () => void;
 }) {
-  const { isLast, isLoading, stillGenerating, pollTimedOut } = tail;
+  const { isLast, isLoading, stopped, interrupted } = tail;
   const text = extractText(message);
   const isUser = message.role === "user";
   const bubbleTransition = reduced ? { duration: 0 } : spring;
@@ -170,6 +177,16 @@ const MessageBubble = memo(function MessageBubble({
                   </Streamdown>
                 );
               }
+              // Reasoning trace: collapsed by default, expanded on demand.
+              if (part.type === "reasoning") {
+                return (
+                  <ReasoningPanel
+                    key={i}
+                    text={part.text ?? ""}
+                    streaming={part.state === "streaming"}
+                  />
+                );
+              }
               if (
                 typeof part.type === "string" &&
                 part.type.startsWith("tool-")
@@ -193,16 +210,16 @@ const MessageBubble = memo(function MessageBubble({
             )}
           </>
         )}
-        {isLast && stillGenerating && (
-          <div className="mt-2 flex items-center gap-1.5 text-xs text-accent">
-            <Loader2 size={12} className="animate-spin" />
-            Still generating server-side…
+        {isLast && stopped && !isLoading && (
+          <div className="mt-2 flex items-center gap-1.5 text-xs text-fg-faint">
+            <Square size={10} />
+            Stopped
           </div>
         )}
-        {isLast && pollTimedOut && (
+        {isLast && interrupted && !isLoading && (
           <div className="mt-2 flex items-center gap-1.5 text-xs text-warn">
             <AlertTriangle size={12} />
-            Generation was interrupted — send a message to continue
+            Interrupted before it finished — ask again to continue
           </div>
         )}
       </div>
@@ -211,7 +228,7 @@ const MessageBubble = memo(function MessageBubble({
 });
 
 /**
- * Identifier for client-side message objects.
+ * Identifier for client-side message objects AND conversation ids.
  *
  * `crypto.randomUUID` only exists in secure contexts — https, or http on
  * localhost. The web UI is routinely opened over plain http on a LAN address,
@@ -237,8 +254,10 @@ function newId(): string {
   return `${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}`;
 }
 
-const STORAGE_PROVIDER = "hyprtrace_ai_provider";
+// The selected model survives reloads; the conversation id does too, so a
+// refresh continues the same DSH session instead of starting a new one.
 const STORAGE_MODEL = "hyprtrace_ai_model";
+const STORAGE_CONVERSATION = "hyprtrace_ai_conversation";
 
 function loadStored(key: string): string {
   try {
@@ -261,27 +280,74 @@ function saveStored(key: string, value: string) {
 }
 
 export default function AIChat() {
-  const [selectedProvider, setSelectedProvider] = useState(
-    () => loadStored(STORAGE_PROVIDER) || "ollama",
-  );
   const [selectedModel, setSelectedModel] = useState(() => loadStored(STORAGE_MODEL));
-  const [providers, setProviders] = useState<Record<string, string[]>>({});
-  const [includeData, setIncludeData] = useState(true);
+  const [modelOptions, setModelOptions] = useState<string[]>([]);
+  const [aiStatus, setAiStatus] = useState<AiStatus | null>(null);
+  // Set when /api/ai/models itself fails (server down / endpoint missing).
+  const [runtimeError, setRuntimeError] = useState("");
+  const [runtimeLoading, setRuntimeLoading] = useState(false);
+
+  const [conversationId, setConversationId] = useState(
+    () => loadStored(STORAGE_CONVERSATION) || newId(),
+  );
   const [historyLoaded, setHistoryLoaded] = useState(false);
-  const [dateRange, setDateRange] = useState("today");
-  const [incompleteId, setIncompleteId] = useState<number | null>(null);
-  const [pollTimedOut, setPollTimedOut] = useState(false);
+  const [stopped, setStopped] = useState(false);
+  const [historyInterrupted, setHistoryInterrupted] = useState(false);
+  const [reportLoading, setReportLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const dbIdToUiId = useRef(new Map<number, string>());
   const reduced = useReducedMotion();
 
-  const models = providers[selectedProvider] ?? [];
+  // The conversation id routes turns to a DSH session: persist it so a reload
+  // continues the same conversation.
+  useEffect(() => {
+    saveStored(STORAGE_CONVERSATION, conversationId);
+  }, [conversationId]);
+
+  /**
+   * Load the DSH runtime state: available model routes, the current route and
+   * health. This is the single source of truth for the "not ready → go to
+   * Settings" banner and for the model dropdown.
+   */
+  const loadRuntime = useCallback(async () => {
+    setRuntimeLoading(true);
+    try {
+      const res = await api.aiModels();
+      setAiStatus(res.status ?? null);
+      setRuntimeError("");
+      const list = res.providers?.dsh ?? [];
+      setModelOptions(list);
+
+      const stored = loadStored(STORAGE_MODEL);
+      const current = res.current?.model ?? "";
+      const next =
+        stored && list.includes(stored)
+          ? stored
+          : current && list.includes(current)
+            ? current
+            : (list[0] ?? "");
+      setSelectedModel(next);
+      if (next) saveStored(STORAGE_MODEL, next);
+    } catch (e) {
+      setRuntimeError(
+        e instanceof Error ? e.message : "Failed to reach the AI runtime",
+      );
+    } finally {
+      setRuntimeLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadRuntime();
+  }, [loadRuntime]);
 
   const transport = useMemo(
     () =>
       new NdjsonChatTransport({
         api: "/api/ai/chat/agent",
-        prepareSendMessagesRequest: ({ messages, body }) => {
+        // The server also treats a dropped connection as a cancel; the
+        // explicit event covers cancellation initiated server-side.
+        onCancelled: () => setStopped(true),
+        prepareSendMessagesRequest: ({ messages }) => {
           const parts = (messages as any[])
             .filter((m: any) => m.role === "user")
             .pop()?.parts;
@@ -294,142 +360,129 @@ export default function AIChat() {
             headers: authHeaders(),
             body: {
               message: text,
-              provider: (body as any)?.provider ?? selectedProvider,
-              model: (body as any)?.model ?? (selectedModel || undefined),
-              include_data: (body as any)?.include_data ?? includeData,
-              date_range: dateRange,
+              conversation_id: conversationId,
+              model: selectedModel || undefined,
             },
           };
         },
       }),
-    [selectedProvider, selectedModel, includeData, dateRange],
+    [conversationId, selectedModel],
   );
 
   const { messages, setMessages, sendMessage, stop, status, error } = useChat({
     transport,
+    onFinish: ({ isAbort }) => {
+      // True when this turn was stopped locally (the fetch was aborted) — the
+      // server then treats the disconnect as a cancel for this conversation.
+      if (isAbort) setStopped(true);
+      // The first successful turn may have booted a cold harness: refresh the
+      // runtime badge/banner so it stops claiming "not ready".
+      void loadRuntime();
+    },
   });
 
   const isLoading = status === "submitted" || status === "streaming";
 
+  // A cold harness (enabled, no error, not started yet) is NOT a blocker: the
+  // first message boots it server-side. Only a disabled runtime or one that
+  // already failed to start blocks the chat. `null` status (the status request
+  // itself failed) also does not block: the send will surface what is broken.
+  const runtimeDisabled = aiStatus !== null && !aiStatus.enabled;
+  const runtimeFailed = aiStatus !== null && aiStatus.enabled && !!aiStatus.error;
+  const runtimeCold =
+    aiStatus !== null && aiStatus.enabled && !aiStatus.ready && !aiStatus.error;
+  // Only a *disabled* runtime prevents sending. A failed start is reported by
+  // the banner and by the chat itself, but retrying is allowed (the user may
+  // have just fixed the config).
+  const runtimeBlocked = runtimeDisabled;
+
   const handleSend = useCallback(
     (message: string) => {
+      if (runtimeBlocked) return;
+      setStopped(false);
+      setHistoryInterrupted(false);
       sendMessage({ text: message });
     },
-    [sendMessage],
+    [runtimeBlocked, sendMessage],
   );
 
-  const [reportLoading, setReportLoading] = useState(false);
+  /**
+   * Stop the current turn: abort the NDJSON fetch (the server cancels the
+   * turn when the connection drops) and fire the explicit cancel as a backup.
+   */
+  const handleStop = useCallback(() => {
+    setStopped(true);
+    stop();
+    void api.aiCancel(conversationId).catch(() => {});
+  }, [conversationId, stop]);
+
+  /**
+   * Start a fresh conversation: clear the server-side transcript (that is what
+   * "new conversation" means in this single-history UI) and hand the next turn
+   * a new conversation id, which routes it to a new DSH session.
+   */
+  const handleNewConversation = useCallback(async () => {
+    if (isLoading) stop();
+    setStopped(false);
+    setHistoryInterrupted(false);
+    setMessages([]);
+    setConversationId(newId());
+    try {
+      await api.clearConversations();
+    } catch {
+      // The local transcript is already cleared; a stale server history will
+      // simply load again on the next refresh.
+    }
+  }, [isLoading, setMessages, stop]);
 
   const handleWeeklyReport = async () => {
     setReportLoading(true);
     try {
-      const res = await api.weeklyReport(selectedProvider, selectedModel || undefined);
-      handleSend(res.report || 'Weekly report generated');
+      const res = await api.weeklyReport(selectedModel || undefined);
+      setStopped(false);
+      setHistoryInterrupted(false);
+      sendMessage({ text: res.report || "Weekly report generated" });
     } catch (e) {
-      alert('Weekly report failed: ' + (e instanceof Error ? e.message : 'Unknown error'));
+      alert(
+        "Weekly report failed: " +
+          (e instanceof Error ? e.message : "Unknown error"),
+      );
     } finally {
       setReportLoading(false);
     }
   };
 
+  // Load the displayed transcript once. The conversation id itself is not
+  // part of the history rows — this UI keeps one rolling transcript whose DSH
+  // session is chosen by the id above.
   useEffect(() => {
-    api
-      .aiModels()
-      .then((res: AiModelsResponse) => {
-        setProviders(res.providers);
-
-        // Prefer the user's previously stored provider if it still exists,
-        // otherwise fall back to the server default.
-        const storedProvider = loadStored(STORAGE_PROVIDER);
-        const provider = res.providers[storedProvider]
-          ? storedProvider
-          : res.default;
-        setSelectedProvider(provider);
-        saveStored(STORAGE_PROVIDER, provider);
-
-        // Prefer the stored model if it's still available for this provider.
-        const storedModel = loadStored(STORAGE_MODEL);
-        const models = res.providers[provider] ?? [];
-        const model = storedModel && models.includes(storedModel)
-          ? storedModel
-          : (models[0] ?? "");
-        setSelectedModel(model);
-        saveStored(STORAGE_MODEL, model);
-      })
-      .catch(() => {});
-
     api
       .aiConversations()
       .then((convs: AiMessage[]) => {
         if (convs.length > 0) {
-          const msgs = convs.map((c) => {
-            const uiId = newId();
-            dbIdToUiId.current.set(c.id, uiId);
-            return {
-              id: uiId,
-              role: c.role as "user" | "assistant",
-              parts: [{ type: "text" as const, text: c.content }],
-            };
-          });
+          const msgs = convs.map((c) => ({
+            id: newId(),
+            role: c.role as "user" | "assistant",
+            parts: [{ type: "text" as const, text: c.content }],
+          }));
+          setMessages(msgs);
 
-          // If the last assistant message was still being generated when the
-          // page was refreshed, the server continues streaming in the
-          // background — poll until it completes.
+          // A turn that was cut off (page refresh, cancel, crash) is stored
+          // with `complete: false`; flag it instead of pretending it finished.
           const last = convs[convs.length - 1];
           if (last.role === "assistant" && last.complete === false) {
-            setIncompleteId(last.id);
-            setPollTimedOut(false);
+            setHistoryInterrupted(true);
           }
-
-          setMessages(msgs);
         }
         setHistoryLoaded(true);
       })
       .catch(() => setHistoryLoaded(true));
-  }, []);
+  }, [setMessages]);
 
   // Note: opening an empty chat used to fire "Analyze today's usage data" on a
-  // timer. Nothing runs on load any more — with a paid provider configured,
-  // merely opening the page was spending money the user never authorised, and
-  // with a local model it burned CPU on every visit. The same prompt is one
-  // click away in the quick-question row below.
-
-  // Poll for a message that was mid-generation when the page refreshed.
-  // The server keeps streaming in the background and saves partial content,
-  // so we live-update the bubble until it completes.
-  useEffect(() => {
-    if (incompleteId === null) return;
-    let attempts = 0;
-    const timer = setInterval(async () => {
-      attempts++;
-      try {
-        const convs = await api.aiConversations();
-        const target = convs.find((c) => c.id === incompleteId);
-        if (target) {
-          const uiId = dbIdToUiId.current.get(incompleteId);
-          if (uiId) {
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === uiId
-                  ? { ...m, parts: [{ type: "text" as const, text: target.content }] }
-                  : m,
-              ),
-            );
-          }
-          if (target.complete) {
-            setIncompleteId(null);
-          }
-        }
-      } catch {
-        // server unreachable — keep trying until the cap
-      }
-      if (attempts >= 150) {
-        setIncompleteId(null);
-        setPollTimedOut(true);
-      }
-    }, 2000);
-    return () => clearInterval(timer);
-  }, [incompleteId, setMessages]);
+  // timer. Nothing runs on load any more — with a paid model route configured,
+  // merely opening the page was spending money the user never authorised. The
+  // same prompt is one click away in the quick-question row below.
 
   // Follow the newest content. `scrollTo` on the container keeps the smooth
   // animation even when the list is taller than the viewport.
@@ -442,21 +495,6 @@ export default function AIChat() {
     });
   }, [messages, status, reduced]);
 
-  const handleClearContext = async () => {
-    setMessages([]);
-    try {
-      await api.clearConversations();
-    } catch {}
-  };
-
-  const handleProviderChange = (p: string) => {
-    setSelectedProvider(p);
-    saveStored(STORAGE_PROVIDER, p);
-    const first = providers[p]?.[0];
-    setSelectedModel(first ?? "");
-    saveStored(STORAGE_MODEL, first ?? "");
-  };
-
   const handleModelChange = (m: string) => {
     setSelectedModel(m);
     saveStored(STORAGE_MODEL, m);
@@ -467,8 +505,6 @@ export default function AIChat() {
       ? extractText(messages[messages.length - 1])
       : null;
 
-  const stillGenerating = incompleteId !== null;
-
   // `submitted` means the request is out but no assistant bubble exists yet, so
   // the typing pulse lives in a placeholder bubble; once the assistant message
   // arrives the pulse moves inside it (and never shows twice).
@@ -477,8 +513,49 @@ export default function AIChat() {
 
   const bubbleTransition = reduced ? { duration: 0 } : spring;
 
+  // Model dropdown: prefer the DSH list; keep the current selection visible even
+  // when the server advertises a stale list.
+  const modelChoices = useMemo(() => {
+    const list = [...modelOptions];
+    if (selectedModel && !list.includes(selectedModel)) list.unshift(selectedModel);
+    return list;
+  }, [modelOptions, selectedModel]);
+
+  // Why the runtime is unusable, for the banner. Only shown when blocked/failed.
+  let bannerTitle = "";
+  let bannerDetail = "";
+  if (runtimeError) {
+    bannerTitle = "Cannot reach the AI runtime";
+    bannerDetail = runtimeError;
+  } else if (error) {
+    // A failed turn (bad harness start, missing tools, model error) explains
+    // itself in the banner instead of leaving the cold-start hint up.
+    bannerTitle = "The last turn failed";
+    bannerDetail = error.message || String(error);
+  } else if (aiStatus && !aiStatus.enabled) {
+    bannerTitle = "DeepSeek Harness is disabled";
+    bannerDetail =
+      "Enable [ai.dsh] in Settings → AI, then reload the runtime here.";
+  } else if (runtimeFailed) {
+    bannerTitle = "DeepSeek Harness is not ready";
+    bannerDetail =
+      aiStatus?.error ||
+      (aiStatus?.bridge_connected
+        ? "The harness is connected but the model route is not ready yet."
+        : "The bridge to the harness is not connected. Check that `dsh` is installed and that the command/profile in Settings → AI are correct.");
+  } else if (runtimeCold) {
+    bannerTitle = "DeepSeek Harness is idle";
+    bannerDetail =
+      "It starts on the first message (a cold start takes a second or two).";
+  }
+  const showRuntimeBanner =
+    !!runtimeError || !!error || runtimeBlocked || runtimeFailed || runtimeCold;
+
   return (
-    <div className="flex h-[calc(100vh-3rem)] flex-col">
+    // Layout adds a 4rem top bar (h-16) and `p-6` around the routed page, so
+    // the chat viewport is the window minus 7rem. The old `-3rem` (which
+    // matches neither) left the composer hanging below the fold.
+    <div className="flex h-[calc(100vh-7rem)] flex-col">
       <Reveal className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <RevealItem className="flex flex-wrap items-center gap-2">
           <h2 className="flex items-center gap-2 text-xl font-bold text-fg">
@@ -486,8 +563,25 @@ export default function AIChat() {
             AI Analysis
           </h2>
 
-          {/* Compact status: active provider (+ live pulse while streaming). */}
-          <span className="chip-accent" title={`Active provider: ${selectedProvider}`}>
+          {/* Compact runtime status: active provider (dsh) + ready/blocked. */}
+          <span
+            className={
+              aiStatus === null
+                ? "chip-neutral"
+                : !aiStatus.enabled
+                  ? "chip-neutral"
+                  : aiStatus.ready
+                    ? "chip-accent"
+                    : "chip-bad"
+            }
+            title={
+              aiStatus
+                ? `DSH: ${aiStatus.enabled ? (aiStatus.ready ? "ready" : "not ready") : "disabled"} · ${aiStatus.provider}/${aiStatus.model} · ${aiStatus.bridge_connected ? "bridge connected" : "bridge disconnected"} · ${aiStatus.tool_count} tools`
+                : runtimeLoading
+                  ? "Checking the DSH runtime…"
+                  : "DSH runtime status unknown"
+            }
+          >
             <span className="relative flex h-1.5 w-1.5">
               {isLoading && !reduced && (
                 <motion.span
@@ -496,9 +590,25 @@ export default function AIChat() {
                   transition={{ duration: 1.2, repeat: Infinity, ease: "easeOut" }}
                 />
               )}
-              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-accent" />
+              <span
+                className={`relative inline-flex h-1.5 w-1.5 rounded-full ${
+                  aiStatus === null
+                    ? "bg-fg-faint"
+                    : aiStatus.ready
+                      ? "bg-accent"
+                      : aiStatus.enabled
+                        ? "bg-bad"
+                        : "bg-fg-faint"
+                }`}
+              />
             </span>
-            {selectedProvider}
+            {aiStatus === null
+              ? "dsh"
+              : !aiStatus.enabled
+                ? "dsh disabled"
+                : aiStatus.ready
+                  ? "dsh ready"
+                  : "dsh not ready"}
           </span>
 
           <AnimatePresence initial={false}>
@@ -511,36 +621,22 @@ export default function AIChat() {
                 exit={{ opacity: 0, scale: 0.9 }}
                 transition={easeOut}
               >
-                streaming
+                {stopped ? "stopping" : "streaming"}
               </motion.span>
             )}
           </AnimatePresence>
         </RevealItem>
 
         <RevealItem className="flex flex-wrap items-center gap-2">
-          <select
-            value={selectedProvider}
-            onChange={(e) => handleProviderChange(e.target.value)}
-            aria-label="Provider"
-            title="Provider"
-            className="input text-xs"
-          >
-            {Object.keys(providers).map((p) => (
-              <option key={p} value={p}>
-                {p}
-              </option>
-            ))}
-          </select>
-
-          {models.length > 0 && (
+          {modelChoices.length > 0 && (
             <select
               value={selectedModel}
               onChange={(e) => handleModelChange(e.target.value)}
               aria-label="Model"
-              title="Model"
+              title="Model (restarts the harness for a different route)"
               className="input max-w-[220px] text-xs"
             >
-              {models.map((m) => (
+              {modelChoices.map((m) => (
                 <option key={m} value={m}>
                   {m}
                 </option>
@@ -548,21 +644,9 @@ export default function AIChat() {
             </select>
           )}
 
-          <select
-            value={dateRange}
-            onChange={(e) => setDateRange(e.target.value)}
-            aria-label="Date range"
-            title="Date range"
-            className="input text-xs"
-          >
-            <option value="today">Today</option>
-            <option value="week">This Week</option>
-            <option value="month">This Month</option>
-          </select>
-
           <motion.button
             onClick={handleWeeklyReport}
-            disabled={reportLoading}
+            disabled={reportLoading || runtimeBlocked}
             whileHover={reduced ? undefined : { y: -1 }}
             whileTap={reduced ? undefined : { scale: 0.97 }}
             transition={spring}
@@ -579,29 +663,71 @@ export default function AIChat() {
             >
               <Sparkles size={12} />
             </motion.span>
-            {reportLoading ? 'Generating...' : 'Weekly Report'}
+            {reportLoading ? "Generating..." : "Weekly Report"}
           </motion.button>
 
           <AnimatePresence initial={false}>
-            {messages.length > 0 && (
+            {(messages.length > 0 || isLoading) && (
               <motion.button
-                key="clear"
-                onClick={handleClearContext}
+                key="new"
+                onClick={handleNewConversation}
                 initial={{ opacity: 0, scale: 0.9 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.9 }}
                 whileHover={reduced ? undefined : { y: -1 }}
                 whileTap={reduced ? undefined : { scale: 0.97 }}
                 transition={spring}
-                className="btn text-xs hover:border-bad/40 hover:text-bad"
+                className="btn text-xs"
+                title="Start a new conversation"
               >
-                <Trash2 size={12} />
-                Clear
+                <MessageSquarePlus size={12} />
+                New chat
               </motion.button>
             )}
           </AnimatePresence>
         </RevealItem>
       </Reveal>
+
+      <AnimatePresence initial={false}>
+        {showRuntimeBanner && (
+          <motion.div
+            key="runtime-banner"
+            initial={reduced ? { opacity: 0 } : { opacity: 0, y: -6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={reduced ? { opacity: 0 } : { opacity: 0, y: -6 }}
+            transition={easeOut}
+            className="mb-3 flex items-start gap-3 rounded-lg border border-warn/30 bg-warn/10 px-4 py-3"
+          >
+            <AlertTriangle size={15} className="mt-0.5 shrink-0 text-warn" />
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-medium text-warn">{bannerTitle}</p>
+              <p className="mt-0.5 break-words text-xs text-fg-muted">
+                {bannerDetail}
+              </p>
+              <div className="mt-2 flex flex-wrap items-center gap-3">
+                <Link
+                  to="/settings"
+                  className="inline-flex items-center gap-1 text-xs text-accent hover:underline"
+                >
+                  Open Settings <ArrowRight size={11} />
+                </Link>
+                <button
+                  type="button"
+                  onClick={() => void loadRuntime()}
+                  disabled={runtimeLoading}
+                  className="inline-flex items-center gap-1 text-xs text-fg-muted transition-colors hover:text-fg disabled:opacity-50"
+                >
+                  <RefreshCw
+                    size={11}
+                    className={runtimeLoading ? "animate-spin" : ""}
+                  />
+                  Retry
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <div
         ref={scrollRef}
@@ -634,17 +760,24 @@ export default function AIChat() {
                 </div>
               }
               title="AI Analysis Assistant"
-              hint="Ask anything about your usage data. Nothing is sent until you ask — every question is a request to the configured model."
+              hint="Ask anything about your usage data. The assistant runs on DeepSeek Harness and reads your data through read-only tools — nothing is sent until you ask."
               action={
                 <Reveal className="mt-4 flex flex-wrap justify-center gap-2" stagger={0.06}>
                   {QUICK_QUESTIONS.map((q) => (
                     <RevealItem key={q}>
                       <motion.button
                         onClick={() => handleSend(q)}
-                        whileHover={reduced ? undefined : { y: -3, scale: 1.02 }}
-                        whileTap={reduced ? undefined : { scale: 0.98 }}
+                        disabled={runtimeBlocked}
+                        whileHover={
+                          runtimeBlocked || reduced ? undefined : { y: -3, scale: 1.02 }
+                        }
+                        whileTap={
+                          runtimeBlocked || reduced ? undefined : { scale: 0.98 }
+                        }
                         transition={spring}
-                        className="card-interactive px-4 py-2.5 text-sm text-fg-muted hover:text-fg"
+                        className={`card-interactive px-4 py-2.5 text-sm text-fg-muted hover:text-fg ${
+                          runtimeBlocked ? "cursor-not-allowed opacity-50" : ""
+                        }`}
                       >
                         {q}
                       </motion.button>
@@ -663,11 +796,16 @@ export default function AIChat() {
               message={message as unknown as ChatMessageLike}
               tail={
                 idx === messages.length - 1
-                  ? { isLast: true, isLoading, stillGenerating, pollTimedOut }
+                  ? {
+                      isLast: true,
+                      isLoading,
+                      stopped: stopped && !isLoading,
+                      interrupted: historyInterrupted && !isLoading,
+                    }
                   : NO_TAIL
               }
               reduced={!!reduced}
-              onStop={stop}
+              onStop={handleStop}
             />
           ))}
         </AnimatePresence>
@@ -685,7 +823,7 @@ export default function AIChat() {
               <div className="flex items-center gap-2 rounded-2xl rounded-bl-md border border-line bg-surface-2/70 px-4 py-3 text-sm text-fg-muted">
                 <TypingDots />
                 <button
-                  onClick={stop}
+                  onClick={handleStop}
                   title="Stop generating"
                   aria-label="Stop generating"
                   className="btn btn-ghost ml-1 px-2 py-1"
@@ -695,6 +833,24 @@ export default function AIChat() {
               </div>
             </motion.div>
           )}
+        </AnimatePresence>
+
+        <AnimatePresence initial={false}>
+          {stopped &&
+            !isLoading &&
+            messages[messages.length - 1]?.role !== "assistant" && (
+              <motion.div
+                key="stopped-note"
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -6 }}
+                transition={easeOut}
+                className="flex items-center justify-center gap-1.5 text-xs text-fg-faint"
+              >
+                <Square size={10} />
+                Stopped
+              </motion.div>
+            )}
         </AnimatePresence>
 
         <AnimatePresence initial={false}>
@@ -714,8 +870,6 @@ export default function AIChat() {
 
         <AnimatePresence initial={false}>
           {!isLoading &&
-            !stillGenerating &&
-            !pollTimedOut &&
             lastAssistantText &&
             messages[messages.length - 1]?.role === "assistant" && (
               <motion.div
@@ -730,10 +884,17 @@ export default function AIChat() {
                   <motion.button
                     key={q}
                     onClick={() => handleSend(q)}
-                    whileHover={reduced ? undefined : { y: -2 }}
-                    whileTap={reduced ? undefined : { scale: 0.97 }}
+                    disabled={runtimeBlocked}
+                    whileHover={
+                      runtimeBlocked || reduced ? undefined : { y: -2 }
+                    }
+                    whileTap={
+                      runtimeBlocked || reduced ? undefined : { scale: 0.97 }
+                    }
                     transition={spring}
-                    className="btn btn-ghost text-xs hover:border-accent/30 hover:text-accent"
+                    className={`btn btn-ghost text-xs hover:border-accent/30 hover:text-accent ${
+                      runtimeBlocked ? "cursor-not-allowed opacity-50" : ""
+                    }`}
                   >
                     {q}
                   </motion.button>
@@ -745,9 +906,7 @@ export default function AIChat() {
 
       <ChatInput
         onSend={handleSend}
-        disabled={isLoading}
-        includeData={includeData}
-        onToggleData={() => setIncludeData(!includeData)}
+        disabled={isLoading || runtimeBlocked}
       />
     </div>
   );

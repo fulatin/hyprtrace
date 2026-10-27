@@ -141,20 +141,16 @@ impl Default for ServerConfig {
     }
 }
 
+/// AI configuration. DeepSeek Harness is the one and only AI runtime: there is
+/// no in-process provider stack any more, so this section only configures how
+/// the harness child process is launched and how often the proactive monitor
+/// runs.
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct AiConfig {
-    #[serde(default = "default_ai_provider")]
-    pub default_provider: String,
-    #[serde(default)]
-    pub ollama: OllamaConfig,
-    #[serde(default)]
-    pub openai: OpenAiConfig,
     #[serde(default = "default_proactive_interval")]
     pub proactive_interval_minutes: u64,
-}
-
-fn default_ai_provider() -> String {
-    "ollama".to_string()
+    #[serde(default)]
+    pub dsh: DshConfig,
 }
 
 fn default_proactive_interval() -> u64 {
@@ -164,66 +160,137 @@ fn default_proactive_interval() -> u64 {
 impl Default for AiConfig {
     fn default() -> Self {
         Self {
-            default_provider: default_ai_provider(),
-            ollama: OllamaConfig::default(),
-            openai: OpenAiConfig::default(),
             proactive_interval_minutes: default_proactive_interval(),
+            dsh: DshConfig::default(),
         }
     }
 }
 
+/// DeepSeek Harness runtime.
+///
+/// HyprTrace boots `dsh --profile <profile> --patch <overlay>` as its AI
+/// runtime: chat, tool calls, model routing, history, cancellation and the
+/// model/tool inventory all come from the harness. The overlay/persona/tools
+/// live in `integrations/dsh/` in this repository; this struct only carries
+/// the deployment-specific knobs. Every field has a serde default, so configs
+/// written before this section existed still load.
 #[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct OllamaConfig {
-    #[serde(default = "default_ollama_url")]
-    pub base_url: String,
-    #[serde(default = "default_ollama_model")]
-    pub default_model: String,
-}
-
-fn default_ollama_url() -> String {
-    "http://localhost:11434".to_string()
-}
-
-fn default_ollama_model() -> String {
-    "qwen2.5:7b".to_string()
-}
-
-impl Default for OllamaConfig {
-    fn default() -> Self {
-        Self {
-            base_url: default_ollama_url(),
-            default_model: default_ollama_model(),
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct OpenAiConfig {
+pub struct DshConfig {
+    /// Kill switch. When `false` every AI endpoint answers with a clear
+    /// "AI is disabled" error instead of starting the harness.
+    #[serde(default = "default_dsh_enabled")]
+    pub enabled: bool,
+    /// The harness launcher. Resolved through `$PATH` like any other command.
+    #[serde(default = "default_dsh_command")]
+    pub command: String,
+    /// Shipped DSH profile to boot. `sdk` ships with the harness and speaks
+    /// the newline-delimited JSON-RPC protocol this server drives.
+    #[serde(default = "default_dsh_profile")]
+    pub profile: String,
+    /// Model route handed to `initialize`: the provider id the harness
+    /// profile knows (e.g. `opencode-go`, `deepseek-official`).
+    #[serde(default = "default_dsh_provider")]
+    pub provider: String,
+    /// Model name for that route (e.g. `deepseek-v4.1-flash`).
+    #[serde(default = "default_dsh_model")]
+    pub model: String,
+    /// Credential reference name the pi-ai provider resolves per request
+    /// (`apiKeyEnv` in the overlay). Empty omits the `apiKeyEnv` line.
+    #[serde(default = "default_dsh_api_key_env")]
+    pub api_key_env: String,
+    /// Optional `baseURL` override for the pi-ai provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    /// Optional pi-ai api kind (e.g. `openai-completions`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api: Option<String>,
+    /// Working directory recorded on the DSH session. Defaults to the home
+    /// directory; the assistant has no filesystem tools, so it only anchors
+    /// the session header.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    /// Absolute path to `hyprtrace-mcp.mjs`. Defaults to the copy shipped
+    /// next to the binary / in the repository checkout.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools_script: Option<String>,
+    /// Absolute path to the overlay template. Defaults to the copy shipped
+    /// next to the binary / in the repository checkout.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overlay_template: Option<String>,
+    /// Absolute path to `hyprtrace-bridge.mjs` (the in-harness plugin that
+    /// streams deltas, cancels turns and answers inventory commands).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bridge_script: Option<String>,
+    /// Tool-name prefix the harness must expose before a turn is allowed to
+    /// run (e.g. `mcp__hyprtrace__`). This is the guard against a broken MCP
+    /// bridge: the harness boots fine without its MCP tools and the model
+    /// would otherwise answer from guesswork. Empty disables the check.
+    #[serde(default = "default_dsh_tools_prefix")]
+    pub tools_prefix: String,
+    /// Extra arguments appended to the launcher command line (advanced use).
     #[serde(default)]
-    pub api_key: String,
-    #[serde(default = "default_openai_url")]
-    pub base_url: String,
-    #[serde(default = "default_openai_model")]
-    pub default_model: String,
+    pub extra_args: Vec<String>,
+    /// Wall-clock budget for one chat turn before the child process is
+    /// discarded (the SDK has no cancel method, so a stuck turn is aborted by
+    /// dropping the runtime and starting a fresh one).
+    #[serde(default = "default_dsh_timeout")]
+    pub request_timeout_seconds: u64,
 }
 
-fn default_openai_url() -> String {
-    "https://api.openai.com/v1".to_string()
+fn default_dsh_enabled() -> bool {
+    true
 }
 
-fn default_openai_model() -> String {
-    "gpt-4o-mini".to_string()
+fn default_dsh_command() -> String {
+    "dsh".to_string()
 }
 
-impl Default for OpenAiConfig {
+fn default_dsh_profile() -> String {
+    "sdk".to_string()
+}
+
+fn default_dsh_provider() -> String {
+    "opencode-go".to_string()
+}
+
+fn default_dsh_model() -> String {
+    "deepseek-v4.1-flash".to_string()
+}
+
+fn default_dsh_api_key_env() -> String {
+    "OPENCODE_GO_API_KEY".to_string()
+}
+
+fn default_dsh_timeout() -> u64 {
+    300
+}
+
+fn default_dsh_tools_prefix() -> String {
+    "mcp__hyprtrace__".to_string()
+}
+
+impl Default for DshConfig {
     fn default() -> Self {
         Self {
-            api_key: String::new(),
-            base_url: default_openai_url(),
-            default_model: default_openai_model(),
+            enabled: default_dsh_enabled(),
+            command: default_dsh_command(),
+            profile: default_dsh_profile(),
+            provider: default_dsh_provider(),
+            model: default_dsh_model(),
+            api_key_env: default_dsh_api_key_env(),
+            base_url: None,
+            api: None,
+            cwd: None,
+            tools_script: None,
+            overlay_template: None,
+            bridge_script: None,
+            tools_prefix: default_dsh_tools_prefix(),
+            extra_args: Vec::new(),
+            request_timeout_seconds: default_dsh_timeout(),
         }
     }
 }
+
 
 impl Default for Config {
     fn default() -> Self {
@@ -317,7 +384,7 @@ pub fn save_toml_document(
     Ok(())
 }
 
-/// Overwrite a single nested key (e.g. `["ai", "ollama", "default_model"]`)
+/// Overwrite a single nested key (e.g. `["ai", "dsh", "model"]`)
 /// inside a raw TOML document, creating intermediate tables as needed.
 /// All other keys — including unknown ones — are left untouched, and comments
 /// and formatting are preserved (unlike `toml::Value` re-serialization).
@@ -336,7 +403,7 @@ pub fn set_toml_value(doc: &mut toml_edit::DocumentMut, path: &[&str], value: to
     table.insert(*last, toml_edit::Item::Value(value));
 }
 
-/// Remove a single nested key (e.g. `["ai", "openai", "api_key"]`) from a raw
+/// Remove a single nested key (e.g. `["ai", "dsh", "api_key_env"]`) from a raw
 /// TOML document, leaving every other key — including unknown ones — untouched.
 /// Returns whether the key was present.
 ///
@@ -344,6 +411,7 @@ pub fn set_toml_value(doc: &mut toml_edit::DocumentMut, path: &[&str], value: to
 /// defaulted: an absent API key is not the same thing as an empty one, and
 /// storing `api_key = ""` makes the provider look configured while every
 /// request fails authentication.
+#[cfg(test)]
 pub fn remove_toml_value(doc: &mut toml_edit::DocumentMut, path: &[&str]) -> bool {
     let Some((last, parents)) = path.split_last() else {
         return false;
@@ -423,15 +491,14 @@ db_path = "~/.local/share/hyprtrace/hyprtrace.db"
 enable_input_monitor = false
 some_future_field = "keep-me"
 
-[ai.ollama]
-base_url = "http://localhost:11434"
-default_model = "qwen2.5:7b"
+[ai.dsh]
+model = "deepseek-v4.1-flash"
 "#;
         let mut doc: toml_edit::DocumentMut = src.parse().unwrap();
         set_toml_value(
             &mut doc,
-            &["ai", "ollama", "default_model"],
-            toml_edit::Value::from("llama3:8b"),
+            &["ai", "dsh", "model"],
+            toml_edit::Value::from("deepseek-v4-pro"),
         );
         let out = doc.to_string();
 
@@ -439,11 +506,11 @@ default_model = "qwen2.5:7b"
         assert!(out.contains("enable_input_monitor = false"));
         assert!(out.contains("some_future_field = \"keep-me\""));
         // The requested key is updated.
-        assert!(out.contains("llama3:8b"));
+        assert!(out.contains("deepseek-v4-pro"));
 
         // The document must still deserialize into the server's Config view.
         let reparsed: Config = toml::from_str(&out).unwrap();
-        assert_eq!(reparsed.ai.ollama.default_model, "llama3:8b");
+        assert_eq!(reparsed.ai.dsh.model, "deepseek-v4-pro");
     }
 
     #[test]
@@ -481,25 +548,25 @@ default_model = "qwen2.5:7b"
         let path = dir.join("config.toml");
         std::fs::write(
             &path,
-            "[daemon]\nenable_input_monitor = false\n\n[ai.openai]\ndefault_model = \"gpt-4o-mini\"\n",
+            "[daemon]\nenable_input_monitor = false\n\n[ai.dsh]\nmodel = \"deepseek-v4.1-flash\"\n",
         )
         .unwrap();
 
         let mut doc = load_toml_document(&path).unwrap();
         set_toml_value(
             &mut doc,
-            &["ai", "openai", "default_model"],
-            toml_edit::Value::from("gpt-4o"),
+            &["ai", "dsh", "model"],
+            toml_edit::Value::from("deepseek-v4-pro"),
         );
         save_toml_document(&path, &doc).unwrap();
 
         let on_disk = std::fs::read_to_string(&path).unwrap();
         assert!(on_disk.contains("enable_input_monitor = false"));
-        assert!(on_disk.contains("gpt-4o"));
-        assert!(!on_disk.contains("gpt-4o-mini"));
+        assert!(on_disk.contains("deepseek-v4-pro"));
+        assert!(!on_disk.contains("deepseek-v4.1-flash"));
 
         let reparsed: Config = toml::from_str(&on_disk).unwrap();
-        assert_eq!(reparsed.ai.openai.default_model, "gpt-4o");
+        assert_eq!(reparsed.ai.dsh.model, "deepseek-v4-pro");
         std::fs::remove_dir_all(&dir).ok();
     }
 
