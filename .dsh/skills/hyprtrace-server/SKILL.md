@@ -10,7 +10,7 @@ Axum 0.7 + tokio，binary-only（无 `lib.rs`，测试全是内联单测）。`A
 
 ## 一、HTTP 表面
 
-**约定**：多数 handler 是 `Result<Json<T>, Json<Value>>`，失败也返回 **HTTP 200 + `{"error": ...}`**。只有 `PUT /api/projects`（400/500）与 `/api/ai/chat/agent`（400，空消息/未启用）会返回真实状态码。未匹配的 `/api/*` → 404 JSON；其余路径落到 SPA fallback（200 + index.html，故意用 `.fallback()` 而不是 `.not_found_service()`，否则前端路由刷新会 404）。
+**约定**：多数 handler 是 `Result<Json<T>, Json<Value>>`，失败也返回 **HTTP 200 + `{"error": ...}`**。只有 `PUT /api/projects`（400/500）与 `/api/ai/chat/agent`（400，空消息/未启用）会返回真实状态码。未匹配的 `/api/*` → 404 JSON；其余路径落到 SPA fallback（200 + index.html，故意用 `.fallback()` 而不是 `.not_found_service()`，否则前端路由刷新会 404）。例外：`/assets/*` 由独立 `ServeDir` 提供，缺失文件返回 **404**（不能回退 index.html，否则懒加载 chunk 会以 MIME 错误失败）。静态缓存：`/assets/*` = `public, max-age=31536000, immutable`，index.html 等 = `no-cache`（`main.rs::cache_control_for_path`，有单测）。
 
 数据端点（`routes/data.rs`）：
 
@@ -155,7 +155,7 @@ server 里**没有**进程内 LLM provider、agent 循环或工具执行器。`a
 ## 八、测试
 
 ```bash
-cargo test -p hyprtrace-server    # 103 passed（auth 4 / config 7 / db 19 / desktop 7 / insights 18 / ai::bridge 3 / ai::service 15）
+cargo test -p hyprtrace-server    # 104 passed（auth 4 / config 7 / db 19 / desktop 7 / insights 18 / ai::bridge 3 / ai::service 15 / static_cache 1）
 ```
 
 未覆盖：`efficiency_score`、`predict`、`workspace_recommendations`、`current_status`、所有 `insight_*` 的 SQL 方法、七个洞察 handler、鉴权端到端、config PUT 的 HTTP 往返、`run_ai_agent` 的完整 HTTP 往返（DSH 子进程只能在真机跑，E2E 配方见 `docs/dsh-integration.md`）。新增 SQL/公式时，优先把**纯函数**放进 `insights.rs`（已有 18 个用例的模式），SQL 只做取数。

@@ -11,7 +11,7 @@ whenToUse: 需要构建、运行、重启、部署、调试运行中的实例、
 ```bash
 cargo build --release                # 两个二进制：target/release/hyprtrace-{daemon,server}
 cargo check --workspace              # CI 第一步
-cargo test --workspace               # CI 第二步（daemon 54 + server 103）
+cargo test --workspace               # CI 第二步（daemon 54 + server 104）
 cd web && npx tsc --noEmit -p tsconfig.json && npm run build   # CI 第三步（npm ci 更严格）
 ```
 
@@ -100,10 +100,16 @@ cp ~/.config/hyprtrace/config.toml "$ISO/config/hyprtrace/config.toml"
 
 ```bash
 cd web && npm run build
-rm -rf ~/.local/share/hyprtrace/web/assets && cp -r web/dist/. ~/.local/share/hyprtrace/web/
+# 覆盖式拷贝：不要先 rm -rf assets！还停在旧 index.html 的标签页仍会请求旧哈希
+# 的 chunk，保留旧文件可以让它们继续工作（server 的 /assets 是 immutable 缓存，
+# 新页面不会读到旧文件）。
+cp -r web/dist/. ~/.local/share/hyprtrace/web/
 ```
 
 该路径在会话工作区之外，`workspace-write` 策略下第一次写入会被沙箱拒绝——按提示**用同一条命令重试并附一句理由**申请提权即可（用户会看到授权弹窗）。部署后核对 `dist/assets` 与目标目录文件名一致。
+
+**缓存策略（server 侧，别改坏）**：`/assets/*` 响应 `Cache-Control: public, max-age=31536000, immutable`（Vite 哈希文件名永不复用）；`index.html` 及其它路径 `no-cache`（每次重新验证，保证部署后普通刷新拿到新 hash）。缺失的 `/assets/*` 现在是 **404**（不再回退 index.html），配合前端的 `vite:preloadError` 自动 reload 一次来恢复旧标签页；`rm -rf` 旧 assets 会制造 "error loading dynamically imported module" 报错。
+若用户手上是修复前缓存的旧 index.html，需要一次 Ctrl+Shift+R 硬刷新；之后普通刷新即可。
 
 ## 服务与重启
 

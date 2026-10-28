@@ -162,7 +162,7 @@ harness 是**懒启动**的：server 刚启动时 `/api/ai/status.ready=false`�
 ## 验证
 
 ```bash
-cargo test --workspace                 # daemon 54 / server 103（含 ai::bridge 3、ai::service 15）
+cargo test --workspace                 # daemon 54 / server 104（含 ai::bridge 3、ai::service 15、static_cache 1）
 # 隔离实例（DB 快照 + 独立 HOME + 沙箱 DSH_HOME），不碰运行中的 9420：
 .dsh-diag/e2e/setup.sh
 env HOME=$PWD/.dsh-diag/e2e/iso/home XDG_CONFIG_HOME=$PWD/.dsh-diag/e2e/iso/config \

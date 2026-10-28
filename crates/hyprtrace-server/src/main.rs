@@ -18,6 +18,36 @@ mod weekly_report;
 use anyhow::Context;
 use std::sync::Arc;
 
+/// Cache policy for the static SPA bundle.
+///
+/// Vite's hashed files under `/assets/` never change, so they are immutable and
+/// can be cached for a year. `index.html` must always be revalidated: it names
+/// the current asset hashes, and a stale cached copy makes the browser request
+/// chunk files that a redeploy already removed ("Something went wrong — error
+/// loading dynamically imported module").
+fn cache_control_for_path(path: &str) -> &'static str {
+    if path.starts_with("/assets/") {
+        "public, max-age=31536000, immutable"
+    } else {
+        "no-cache"
+    }
+}
+
+/// Attach [`cache_control_for_path`] to every static response (API responses
+/// simply get `no-cache`, which is the safe default for them too).
+async fn static_cache_policy(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let cache_control = cache_control_for_path(request.uri().path());
+    let mut response = next.run(request).await;
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static(cache_control),
+    );
+    response
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
@@ -90,10 +120,17 @@ async fn main() -> anyhow::Result<()> {
     let index_file = web_dir.join("index.html");
     let static_service = tower_http::services::ServeDir::new(&web_dir)
         .fallback(tower_http::services::ServeFile::new(&index_file));
+    // Hashed chunks get their own service: a missing chunk must be a real 404
+    // (which lets the SPA's chunk-reload handler recover), not index.html with
+    // a 200, which browsers reject as "error loading dynamically imported
+    // module" with a confusing MIME-type error.
+    let assets_service = tower_http::services::ServeDir::new(web_dir.join("assets"));
 
     let router = axum::Router::new()
         .nest("/api", routes::create_router(state))
-        .fallback_service(static_service);
+        .nest_service("/assets", assets_service)
+        .fallback_service(static_service)
+        .layer(axum::middleware::from_fn(static_cache_policy));
     // NOTE: no CORS layer on purpose (security review H1).
     // Dev mode goes through the Vite dev-server `/api` proxy (same-origin) and
     // production serves the web UI from this server itself (same-origin), so
@@ -148,4 +185,23 @@ fn is_sqlite_busy(err: &anyhow::Error) -> bool {
                     || ffi.code == rusqlite::ErrorCode::DatabaseLocked
         )
     })
+}
+
+#[cfg(test)]
+mod static_cache_tests {
+    use super::cache_control_for_path;
+
+    #[test]
+    fn hashed_assets_are_immutable_and_html_revalidates() {
+        assert_eq!(
+            cache_control_for_path("/assets/index-DuxKDfHb.js"),
+            "public, max-age=31536000, immutable"
+        );
+        assert_eq!(cache_control_for_path("/assets/react-BRaP4x33.js"), "public, max-age=31536000, immutable");
+        assert_eq!(cache_control_for_path("/"), "no-cache");
+        assert_eq!(cache_control_for_path("/ai"), "no-cache");
+        assert_eq!(cache_control_for_path("/index.html"), "no-cache");
+        assert_eq!(cache_control_for_path("/assets"), "no-cache");
+        assert_eq!(cache_control_for_path("/api/health"), "no-cache");
+    }
 }

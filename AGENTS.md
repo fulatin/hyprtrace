@@ -26,7 +26,7 @@ Hyprland 窗口时间追踪器：Rust daemon + Axum server + React SPA，三者�
 ## 常用命令
 
 ```bash
-cargo check --workspace && cargo test --workspace        # CI 前两步（daemon 54 + server 103）
+cargo check --workspace && cargo test --workspace        # CI 前两步（daemon 54 + server 104）
 cd web && npx tsc --noEmit -p tsconfig.json              # 前端类型门
 cd web && npm run build                                  # 产物在 web/dist（需部署才生效）
 curl -s localhost:9420/api/health                        # 运行中的实例
@@ -36,7 +36,7 @@ cd web && VITE_API_TARGET=http://127.0.0.1:9421 npm run dev   # 指向临时实�
 ## 本仓库的工作习惯
 
 - 前端**视觉/动效改动必须真的看一眼**（起 dev server + 浏览器截图核对），类型检查通过不等于没坏。
-- 改了 `web/` 想让运行中的站点生效，必须重新拷贝到 `~/.local/share/hyprtrace/web`（该路径在工作区之外，需要一次沙箱提权）并确认 `dist/assets` 与目标目录一致。
+- 改了 `web/` 想让运行中的站点生效，必须**覆盖式**拷贝到 `~/.local/share/hyprtrace/web`（该路径在工作区之外，需要一次沙箱提权；不要先删 `assets/`，旧标签页还在用旧哈希，详见 ops 技能）并确认 `dist/assets` 与目标目录一致。
 - 大改动前后用 `git status` 确认没有把 `.aur/`、`.dsh-diag/`、`target/`、`web/dist/` 之类提交进去（`.gitignore` 已覆盖，别用 `git add -f`）。
 - 后端新逻辑优先写成 `insights/` 那样的**纯函数 + 单测**，SQL 只负责取数。
 - **验证要配得上改动的风险**（详见 `hyprtrace-architecture` 的「验证与防漂移」）：
