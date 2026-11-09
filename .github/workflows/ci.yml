@@ -26,5 +26,27 @@ jobs:
       - name: Test workspace
         run: cargo test --workspace
 
+      - name: Install frontend deps
+        run: cd web && npm ci
+
+      - name: Frontend tests
+        run: cd web && npm test
+
+      # Issue #26 acceptance: no component may derive a "local date" from the
+      # UTC ISO string. The shared helper lives in web/src/lib/dates.ts; the
+      # unit test covers its behaviour, this step keeps the pattern from being
+      # reintroduced (it happened once, in ForecastChart).
+      - name: Guard local dates (#26)
+        run: |
+          # lib/dates.ts documents the rule and its test asserts the old
+          # expression's behaviour, so those two files are allowed to name it.
+          hits=$(grep -rn "toISOString().slice" web/src --include='*.ts' --include='*.tsx' \
+            | grep -v 'web/src/lib/dates' || true)
+          if [ -n "$hits" ]; then
+            echo "$hits"
+            echo "::error::use localDate() from web/src/lib/dates.ts instead of toISOString().slice"
+            exit 1
+          fi
+
       - name: Build frontend
-        run: cd web && npm ci && npm run build
+        run: cd web && npm run build
