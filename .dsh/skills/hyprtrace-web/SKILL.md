@@ -19,7 +19,9 @@ src/lib/api-types.ts    **生成物**：由 Rust 模型渲染，勿手改（见�
 src/lib/types.ts        再导出生成类型 + 只属于客户端的请求体/包装类型
 src/lib/queries.ts      react-query 数据层：一个端点一个 key，保存后 invalidate
 src/lib/transport.ts    /api/ai/chat/agent 的 NDJSON → AI SDK 消息流（7 种 type：text/reasoning/tool_call/tool_result/done/cancelled/error）
-src/lib/auth.ts         X-Auth-Token（localStorage: hyprtrace_auth_token）
+src/lib/auth.ts         X-Auth-Token（localStorage: hyprtrace_auth_token）+ 401 时派发 AUTH_REJECTED_EVENT
+src/lib/dates.ts        localDate()：本地日历日 yyyy-MM-dd（**不要**用 toISOString().slice）
+src/lib/heatmap.ts      年热力图色阶/分桶/日期键/无障碍标签（色阶唯一来源）
 src/lib/theme.tsx       深色/浅色/跟随系统（localStorage: hyprtrace.theme）
 src/lib/motion.ts       动效预设
 src/lib/format.ts       时长/百分比/内存/相对日期格式化（formatDuration / formatSpan / formatDelta / formatCount…）
@@ -85,6 +87,7 @@ src/pages/              Dashboard, Insights, Apps, Timeline, Sessions, Titles, S
 ```bash
 cd web
 npx tsc --noEmit -p tsconfig.json      # 类型门；strict + noUnusedLocals/Parameters，未使用的 import 会直接失败
+npm test                               # vitest（纯逻辑单测；vitest.config.ts，无 jsdom 组件测试）
 npm run build                          # tsc -b && vite build → dist/
 VITE_API_TARGET=http://127.0.0.1:9421 npm run dev   # 开发服务器（默认代理到 9420）
 ```

@@ -26,8 +26,9 @@ Hyprland 窗口时间追踪器：Rust daemon + Axum server + React SPA，三者�
 ## 常用命令
 
 ```bash
-cargo check --workspace && cargo test --workspace        # CI 前两步（daemon 54 + server 104）
+cargo check --workspace && cargo test --workspace        # CI 前两步（common 2 + daemon 64 + server 119）
 cd web && npx tsc --noEmit -p tsconfig.json              # 前端类型门
+cd web && npm test                                       # 前端单测（vitest，纯逻辑）
 cd web && npm run build                                  # 产物在 web/dist（需部署才生效）
 curl -s localhost:9420/api/health                        # 运行中的实例
 cd web && VITE_API_TARGET=http://127.0.0.1:9421 npm run dev   # 指向临时实例的开发服务器

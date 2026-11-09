@@ -19,11 +19,16 @@ Hyprland IPC ──▶ hyprtrace-daemon ──▶ SQLite ──▶ hyprtrace-ser
 |---|---|---|---|
 | `hyprtrace-daemon` | Rust，纯 `std::thread`，无 async | 监听 Hyprland 事件写 `sessions`；空闲/输入/资源/打断/目标/作息监控；**schema 的权威定义** | 不做 HTTP，不读 `server.*` / `ai.*` 配置 |
 | `hyprtrace-server` | Rust，Axum + tokio，**单连接 + 单 Mutex** | 全部 `/api/*`、静态文件服务、AI 集成、`app_categories`/`projects`/`goals` 等表的运行期写入 | 从不写 `sessions`/`activity_events`/`app_resources`/`disruptions`（删除除外） |
+| `hyprtrace-common` | Rust 小库（无 runtime） | 两个二进制必须逐字一致的叶子件：XDG 路径 / `~` 展开、D-Bus 通知（zbus + notify-send 兜底） | 不放业务逻辑，不读配置、不碰数据库 |
 | `hyprtrace-web` | React 18 + TS + Tailwind 3 + Recharts + framer-motion | 全部 UI；所有数据经 `/api` 获取 | 不直连数据库 |
 
 ## 目录与文件对照
 
 ```
+crates/hyprtrace-common/src/            # 共享件（daemon + server 都依赖）
+  paths.rs                   config_dir()（$XDG_CONFIG_HOME）+ expand_tilde()
+  notify.rs                  send()/send_critical()：zbus org.freedesktop.Notifications，失败才回退 notify-send
+
 crates/hyprtrace-daemon/src/           # 无 lib.rs，测试都在 #[cfg(test)] mod tests
   main.rs            (314)   启动顺序、线程孵化、退出码契约
   config.rs          (288)   ~/.config/hyprtrace/config.toml 的读写（daemon 首次运行会创建）

@@ -11,8 +11,9 @@ whenToUse: 需要构建、运行、重启、部署、调试运行中的实例、
 ```bash
 cargo build --release                # 两个二进制：target/release/hyprtrace-{daemon,server}
 cargo check --workspace              # CI 第一步
-cargo test --workspace               # CI 第二步（daemon 54 + server 104）
-cd web && npx tsc --noEmit -p tsconfig.json && npm run build   # CI 第三步（npm ci 更严格）
+cargo test --workspace               # CI 第二步（common 2 + daemon 64 + server 119）
+cd web && npx tsc --noEmit -p tsconfig.json                    # 前端类型门
+cd web && npm test && npm run build                            # 前端单测 + 构建（CI 另有本地日期 grep 守卫 #26）
 ```
 
 两个二进制**都不解析命令行参数**（没有 clap），全部配置来自 config.toml 与环境变量。
@@ -130,7 +131,7 @@ journalctl --user -u hyprtrace-server -n 50
 
 ## CI 门禁（推之前本地跑一遍）
 
-`.github/workflows/ci.yml`：`cargo check --workspace` → `cargo test --workspace` → `cd web && npm ci && npm run build`（Node 20，`tsc -b` 含严格类型门）。**没有** clippy / fmt / lint 步骤，但以上任一失败就会红。注意：`rusqlite` 现在开了 **`bundled`**（编译期自带 SQLite），所以构建不再依赖系统 libsqlite3 / pkg-config——代价是首次构建多十几秒。
+`.github/workflows/ci.yml`：`cargo check --workspace` → `cargo test --workspace` → `cd web && npm ci` → `npm test`（vitest）→ 本地日期 grep 守卫（#26）→ `npm run build`（Node 20，`tsc -b` 含严格类型门）。**没有** clippy / fmt / lint 步骤，但以上任一失败就会红。注意：`rusqlite` 现在开了 **`bundled`**（编译期自带 SQLite），所以构建不再依赖系统 libsqlite3 / pkg-config——代价是首次构建多十几秒。
 这样做的原因是 **FTS5**：它是 SQLite 的编译期开关，发行版不一定启用，失败要到运行时 `CREATE VIRTUAL TABLE` 才暴露。
 `depends=('sqlite')` 仍留在 PKGBUILD 里（为了 `sqlite3` CLI 做快照/排查），但二进制不再链接它。
 
