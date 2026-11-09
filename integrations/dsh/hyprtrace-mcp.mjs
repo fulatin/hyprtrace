@@ -134,6 +134,20 @@ async function callApi({ path, query }) {
   return { body, contentType: response.headers.get('content-type') || '' };
 }
 
+// Upper bound on the text a single tool result may feed back into the model
+// context. Tool outputs are the main driver of context growth (a window list
+// or a Markdown report is easily hundreds of KB); the cap plus the explicit
+// note keeps a long conversation from blowing the provider's context window
+// (issue #18).
+const MAX_PAYLOAD_CHARS = 60_000;
+
+/** Cap a tool payload and mark it as truncated when it was cut. */
+function capPayload(text) {
+  return text.length > MAX_PAYLOAD_CHARS
+    ? `${text.slice(0, MAX_PAYLOAD_CHARS)}\n…[truncated ${text.length - MAX_PAYLOAD_CHARS} chars; narrow the query]`
+    : text;
+}
+
 /** Turn the raw HTTP body into an MCP text payload or a thrown tool error. */
 function decodePayload(tool, { body, contentType }) {
   if (tool.format === 'markdown') {
@@ -144,13 +158,13 @@ function decodePayload(tool, { body, contentType }) {
       try {
         const parsed = JSON.parse(body);
         if (parsed && typeof parsed.error === 'string') throw new Error(`HyprTrace API error: ${parsed.error}`);
-        return JSON.stringify(parsed, null, 2);
+        return capPayload(JSON.stringify(parsed, null, 2));
       } catch (err) {
         if (err instanceof Error && err.message.startsWith('HyprTrace API error:')) throw err;
-        return body;
+        return capPayload(body);
       }
     }
-    return body;
+    return capPayload(body);
   }
   let parsed;
   try {
@@ -162,11 +176,7 @@ function decodePayload(tool, { body, contentType }) {
   if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && typeof parsed.error === 'string') {
     throw new Error(`HyprTrace API error: ${parsed.error}`);
   }
-  const text = JSON.stringify(parsed, null, 2);
-  const MAX_CHARS = 60_000;
-  return text.length > MAX_CHARS
-    ? `${text.slice(0, MAX_CHARS)}\n…[truncated ${text.length - MAX_CHARS} chars; narrow the query]`
-    : text;
+  return capPayload(JSON.stringify(parsed, null, 2));
 }
 
 // ── tool definitions ────────────────────────────────────────────────────────

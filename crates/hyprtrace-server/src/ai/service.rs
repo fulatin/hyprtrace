@@ -961,6 +961,13 @@ impl AiService {
     }
 }
 
+/// Upper bound on tool calls in a single turn. The DSH harness bounds the
+/// *rounds* of an agent loop, not the number of tools a model may invoke, and
+/// each tool call re-feeds its (potentially large) result into the context.
+/// Twenty is far above any normal HyprTrace question while still stopping a
+/// runaway loop before the context budget is exhausted (issue #18).
+const MAX_TOOL_CALLS_PER_TURN: usize = 20;
+
 /// Why the turn loop stopped without the harness finishing cleanly.
 enum Terminal {
     Timeout(u64),
@@ -975,6 +982,8 @@ struct TurnState {
     /// bridge; the settled `assistant/message` must not duplicate them.
     streamed: HashSet<(i64, i64)>,
     attempts: HashMap<String, (i64, i64)>,
+    /// Number of `tool/call` events seen in this turn (budget enforcement).
+    tool_calls: usize,
     saw_turn_end: bool,
     finished: bool,
     failed: bool,
@@ -1054,6 +1063,19 @@ impl TurnState {
                 let Some(id) = data.get("callId").and_then(Value::as_str) else {
                     return Vec::new();
                 };
+                self.tool_calls += 1;
+                if self.tool_calls > MAX_TOOL_CALLS_PER_TURN {
+                    // Stop before executing the call: the turn loop turns
+                    // `abort_message` into an `error` event and discards the
+                    // harness (issue #18).
+                    self.failed = true;
+                    if self.abort_message.is_none() {
+                        self.abort_message = Some(format!(
+                            "Stopped after {MAX_TOOL_CALLS_PER_TURN} tool calls in one turn (tool-call budget reached). Ask a narrower question or retry."
+                        ));
+                    }
+                    return Vec::new();
+                }
                 let name = data
                     .get("name")
                     .and_then(Value::as_str)
@@ -1126,6 +1148,19 @@ impl TurnState {
                             .unwrap_or("AI error")
                             .to_string();
                         vec![AiEvent::Error(message)]
+                    }
+                    "max-tokens" | "length" => {
+                        // DSH reports a token-limit stop as a normal
+                        // `turn/end`, with `{kind: "max-tokens"}`. Without this
+                        // arm the chat simply ends mid-sentence — or with a
+                        // truncated tool call — and the user is never told
+                        // (issue #18).
+                        self.failed = true;
+                        vec![AiEvent::Error(
+                            "The model response was truncated (max tokens reached). \
+                             Ask a shorter question or retry."
+                                .to_string(),
+                        )]
                     }
                     "aborted" | "abort" => {
                         self.cancelled = true;
@@ -1343,7 +1378,7 @@ fn resolve_asset(explicit: Option<&str>, file_name: &str) -> Result<PathBuf> {
     let mut tried: Vec<PathBuf> = Vec::new();
     let mut candidates: Vec<PathBuf> = Vec::new();
     if let Some(path) = explicit.filter(|p| !p.trim().is_empty()) {
-        let configured = expand_tilde(path.trim());
+        let configured = hyprtrace_common::paths::expand_tilde(path.trim());
         if configured.is_file() {
             return Ok(configured.canonicalize().unwrap_or(configured));
         }
@@ -1387,18 +1422,9 @@ fn resolve_asset(explicit: Option<&str>, file_name: &str) -> Result<PathBuf> {
     ))
 }
 
-fn expand_tilde(path: &str) -> PathBuf {
-    if let Some(rest) = path.strip_prefix("~/") {
-        if let Some(home) = std::env::var_os("HOME") {
-            return PathBuf::from(home).join(rest);
-        }
-    }
-    PathBuf::from(path)
-}
-
 fn resolve_cwd(cfg: &DshConfig) -> Result<PathBuf> {
     if let Some(configured) = cfg.cwd.as_deref().filter(|value| !value.trim().is_empty()) {
-        let path = expand_tilde(configured.trim());
+        let path = hyprtrace_common::paths::expand_tilde(configured.trim());
         if path.is_dir() {
             return Ok(path);
         }
@@ -1623,6 +1649,47 @@ bridge:
             vec![AiEvent::Error("Insufficient Balance".to_string())]
         );
         assert!(state.failed);
+
+        // A token-limit stop is a normal turn end for DSH; it must surface as
+        // an error so a truncated answer is never presented as complete.
+        let mut state = TurnState::default();
+        let truncated = json!({
+            "type": "turn/end",
+            "data": {"reason": {"kind": "max-tokens"}}
+        });
+        let events = state.handle_session_event(&truncated, "");
+        assert_eq!(events.len(), 1);
+        assert!(matches!(&events[0], AiEvent::Error(message) if message.contains("truncated")));
+        assert!(state.saw_turn_end && state.failed && !state.cancelled);
+    }
+
+    #[test]
+    fn tool_call_budget_aborts_the_turn() {
+        let mut state = TurnState::default();
+        // One tool call below the cap is passed through to the client.
+        for index in 0..MAX_TOOL_CALLS_PER_TURN {
+            let call = json!({
+                "type": "tool/call",
+                "data": {"callId": format!("c{index}"), "name": "mcp__hyprtrace__today_summary",
+                         "arguments": "{}"}
+            });
+            let events = state.handle_session_event(&call, "");
+            assert_eq!(events.len(), 1, "call {index} must stream");
+            assert!(state.abort_message.is_none());
+        }
+        // The next call exceeds the budget: no event, failed + actionable
+        // message (the turn loop will emit it as an `error`).
+        let over = json!({
+            "type": "tool/call",
+            "data": {"callId": "over", "name": "mcp__hyprtrace__today_summary",
+                     "arguments": "{}"}
+        });
+        assert!(state.handle_session_event(&over, "").is_empty());
+        assert!(state.failed);
+        assert!(state
+            .abort_message
+            .as_deref()
+            .is_some_and(|message| message.contains("tool-call budget")));
     }
 
     #[test]
