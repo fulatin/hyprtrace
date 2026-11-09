@@ -116,19 +116,32 @@ pub fn global() -> &'static AppMetadataResolver {
 /// and `$XDG_DATA_DIRS` so Flatpak (`~/.local/share/flatpak/exports/share`),
 /// Snap (`/var/lib/snapd/desktop`) and custom XDG setups are found.
 fn scan_directories() -> Vec<PathBuf> {
+    scan_directories_from(
+        std::env::var_os("XDG_DATA_HOME").map(PathBuf::from),
+        std::env::var("XDG_DATA_DIRS").ok(),
+        std::env::var_os("HOME").map(PathBuf::from),
+    )
+}
+
+/// Pure form of [`scan_directories`]: the environment is passed in so the XDG
+/// search order (`$XDG_DATA_HOME` first, then every `$XDG_DATA_DIRS` entry) can
+/// be tested without mutating process-wide state.
+fn scan_directories_from(
+    xdg_data_home: Option<PathBuf>,
+    xdg_data_dirs: Option<String>,
+    home: Option<PathBuf>,
+) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
 
-    // $XDG_DATA_HOME (defaults to ~/.local/share).
-    if let Some(xdg) = std::env::var_os("XDG_DATA_HOME") {
-        dirs.push(PathBuf::from(xdg).join("applications"));
-    } else if let Some(home) = std::env::var_os("HOME") {
-        dirs.push(PathBuf::from(home).join(".local/share/applications"));
+    // $XDG_DATA_HOME defaults to $HOME/.local/share.
+    let data_home = xdg_data_home.or_else(|| home.map(|home| home.join(".local/share")));
+    if let Some(data_home) = data_home {
+        dirs.push(data_home.join("applications"));
     }
 
-    // $XDG_DATA_DIRS (defaults to /usr/local/share:/usr/share).
-    let data_dirs = std::env::var("XDG_DATA_DIRS").unwrap_or_else(|_| {
-        "/usr/local/share:/usr/share".to_string()
-    });
+    // $XDG_DATA_DIRS defaults to /usr/local/share:/usr/share.
+    let data_dirs =
+        xdg_data_dirs.unwrap_or_else(|| "/usr/local/share:/usr/share".to_string());
     for d in data_dirs.split(':') {
         if !d.is_empty() {
             dirs.push(PathBuf::from(d).join("applications"));
@@ -136,18 +149,6 @@ fn scan_directories() -> Vec<PathBuf> {
     }
 
     dirs
-}
-
-/// Parse one `.desktop` file. Returns `None` when the file is missing,
-/// unreadable, is not a `Type=Application` entry, has no plain `Name`, or is
-/// marked `NoDisplay=true` / `Hidden=true`.
-///
-/// Only the values inside the `[Desktop Entry]` group are considered. The
-/// display name prefers the current locale's `Name[<locale>]` key, falling back
-/// to the plain `Name`. Freedesktop escape sequences (`\s`, `\n`, `\t`, `\r`,
-/// `\\`) are decoded in string values.
-fn parse_desktop_file(path: &Path) -> Option<DesktopEntry> {
-    parse_desktop_file_with_locale(path, &current_locale())
 }
 
 /// Parse one `.desktop` file. Returns `None` when the file is missing,
@@ -206,7 +207,11 @@ fn parse_desktop_file_with_locale(path: &Path, locale: &str) -> Option<DesktopEn
                     name = Some(unescape(value).to_string());
                 }
             }
-            k if k.starts_with("Name[") && k.ends_with(']') && name.is_some() => {
+            // A localized name must be picked up regardless of whether the
+            // plain `Name` has already been seen: real files sometimes put
+            // `Name[zh_CN]` before `Name`, and the old `name.is_some()`
+            // guard silently dropped the translation in that order.
+            k if k.starts_with("Name[") && k.ends_with(']') => {
                 let lang = &k[5..k.len() - 1];
                 if lang.eq_ignore_ascii_case(&locale) {
                     localized_name = Some(unescape(value).to_string());
@@ -279,6 +284,12 @@ fn current_locale() -> String {
     let lang = std::env::var("LANG")
         .or_else(|_| std::env::var("LC_MESSAGES"))
         .unwrap_or_default();
+    parse_locale(&lang)
+}
+
+/// Strip the codeset and modifier from a POSIX locale string:
+/// `zh_CN.UTF-8` -> `zh_CN`, `sr_RS@latin` -> `sr_RS`.
+fn parse_locale(lang: &str) -> String {
     lang.split(['.', '@']).next().unwrap_or("").to_string()
 }
 
@@ -415,6 +426,80 @@ mod tests {
         std::env::remove_var("LANG");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn localized_name_wins_even_when_it_precedes_the_plain_name() {
+        // Some real files put `Name[xx]` before `Name`; the old order-dependent
+        // guard dropped the translation for those (issue #17).
+        let dir = unique_dir("locale-order");
+        write_file(
+            &dir,
+            "firefox.desktop",
+            "[Desktop Entry]\nName[zh_CN]=火狐浏览器\nName=Firefox\nIcon=firefox\n",
+        );
+        let path = dir.join("firefox.desktop");
+
+        let zh = parse_desktop_file_with_locale(&path, "zh_CN").expect("parsed");
+        assert_eq!(zh.metadata.display_name, "火狐浏览器");
+        let en = parse_desktop_file_with_locale(&path, "en_US").expect("parsed");
+        assert_eq!(en.metadata.display_name, "Firefox");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn scan_directories_honors_xdg_data_home_and_data_dirs() {
+        let dirs = scan_directories_from(
+            Some(PathBuf::from("/tmp/xdg")),
+            Some("/opt/share:/usr/share".to_string()),
+            None,
+        );
+        assert_eq!(
+            dirs,
+            vec![
+                PathBuf::from("/tmp/xdg/applications"),
+                PathBuf::from("/opt/share/applications"),
+                PathBuf::from("/usr/share/applications"),
+            ]
+        );
+
+        // Without XDG_DATA_HOME the default is $HOME/.local/share, and without
+        // XDG_DATA_DIRS the system defaults are used.
+        let dirs = scan_directories_from(None, None, Some(PathBuf::from("/home/u")));
+        assert_eq!(
+            dirs,
+            vec![
+                PathBuf::from("/home/u/.local/share/applications"),
+                PathBuf::from("/usr/local/share/applications"),
+                PathBuf::from("/usr/share/applications"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_desktop_file_found_via_xdg_data_home_is_resolved() {
+        // End-to-end for the XDG_DATA_HOME acceptance bullet: put a .desktop
+        // file in a custom data home and scan it the way startup does.
+        let dir = unique_dir("xdg-data-home");
+        let apps = dir.join("applications");
+        write_file(
+            &apps,
+            "custom.desktop",
+            "[Desktop Entry]\nType=Application\nName=Custom App\nIcon=custom\n",
+        );
+        let resolver = resolver_over(&apps);
+        let meta = resolver.lookup("custom app").expect("found via scan_dir");
+        assert_eq!(meta.desktop_id, "custom.desktop");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn locales_are_stripped_to_language_tag() {
+        assert_eq!(parse_locale("zh_CN.UTF-8"), "zh_CN");
+        assert_eq!(parse_locale("sr_RS@latin"), "sr_RS");
+        assert_eq!(parse_locale("en_US"), "en_US");
+        assert_eq!(parse_locale(""), "");
     }
 
     #[test]
