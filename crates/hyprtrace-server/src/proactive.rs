@@ -1,4 +1,3 @@
-use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -38,9 +37,12 @@ pub fn spawn_proactive_monitor(state: Arc<crate::routes::AppState>, interval_min
             last_notification = Some(insight.trim().to_string());
 
             log::info!("Proactive insight: {}", insight);
-            let _ = Command::new("notify-send")
-                .args(["-a", "hyprtrace", "HyprTrace insight", insight.trim()])
-                .spawn();
+            // D-Bus notification on a blocking thread: the zbus call is
+            // synchronous and must not stall this tokio worker.
+            let body = insight.trim().to_string();
+            tokio::task::spawn_blocking(move || {
+                hyprtrace_common::notify::send("HyprTrace insight", &body);
+            });
         }
     });
 }

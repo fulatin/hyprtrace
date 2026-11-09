@@ -1168,16 +1168,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "hyprtrace-common"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "directories",
+ "log",
+ "zbus",
+]
+
+[[package]]
 name = "hyprtrace-daemon"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
  "ctrlc",
- "directories",
  "env_logger",
  "evdev",
  "hyprland",
+ "hyprtrace-common",
  "libc",
  "log",
  "procfs",
@@ -1185,7 +1195,6 @@ dependencies = [
  "serde",
  "serde_json",
  "toml",
- "zbus",
 ]
 
 [[package]]
@@ -1200,6 +1209,7 @@ dependencies = [
  "env_logger",
  "futures",
  "hyprland",
+ "hyprtrace-common",
  "log",
  "reqwest",
  "rusqlite",

@@ -17,6 +17,7 @@ toml = "0.8"
 toml_edit = "0.22"
 tempfile = "3"
 directories = "5"
+hyprtrace-common = { path = "../hyprtrace-common" }
 tower-http = { version = "0.5", features = ["fs"] }
 reqwest = { version = "0.12", features = ["json", "stream"] }
 anyhow = "1"

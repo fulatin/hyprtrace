@@ -49,70 +49,83 @@ pub fn spawn_goal_monitor(
         loop {
             std::thread::sleep(interval);
 
-            let guard = match db.lock() {
-                Ok(g) => g,
-                Err(_) => continue,
-            };
+            // Collect the notifications that are due while the DB lock is
+            // held, then send them after dropping it. `send_notify` is a
+            // blocking D-Bus round-trip (since the zbus migration) and the
+            // notification daemon is out of our control: holding the only DB
+            // mutex across it would stall every other monitor and DB writer.
+            let mut pending: Vec<(String, String)> = Vec::new();
 
-            let goals = match guard.goals() {
-                Ok(g) => g,
-                Err(_) => continue,
-            };
-
-            let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-            // Only today's keys are ever relevant; drop stale days so the
-            // set cannot grow without bound over a long daemon lifetime.
-            notified.retain(|(d, _, _)| d == &today);
-
-            for goal in goals {
-                if !goal.enabled {
-                    continue;
-                }
-                let today_ms = guard.today_active_for_goal(&goal);
-                let pct = if goal.daily_target_ms > 0 {
-                    (today_ms as f64 / goal.daily_target_ms as f64) * 100.0
-                } else {
-                    0.0
+            {
+                let guard = match db.lock() {
+                    Ok(g) => g,
+                    Err(_) => continue,
                 };
-                match milestone_to_notify(&mut notified, &today, &goal, pct) {
-                    Some(Milestone::Done) => send_notify(
-                        "Goal achieved",
-                        &format!(
-                            "{}: reached 100% of today's target ({} / {})",
-                            goal.name,
-                            fmt_ms(today_ms),
-                            fmt_ms(goal.daily_target_ms)
-                        ),
-                    ),
-                    Some(Milestone::Half) => send_notify(
-                        "Halfway there",
-                        &format!(
-                            "{}: 50% of today's target reached ({} / {})",
-                            goal.name,
-                            fmt_ms(today_ms),
-                            fmt_ms(goal.daily_target_ms)
-                        ),
-                    ),
-                    None => {}
+
+                let goals = match guard.goals() {
+                    Ok(g) => g,
+                    Err(_) => continue,
+                };
+
+                let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+                // Only today's keys are ever relevant; drop stale days so the
+                // set cannot grow without bound over a long daemon lifetime.
+                notified.retain(|(d, _, _)| d == &today);
+
+                for goal in goals {
+                    if !goal.enabled {
+                        continue;
+                    }
+                    let today_ms = guard.today_active_for_goal(&goal);
+                    let pct = if goal.daily_target_ms > 0 {
+                        (today_ms as f64 / goal.daily_target_ms as f64) * 100.0
+                    } else {
+                        0.0
+                    };
+                    match milestone_to_notify(&mut notified, &today, &goal, pct) {
+                        Some(Milestone::Done) => pending.push((
+                            "Goal achieved".to_string(),
+                            format!(
+                                "{}: reached 100% of today's target ({} / {})",
+                                goal.name,
+                                fmt_ms(today_ms),
+                                fmt_ms(goal.daily_target_ms)
+                            ),
+                        )),
+                        Some(Milestone::Half) => pending.push((
+                            "Halfway there".to_string(),
+                            format!(
+                                "{}: 50% of today's target reached ({} / {})",
+                                goal.name,
+                                fmt_ms(today_ms),
+                                fmt_ms(goal.daily_target_ms)
+                            ),
+                        )),
+                        None => {}
+                    }
+                }
+
+                // Focus break reminder. Local date: same daily-bucket
+                // semantics as the summary tables (see M3).
+                let focused_ms = guard.current_focused_duration_ms();
+                let day = chrono::Local::now().format("%Y-%m-%d").to_string();
+                let focused_min = focused_ms / 60_000;
+                if break_after_minutes > 0 && focused_min as u64 >= break_after_minutes {
+                    if break_notified.as_ref().map(|(d, _)| d.as_str()) != Some(day.as_str()) {
+                        pending.push((
+                            "Take a break".to_string(),
+                            format!(
+                                "You've been focused on one window for {} min. Stretch and look away for a moment.",
+                                focused_min
+                            ),
+                        ));
+                        break_notified = Some((day, true));
+                    }
                 }
             }
 
-            // Focus break reminder. Local date: same daily-bucket semantics as
-            // the summary tables (see M3).
-            let focused_ms = guard.current_focused_duration_ms();
-            let day = chrono::Local::now().format("%Y-%m-%d").to_string();
-            let focused_min = focused_ms / 60_000;
-            if break_after_minutes > 0 && focused_min as u64 >= break_after_minutes {
-                if break_notified.as_ref().map(|(d, _)| d.as_str()) != Some(day.as_str()) {
-                    send_notify(
-                        "Take a break",
-                        &format!(
-                            "You've been focused on one window for {} min. Stretch and look away for a moment.",
-                            focused_min
-                        ),
-                    );
-                    break_notified = Some((day, true));
-                }
+            for (summary, body) in pending {
+                send_notify(&summary, &body);
             }
         }
     });
@@ -138,7 +151,7 @@ fn fmt_ms(ms: i64) -> String {
 }
 
 fn send_notify(summary: &str, body: &str) {
-    crate::notify::notify(summary, body);
+    hyprtrace_common::notify::send(summary, body);
 }
 
 #[cfg(test)]

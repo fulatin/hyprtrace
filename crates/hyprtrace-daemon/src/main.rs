@@ -5,7 +5,6 @@ mod goal_monitor;
 mod idle_monitor;
 mod input_monitor;
 mod listener;
-mod notify;
 mod privacy;
 mod resource_monitor;
 mod schema;

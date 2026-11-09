@@ -197,7 +197,7 @@ impl Default for Config {
 impl Config {
     /// Load config from ~/.config/hyprtrace/config.toml; create with defaults if missing
     pub fn load() -> anyhow::Result<Self> {
-        let config_dir = dirs_config_dir()?;
+        let config_dir = hyprtrace_common::paths::config_dir()?;
         let config_path = config_dir.join("config.toml");
 
         if config_path.exists() {
@@ -213,7 +213,7 @@ impl Config {
 
     /// Load config in read-only mode; use defaults if file doesn't exist (no auto-create)
     pub fn load_readonly() -> anyhow::Result<Self> {
-        let config_dir = dirs_config_dir()?;
+        let config_dir = hyprtrace_common::paths::config_dir()?;
         let config_path = config_dir.join("config.toml");
 
         if config_path.exists() {
@@ -236,7 +236,7 @@ impl Config {
 
     /// Expand ~ in db_path to $HOME
     pub fn db_path_expanded(&self) -> PathBuf {
-        expand_tilde(&self.daemon.db_path)
+        hyprtrace_common::paths::expand_tilde(&self.daemon.db_path)
     }
 
     /// Ensure the database directory exists
@@ -245,44 +245,5 @@ impl Config {
             std::fs::create_dir_all(parent)?;
         }
         Ok(())
-    }
-}
-
-fn dirs_config_dir() -> anyhow::Result<PathBuf> {
-    // Respect XDG_CONFIG_HOME (falling back to $HOME/.config) via the
-    // `directories` crate instead of hard-coding $HOME/.config, which ignores
-    // a user's XDG override.
-    directories::ProjectDirs::from("", "", "hyprtrace")
-        .map(|d| d.config_dir().to_path_buf())
-        .ok_or_else(|| anyhow::anyhow!("cannot determine config directory (is HOME set?)"))
-}
-
-fn expand_tilde(path: &str) -> PathBuf {
-    if path.starts_with('~') {
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
-        PathBuf::from(path.replacen('~', &home, 1))
-    } else {
-        PathBuf::from(path)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn config_dir_respects_xdg_and_falls_back_to_home() {
-        // A user who points XDG_CONFIG_HOME elsewhere must have the config
-        // looked up there, not under the hard-coded $HOME/.config.
-        let xdg = std::env::temp_dir().join("hyprtrace-xdg-test");
-        std::env::set_var("XDG_CONFIG_HOME", &xdg);
-        let dir = dirs_config_dir().unwrap();
-        assert_eq!(dir, xdg.join("hyprtrace"));
-
-        // Without XDG_CONFIG_HOME, use $HOME/.config/hyprtrace.
-        std::env::remove_var("XDG_CONFIG_HOME");
-        let home = std::env::var("HOME").unwrap();
-        let dir = dirs_config_dir().unwrap();
-        assert_eq!(dir, std::path::PathBuf::from(&home).join(".config/hyprtrace"));
     }
 }

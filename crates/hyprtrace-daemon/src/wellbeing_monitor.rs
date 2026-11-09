@@ -85,5 +85,8 @@ pub fn spawn_wellbeing_monitor(
 }
 
 fn send_notify(summary: &str, body: &str) {
-    crate::notify::notify(summary, body);
+    // The pre-zbus implementation passed `notify-send -u critical` here; a
+    // late-night reminder is exactly the case where normal urgency is not
+    // enough.
+    hyprtrace_common::notify::send_critical(summary, body);
 }

@@ -1,0 +1,13 @@
+[package]
+name = "hyprtrace-common"
+version.workspace = true
+edition.workspace = true
+
+# Pieces both binaries need verbatim. Keeping them here is the only way to have
+# a single definition: the daemon and the server are separate crates and had
+# already drifted apart once (issue #20).
+[dependencies]
+anyhow = "1"
+directories = "5"
+log = "0.4"
+zbus = "4"
