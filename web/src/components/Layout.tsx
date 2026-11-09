@@ -15,6 +15,7 @@ import {
   PanelLeftOpen,
   Activity,
 } from 'lucide-react';
+import AuthNotice from './AuthNotice';
 import ThemeToggle from './ui/ThemeToggle';
 import { SkeletonPanel, SkeletonStats } from './ui/Feedback';
 import { pageTransition, spring } from '../lib/motion';
@@ -219,6 +220,9 @@ export default function Layout() {
             </span>
           </div>
         </header>
+
+        {/* Shown when the server rejected the stored API token (issue #27). */}
+        <AuthNotice />
 
         {/*
           `scrollbar-gutter: stable` reserves the scrollbar's width for good.

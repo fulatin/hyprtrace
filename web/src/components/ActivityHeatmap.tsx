@@ -4,6 +4,7 @@ import { motion } from 'framer-motion';
 import { CalendarDays } from 'lucide-react';
 import type { DailyActivity } from '../lib/types';
 import { formatDuration } from '../lib/format';
+import { HEAT_BUCKETS, heatDate, heatFill, heatLabel, heatScale } from '../lib/heatmap';
 import { Panel } from './ui/Card';
 import { EmptyState } from './ui/Feedback';
 import { useTheme } from '../lib/theme';
@@ -12,34 +13,12 @@ interface ActivityHeatmapProps {
   data: DailyActivity[];
 }
 
-/** Intensity scale keyed by active minutes, tuned per theme. */
-const SCALE_DARK = ['#16222e', '#155e75', '#0e7490', '#06b6d4', '#67e8f9'];
-const SCALE_LIGHT = ['#e2e8f0', '#a5f3fc', '#67e8f9', '#22d3ee', '#0891b2'];
-
-const LEGEND_LABELS = ['0', '<30m', '<2h', '<4h', '>=4h'];
-
-/**
- * The library picks the colour of the first threshold strictly greater than the
- * count, so a day with 0 minutes would render as the second (active) colour.
- * We therefore set the fill ourselves from the cell's minute count.
- */
-function fillFor(count: number, light: boolean): string {
-  if (count <= 0) return light ? '#e2e8f0' : '#16222e';
-  if (count < 30) return light ? '#a5f3fc' : '#155e75';
-  if (count < 120) return light ? '#67e8f9' : '#0e7490';
-  if (count < 240) return light ? '#22d3ee' : '#06b6d4';
-  return light ? '#0891b2' : '#67e8f9';
-}
-
-/** Convert `yyyy-MM-dd` to the `YYYY/M/D` key the heatmap library uses. */
-function heatDate(iso: string): string {
-  const [y, m, d] = iso.slice(0, 10).split('-').map(Number);
-  return `${y}/${m}/${d}`;
-}
-
 export default memo(function ActivityHeatmap({ data }: ActivityHeatmapProps) {
   const { theme } = useTheme();
-  const scale = theme === 'light' ? SCALE_LIGHT : SCALE_DARK;
+  // Cells, legend and screen-reader text all read the same palette table
+  // (`lib/heatmap.ts`); changing a colour there updates everything at once.
+  const light = theme === 'light';
+  const scale = heatScale(light ? 'light' : 'dark');
   const containerRef = useRef<HTMLDivElement>(null);
   const [rectSize, setRectSize] = useState(11);
 
@@ -80,9 +59,11 @@ export default memo(function ActivityHeatmap({ data }: ActivityHeatmapProps) {
     // days out of order, and key the count by the library's YYYY/M/D format so
     // the rectRender lookup matches a cell's valueItem.date.
     const sorted = [...data].sort((a, b) => a.date.localeCompare(b.date));
-    const countByDate = new Map<string, number>();
+    // Keyed by the library's `YYYY/M/D` cell key, holding both the original
+    // ISO date (for the label) and the measured milliseconds (for the fill).
+    const byDate = new Map<string, { iso: string; ms: number }>();
     for (const d of sorted) {
-      countByDate.set(heatDate(d.date), d.total_ms);
+      byDate.set(heatDate(d.date), { iso: d.date.slice(0, 10), ms: d.total_ms });
     }
 
     const value = sorted.map((d) => ({
@@ -97,7 +78,7 @@ export default memo(function ActivityHeatmap({ data }: ActivityHeatmapProps) {
     const activeDays = sorted.filter((d) => d.total_ms > 0).length;
     const busiest = sorted.reduce((max, d) => (d.total_ms > max.total_ms ? d : max), sorted[0]);
 
-    return { value, startDate, endDate, totals: { totalMs, activeDays, busiest, countByDate } };
+    return { value, startDate, endDate, totals: { totalMs, activeDays, busiest, byDate } };
   }, [data]);
 
   // Stable element identity: while its inputs are unchanged React bails out of
@@ -106,7 +87,7 @@ export default memo(function ActivityHeatmap({ data }: ActivityHeatmapProps) {
   // produces a new element.
   const heatMap = useMemo(() => {
     if (!totals) return null;
-    const { countByDate } = totals;
+    const { byDate } = totals;
     return (
       <HeatMap
         value={value}
@@ -120,27 +101,32 @@ export default memo(function ActivityHeatmap({ data }: ActivityHeatmapProps) {
         // Disable the library's built-in legend (its cell gap is fixed at 1px
         // and looks cramped); we render our own with a wider gap below.
         legendCellSize={0}
-        panelColors={scale}
-        // Accessibility: every cell exposes its date + active time, and the
-        // tooltip uses the shared formatter.
+        // Accessibility: each cell is focusable and announces its date plus
+        // active time (or "no activity"), so the heatmap is usable with a
+        // keyboard and a screen reader (issue #19). The fill comes from the
+        // shared palette table; `panelColors` from the library is not used
+        // because `rectRender` sets the fill itself.
         rectRender={(props, valueItem) => {
-          const ms = countByDate.get(valueItem.date) ?? 0;
+          const day = byDate.get(valueItem.date);
+          const ms = day?.ms ?? 0;
           const minutes = valueItem.count ?? 0;
+          const label = heatLabel(day?.iso ?? valueItem.date, ms, formatDuration);
           return (
             <rect
               {...props}
-              fill={fillFor(minutes, theme === 'light')}
+              fill={heatFill(minutes, light ? 'light' : 'dark')}
               rx={3}
               role="gridcell"
-              aria-label={`${valueItem.date}: ${formatDuration(ms)}`}
+              tabIndex={0}
+              aria-label={label}
             >
-              <title>{`${valueItem.date}: ${formatDuration(ms)}`}</title>
+              <title>{label}</title>
             </rect>
           );
         }}
       />
     );
-  }, [value, startDate, endDate, rectSize, scale, theme, totals]);
+  }, [value, startDate, endDate, rectSize, scale, light, totals]);
 
   if (!totals || value.length === 0) {
     return (
@@ -163,7 +149,12 @@ export default memo(function ActivityHeatmap({ data }: ActivityHeatmapProps) {
       icon={<CalendarDays size={15} className="text-accent" />}
       hint={`last ${data.length} days · ${totals.activeDays} active · ${formatDuration(totals.totalMs)} tracked`}
     >
-      <div ref={containerRef} className="overflow-x-auto pb-1">
+      <div
+        ref={containerRef}
+        className="overflow-x-auto pb-1"
+        role="grid"
+        aria-label="Yearly activity heatmap, one cell per day"
+      >
         {heatMap}
       </div>
 
@@ -180,7 +171,7 @@ export default memo(function ActivityHeatmap({ data }: ActivityHeatmapProps) {
               className="flex items-center gap-1.5"
             >
               <span className="rounded-sm" style={{ width: 11, height: 11, backgroundColor: c }} />
-              <span className="text-[10px] text-fg-faint">{LEGEND_LABELS[i]}</span>
+              <span className="text-[10px] text-fg-faint">{HEAT_BUCKETS[i].label}</span>
             </motion.div>
           ))}
         </div>

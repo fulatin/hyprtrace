@@ -359,3 +359,14 @@
     transition-duration: 0.001ms !important;
   }
 }
+
+/*
+ * Keyboard focus for the yearly heatmap cells (issue #19). The cells are SVG
+ * <rect> elements with tabIndex=0; browsers do not draw a focus ring on SVG
+ * shapes by default, so without this rule a keyboard user could focus a cell
+ * and see nothing.
+ */
+svg rect[role='gridcell']:focus-visible {
+  outline: 2px solid rgb(var(--c-accent));
+  outline-offset: 1px;
+}

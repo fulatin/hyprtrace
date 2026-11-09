@@ -1,4 +1,4 @@
-import { authHeaders, clearAuthToken } from './auth';
+import { authHeaders, clearAuthToken, notifyAuthRejected } from './auth';
 import type {
   TodaySummary,
   AppRank,
@@ -51,8 +51,14 @@ async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
   if (res.status === 401) {
     // The token was rejected (e.g. the server's auth_token changed or the
     // saved token is stale). Clear it so the next request doesn't keep failing
-    // with a secret that is no longer valid.
+    // with a secret that is no longer valid, and tell the shell to show the
+    // re-entry instructions (issue #27).
     clearAuthToken();
+    notifyAuthRejected();
+    throw new Error(
+      'API authentication failed: the saved token was rejected and has been cleared. ' +
+        'Reopen this page once with ?token=<new token> to store it again.',
+    );
   }
   if (!res.ok) {
     const text = await res.text();
@@ -290,9 +296,16 @@ export const api = {
   },
 
   report: async (from: string, to: string): Promise<void> => {
+    // Same timeout and auth handling as `fetchJSON`: this used to be a raw
+    // fetch that could hang forever and never clear a rejected token.
     const res = await fetch(`/api/report?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`, {
       headers: authHeaders(),
+      signal: AbortSignal.timeout(60_000),
     });
+    if (res.status === 401) {
+      clearAuthToken();
+      notifyAuthRejected();
+    }
     if (!res.ok) throw new Error(`API Error: ${res.status}`);
     const md = await res.text();
     const blob = new Blob([md], { type: 'text/markdown' });

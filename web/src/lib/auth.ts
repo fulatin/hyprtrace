@@ -43,6 +43,22 @@ export function authHeaders(): Record<string, string> {
   }
 }
 
+/**
+ * Window event fired when the server rejects the stored token. The API client
+ * clears the token itself; the shell (`components/AuthNotice.tsx`) listens for
+ * this to tell the user how to supply a working one again (issue #27).
+ */
+export const AUTH_REJECTED_EVENT = 'hyprtrace:auth-rejected';
+
+/** Tell the UI that the stored token was rejected (after clearing it). */
+export function notifyAuthRejected(): void {
+  try {
+    window.dispatchEvent(new Event(AUTH_REJECTED_EVENT));
+  } catch {
+    // No DOM (tests / SSR): the caller still shows an error state.
+  }
+}
+
 /** Remove the persisted token (used when the server rejects it). */
 export function clearAuthToken(): void {
   try {

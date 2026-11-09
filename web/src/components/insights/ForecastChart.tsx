@@ -13,6 +13,7 @@ import {
 } from 'recharts';
 import { TrendingDown, TrendingUp, Minus } from 'lucide-react';
 import type { AppMetadata, ForecastResponse } from '../../lib/types';
+import { localDate } from '../../lib/dates';
 import { formatDuration, formatShortDate } from '../../lib/format';
 import { WEEKDAYS, displayName, pct } from './shared';
 import { CHART_RESIZE_DEBOUNCE } from '../ui/chartResize';
@@ -63,7 +64,10 @@ function ForecastChart({ data, metadata }: ForecastChartProps) {
     return [...history, ...future];
   }, [data]);
 
-  const todayIso = new Date().toISOString().slice(0, 10);
+  // Local calendar day, matching the server's `date_local` buckets. Using
+  // `toISOString()` (UTC) put this marker one day early for UTC+8 users
+  // between 00:00 and 08:00 (issue #26).
+  const todayIso = localDate();
   const trend = TREND_META[data.trend];
   const TrendIcon = trend.icon;
 
