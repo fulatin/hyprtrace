@@ -73,6 +73,27 @@ fn is_ignored_key(code: KeyCode) -> bool {
     )
 }
 
+/// Whether a device can report genuine user input.
+///
+/// Requires `EV_KEY` (a Lid Switch is `EV_SW`-only, so it is excluded by this
+/// alone) and at least one key that is not in [`is_ignored_key`] (a Power
+/// Button reports `EV_KEY` but only `KEY_POWER`/`KEY_SLEEP`, so it is excluded
+/// by the second rule). Split out so the filtering rules are unit-testable
+/// without `/dev/input` access.
+fn is_input_source(
+    has_key_events: bool,
+    supported_keys: Option<&evdev::AttributeSetRef<KeyCode>>,
+) -> bool {
+    if !has_key_events {
+        return false;
+    }
+    // An unreadable key map is treated as "not a keyboard/mouse" rather than
+    // admitting a device we know nothing about.
+    supported_keys
+        .map(|keys| keys.iter().any(|key| !is_ignored_key(key)))
+        .unwrap_or(false)
+}
+
 /// Discover input devices that can report genuine user input.
 ///
 /// Uses `evdev::enumerate()` — which scans `/dev/input/event*`, opens each
@@ -83,16 +104,9 @@ fn is_ignored_key(code: KeyCode) -> bool {
 fn scan_input_devices() -> Vec<(PathBuf, evdev::Device)> {
     let mut out = Vec::new();
     for (path, dev) in evdev::enumerate() {
-        // Must actually report key events.
-        if !dev.supported_events().contains(EventType::KEY) {
-            continue;
-        }
-        // Must have at least one "real" key, not only power/lid/suspend.
-        let has_real_key = dev
-            .supported_keys()
-            .map(|keys| keys.iter().any(|k| !is_ignored_key(k)))
-            .unwrap_or(false);
-        if !has_real_key {
+        let has_key_events = dev.supported_events().contains(EventType::KEY);
+        let supported_keys = dev.supported_keys();
+        if !is_input_source(has_key_events, supported_keys) {
             continue;
         }
         if dev.set_nonblocking(true).is_err() {
@@ -111,6 +125,30 @@ fn scan_input_devices() -> Vec<(PathBuf, evdev::Device)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use evdev::AttributeSet;
+
+    #[test]
+    fn only_key_capable_devices_with_real_keys_are_input_sources() {
+        let power_only: AttributeSet<KeyCode> =
+            [KeyCode::KEY_POWER, KeyCode::KEY_SLEEP].into_iter().collect();
+        let keyboard: AttributeSet<KeyCode> =
+            [KeyCode::KEY_A, KeyCode::KEY_POWER].into_iter().collect();
+        let mouse: AttributeSet<KeyCode> =
+            [KeyCode::BTN_LEFT, KeyCode::BTN_RIGHT].into_iter().collect();
+
+        // A Lid Switch is EV_SW-only: no EV_KEY at all.
+        assert!(!is_input_source(false, None), "a lid switch is not an input source");
+        // A Power Button has EV_KEY but only ignored keys.
+        assert!(
+            !is_input_source(true, Some(&power_only)),
+            "a power button must not count as user activity"
+        );
+        // Real keyboards/mice count, even when they also expose a power key.
+        assert!(is_input_source(true, Some(&*keyboard)));
+        assert!(is_input_source(true, Some(&*mouse)));
+        // EV_KEY with an unreadable key map is not admitted.
+        assert!(!is_input_source(true, None));
+    }
 
     #[test]
     fn power_and_switch_keys_are_ignored() {

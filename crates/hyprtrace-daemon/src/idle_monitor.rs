@@ -393,6 +393,28 @@ mod tests {
     }
 
     #[test]
+    fn wall_clock_hint_is_ignored_in_favour_of_the_monotonic_one() {
+        // The old implementation subtracted `IdleSinceHint` (CLOCK_REALTIME)
+        // from the system time, so NTP corrections, manual clock changes and
+        // suspend/resume produced bogus idle spans. Only the monotonic value
+        // is read now: a wildly different wall-clock hint must not change the
+        // answer (issue #22).
+        let out = "IdleHint=yes\nIdleSinceHint=1700000000000000\nIdleSinceHintMonotonic=42000000\n";
+        assert_eq!(
+            parse_loginctl_idle(out, 60_000_000),
+            Some(Duration::from_secs(18)),
+            "18s of monotonic idle, regardless of the wall-clock timestamp"
+        );
+        // Same monotonic input, wall clock "rolled back" by an hour: the parser
+        // cannot even see the wall clock, so the duration is unchanged.
+        let out_with_jump = "IdleHint=yes\nIdleSinceHint=1699996400000000\nIdleSinceHintMonotonic=42000000\n";
+        assert_eq!(
+            parse_loginctl_idle(out_with_jump, 60_000_000),
+            Some(Duration::from_secs(18))
+        );
+    }
+
+    #[test]
     fn evdev_activity_is_used_when_loginctl_has_no_hint() {
         // loginctl unavailable/uninformative -> fall back to the evdev
         // activity timestamp instead of reporting 0s idle.
