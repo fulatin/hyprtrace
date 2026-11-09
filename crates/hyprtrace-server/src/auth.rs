@@ -36,19 +36,20 @@ pub async fn guard(State(state): State<Arc<AppState>>, req: Request, next: Next)
     let path = req.uri().path().to_string();
 
     // Layer 1: Origin allow-list (blocks cross-site browser requests).
-    if let Some(origin) = req
+    let origin = req
         .headers()
         .get(header::ORIGIN)
-        .and_then(|v| v.to_str().ok())
-    {
-        if !is_loopback_origin(origin) {
-            log::warn!("Rejected cross-origin request: Origin={}", origin);
-            return (
-                StatusCode::FORBIDDEN,
-                Json(serde_json::json!({"error": "Cross-origin requests are not allowed"})),
-            )
-                .into_response();
-        }
+        .and_then(|v| v.to_str().ok());
+    if let Some(rejection) = origin_rejection(origin) {
+        log::warn!(
+            "Rejected cross-origin request: Origin={}",
+            origin.unwrap_or_default()
+        );
+        return (
+            rejection,
+            Json(serde_json::json!({"error": "Cross-origin requests are not allowed"})),
+        )
+            .into_response();
     }
 
     // Layer 2: static token (only enforced when configured).
@@ -66,6 +67,19 @@ pub async fn guard(State(state): State<Arc<AppState>>, req: Request, next: Next)
     }
 
     next.run(req).await
+}
+
+/// The status a request's `Origin` header must be rejected with, if any.
+///
+/// Split out of the middleware so the rejection→403 mapping itself is
+/// testable: `guard` returns exactly this status for a foreign origin.
+fn origin_rejection(origin: Option<&str>) -> Option<StatusCode> {
+    match origin {
+        Some(origin) if !is_loopback_origin(origin) => Some(StatusCode::FORBIDDEN),
+        // No `Origin` means a non-browser client (curl, scripts); those are
+        // unaffected by the cross-origin guard.
+        _ => None,
+    }
 }
 
 /// True if the `Origin` header value (e.g. `http://localhost:5173`) points at
@@ -121,16 +135,24 @@ fn request_has_valid_token(req: &Request, expected: &str) -> bool {
         .any(|t| constant_time_eq(t, expected))
 }
 
-/// Constant-time comparison that does not leak the token length: it always
-/// iterates over the longer of the two inputs, treating a missing byte as a
-/// mismatch. An early `a.len() != b.len()` return would let an attacker time
-/// the length of the expected token.
+/// Constant-time equality for API tokens.
+///
+/// It compares a *fixed* number of bytes instead of iterating to the longer
+/// input's length: the latter still leaks the expected token's length through
+/// the loop count when an attacker sends a short token (issue #15 asks for
+/// "same order of magnitude" cost, this gives a constant one for any token
+/// that fits the cap). Tokens longer than 256 bytes — far beyond any realistic
+/// `server.auth_token` — are rejected outright; that branch only leaks the
+/// fact that the input is unusually long.
 fn constant_time_eq(a: &str, b: &str) -> bool {
+    const MAX_TOKEN_LEN: usize = 256;
     let a_bytes = a.as_bytes();
     let b_bytes = b.as_bytes();
-    let mut diff = 0u8;
-    let len = a_bytes.len().max(b_bytes.len());
-    for i in 0..len {
+    if a_bytes.len() > MAX_TOKEN_LEN || b_bytes.len() > MAX_TOKEN_LEN {
+        return false;
+    }
+    let mut diff = (a_bytes.len() != b_bytes.len()) as u8;
+    for i in 0..MAX_TOKEN_LEN {
         let x = a_bytes.get(i).copied().unwrap_or(0);
         let y = b_bytes.get(i).copied().unwrap_or(0);
         diff |= x ^ y;
@@ -185,10 +207,45 @@ mod tests {
     }
 
     #[test]
+    fn foreign_origins_map_to_403_and_loopback_ones_do_not() {
+        // The middleware returns exactly this status for a rejected Origin, so
+        // asserting it here is the 403 contract of issue #15.
+        for bad in [
+            "http://127.evil.com",
+            "http://127.0.0.1.evil.com",
+            "http://2130706433",
+            "https://evil.com",
+            "http://192.168.1.5:9420",
+            "null",
+        ] {
+            assert_eq!(
+                origin_rejection(Some(bad)),
+                Some(StatusCode::FORBIDDEN),
+                "{bad} must be rejected with 403"
+            );
+        }
+        for ok in [
+            "http://127.0.0.1:9420",
+            "http://[::1]:9420",
+            "http://localhost:5173",
+        ] {
+            assert_eq!(origin_rejection(Some(ok)), None, "{ok} must be allowed");
+        }
+        // Requests without an Origin (curl, scripts) are not cross-origin.
+        assert_eq!(origin_rejection(None), None);
+    }
+
+    #[test]
     fn constant_time_eq_basics() {
         assert!(constant_time_eq("abc", "abc"));
         assert!(!constant_time_eq("abc", "abd"));
         assert!(!constant_time_eq("abc", "abcd"));
         assert!(!constant_time_eq("", "a"));
+        // Fixed-length comparison: the cost does not depend on how long the
+        // expected value is, and overly long inputs are rejected.
+        let long = "x".repeat(256);
+        assert!(constant_time_eq(&long, &long));
+        assert!(!constant_time_eq(&long, &"x".repeat(255)));
+        assert!(!constant_time_eq(&"x".repeat(257), &"x".repeat(257)));
     }
 }

@@ -305,7 +305,7 @@ impl Default for Config {
 impl Config {
     /// Load config; use defaults if file doesn't exist
     pub fn load() -> anyhow::Result<Self> {
-        let config_dir = dirs_config_dir()?;
+        let config_dir = hyprtrace_common::paths::config_dir()?;
         let config_path = config_dir.join("config.toml");
 
         if config_path.exists() {
@@ -318,30 +318,12 @@ impl Config {
     }
 
     pub fn config_path() -> anyhow::Result<PathBuf> {
-        let config_dir = dirs_config_dir()?;
+        let config_dir = hyprtrace_common::paths::config_dir()?;
         Ok(config_dir.join("config.toml"))
     }
 
     pub fn db_path_expanded(&self) -> PathBuf {
-        expand_tilde(&self.daemon.db_path)
-    }
-}
-
-fn dirs_config_dir() -> anyhow::Result<PathBuf> {
-    // Respect XDG_CONFIG_HOME (falling back to $HOME/.config) via the
-    // `directories` crate instead of hard-coding $HOME/.config, which ignores
-    // a user's XDG override.
-    directories::ProjectDirs::from("", "", "hyprtrace")
-        .map(|d| d.config_dir().to_path_buf())
-        .ok_or_else(|| anyhow::anyhow!("cannot determine config directory (is HOME set?)"))
-}
-
-fn expand_tilde(path: &str) -> PathBuf {
-    if path.starts_with('~') {
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
-        PathBuf::from(path.replacen('~', &home, 1))
-    } else {
-        PathBuf::from(path)
+        hyprtrace_common::paths::expand_tilde(&self.daemon.db_path)
     }
 }
 
@@ -578,5 +560,90 @@ model = "deepseek-v4.1-flash"
         ));
         let doc = load_toml_document(&path).unwrap();
         assert!(doc.as_table().is_empty());
+    }
+
+    fn temp_config_path(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let dir =
+            std::env::temp_dir().join(format!("hyprtrace-cfg-{tag}-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        (dir, path)
+    }
+
+    #[test]
+    fn save_preserves_comments_and_key_order_on_disk() {
+        // Issue #24: `toml::Value` re-serialization dropped comments and
+        // re-sorted keys. A save through `toml_edit` must leave both intact.
+        let (dir, path) = temp_config_path("order");
+        std::fs::write(
+            &path,
+            "# top-of-file note\n[daemon]\nz_key = 1  # trailing note\na_key = 2\n",
+        )
+        .unwrap();
+
+        let mut doc = load_toml_document(&path).unwrap();
+        set_toml_value(
+            &mut doc,
+            &["daemon", "record_titles"],
+            toml_edit::Value::from(false),
+        );
+        save_toml_document(&path, &doc).unwrap();
+
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        assert!(on_disk.contains("# top-of-file note"), "header comment lost:\n{on_disk}");
+        assert!(on_disk.contains("z_key = 1  # trailing note"), "key comment lost:\n{on_disk}");
+        let z = on_disk.find("z_key").unwrap();
+        let a = on_disk.find("a_key").unwrap();
+        assert!(z < a, "key order changed:\n{on_disk}");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn save_replaces_the_file_atomically() {
+        // A `fs::write` implementation truncates the existing inode, so an
+        // already-open handle would see the new (possibly empty) content. With
+        // temp-file + rename, the old handle keeps seeing the old inode.
+        use std::io::Read;
+
+        let (dir, path) = temp_config_path("atomic");
+        std::fs::write(&path, "[daemon]\nrecord_titles = true\n").unwrap();
+        let mut old_handle = std::fs::File::open(&path).unwrap();
+
+        let mut doc = load_toml_document(&path).unwrap();
+        set_toml_value(
+            &mut doc,
+            &["daemon", "record_titles"],
+            toml_edit::Value::from(false),
+        );
+        save_toml_document(&path, &doc).unwrap();
+
+        let mut old_content = String::new();
+        old_handle.read_to_string(&mut old_content).unwrap();
+        assert!(
+            old_content.contains("record_titles = true"),
+            "the previous inode was modified in place (not an atomic rename): {old_content:?}"
+        );
+        let new_content = std::fs::read_to_string(&path).unwrap();
+        assert!(new_content.contains("record_titles = false"));
+        assert_ne!(old_content, new_content);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_creates_the_file_with_0600_permissions() {
+        // config.toml may contain an API key; it must not be world-readable.
+        use std::os::unix::fs::PermissionsExt;
+
+        let (dir, path) = temp_config_path("mode");
+        let doc = toml_edit::DocumentMut::new();
+        save_toml_document(&path, &doc).unwrap();
+
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "config must be 0600, got {mode:o}");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

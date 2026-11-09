@@ -116,6 +116,46 @@
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// Issue #16: the two crates used to keep separate hand-written migration
+    /// chains and had already drifted (the server was missing `migrate_v6`,
+    /// which repairs negative durations). The DDL is now one shared file; this
+    /// guards the remaining half — a *data-only* migration added to one crate
+    /// must not silently skip the other. Only the step numbers are compared:
+    /// the server deliberately runs v7 before v6 (see `migrate.rs`).
+    #[test]
+    fn migration_steps_match_the_daemon() {
+        const SERVER_MIGRATIONS: &str = include_str!("migrate.rs");
+        const DAEMON_MIGRATIONS: &str =
+            include_str!("../../../hyprtrace-daemon/src/db/migrations.rs");
+
+        fn migration_steps(source: &str) -> std::collections::BTreeSet<u32> {
+            let mut steps = std::collections::BTreeSet::new();
+            let mut rest = source;
+            while let Some(index) = rest.find("fn migrate_v") {
+                rest = &rest[index + "fn migrate_v".len()..];
+                let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+                if let Ok(step) = digits.parse::<u32>() {
+                    steps.insert(step);
+                }
+            }
+            steps
+        }
+
+        let server = migration_steps(SERVER_MIGRATIONS);
+        let daemon = migration_steps(DAEMON_MIGRATIONS);
+        assert!(
+            !server.is_empty() && !daemon.is_empty(),
+            "failed to parse the migration steps (server: {server:?}, daemon: {daemon:?})"
+        );
+        assert_eq!(
+            server, daemon,
+            "the server and daemon migration step sets drifted; a migration must exist in both crates"
+        );
+        // Sanity-check the shared baseline, so deleting a step from both sides
+        // cannot silence this test.
+        assert_eq!(daemon, [2u32, 3, 6, 7].into_iter().collect());
+    }
+
     /// `migrate()` runs the whole file on every start, so a second run must be
     /// a no-op.
     #[test]
