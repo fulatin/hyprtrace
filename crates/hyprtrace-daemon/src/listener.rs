@@ -33,6 +33,7 @@ impl WindowTracker {
 
         let db = self.db.clone();
         let activity = self.activity.clone();
+
         let activity2 = activity.clone();
         let activity3 = activity.clone();
         let record_titles = self.config.daemon.record_titles;
@@ -104,13 +105,11 @@ impl WindowTracker {
             }
         });
 
-        let activity2 = activity2;
         listener.add_workspace_changed_handler(move |_data| {
             activity2.mark_activity();
             log::trace!("Activity marked (workspace changed)");
         });
 
-        let activity3 = activity3;
         listener.add_active_monitor_changed_handler(move |_data| {
             activity3.mark_activity();
             log::trace!("Activity marked (monitor changed)");

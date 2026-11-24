@@ -63,7 +63,7 @@ pub fn spawn_idle_monitor(
     let away_timeout_seconds = idle_timeout_seconds * 2;
     let timeout = Duration::from_secs(idle_timeout_seconds);
     let away_timeout = Duration::from_secs(away_timeout_seconds);
-    let poll_interval = Duration::from_secs((idle_timeout_seconds / 4).max(5).min(30));
+    let poll_interval = Duration::from_secs((idle_timeout_seconds / 4).clamp(5, 30));
 
     std::thread::spawn(move || {
         log::info!(
@@ -272,7 +272,9 @@ fn parse_loginctl_idle(stdout: &str, now_mono_us: u64) -> Option<Duration> {
 
     // `checked_sub` treats a (theoretically impossible) future timestamp as
     // "no information" rather than a bogus duration.
-    Some(Duration::from_micros(now_mono_us.checked_sub(idle_since_mono)?))
+    Some(Duration::from_micros(
+        now_mono_us.checked_sub(idle_since_mono)?,
+    ))
 }
 
 /// Current `CLOCK_MONOTONIC` time in microseconds since boot.
@@ -374,8 +376,12 @@ mod tests {
     fn loginctl_idle_hint_yes_without_usable_since_is_unknown() {
         // Missing timestamp or garbage must not be reported as 0s idle.
         assert!(parse_loginctl_idle("IdleHint=yes\n", 1_000_000).is_none());
-        assert!(parse_loginctl_idle("IdleHint=yes\nIdleSinceHintMonotonic=abc\n", 1_000_000).is_none());
-        assert!(parse_loginctl_idle("IdleHint=yes\nIdleSinceHintMonotonic=0\n", 1_000_000).is_none());
+        assert!(
+            parse_loginctl_idle("IdleHint=yes\nIdleSinceHintMonotonic=abc\n", 1_000_000).is_none()
+        );
+        assert!(
+            parse_loginctl_idle("IdleHint=yes\nIdleSinceHintMonotonic=0\n", 1_000_000).is_none()
+        );
     }
 
     #[test]
@@ -388,7 +394,10 @@ mod tests {
     fn loginctl_since_in_future_is_unknown() {
         // A timestamp that is somehow ahead of "now" yields no duration
         // instead of a bogus value (handled by checked_sub).
-        let out = format!("IdleHint=yes\nIdleSinceHintMonotonic={}\n", 1_000_000u64 + 60_000_000);
+        let out = format!(
+            "IdleHint=yes\nIdleSinceHintMonotonic={}\n",
+            1_000_000u64 + 60_000_000
+        );
         assert!(parse_loginctl_idle(&out, 1_000_000).is_none());
     }
 
@@ -407,7 +416,8 @@ mod tests {
         );
         // Same monotonic input, wall clock "rolled back" by an hour: the parser
         // cannot even see the wall clock, so the duration is unchanged.
-        let out_with_jump = "IdleHint=yes\nIdleSinceHint=1699996400000000\nIdleSinceHintMonotonic=42000000\n";
+        let out_with_jump =
+            "IdleHint=yes\nIdleSinceHint=1699996400000000\nIdleSinceHintMonotonic=42000000\n";
         assert_eq!(
             parse_loginctl_idle(out_with_jump, 60_000_000),
             Some(Duration::from_secs(18))

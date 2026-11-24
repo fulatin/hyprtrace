@@ -211,6 +211,19 @@ fn main() -> anyhow::Result<()> {
     }
 }
 
+/// True when the error chain contains a SQLite busy/locked failure — transient
+/// lock contention worth retrying with a backoff instead of crashing.
+fn is_sqlite_busy(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        matches!(
+            cause.downcast_ref::<rusqlite::Error>(),
+            Some(rusqlite::Error::SqliteFailure(ffi, _))
+                if ffi.code == rusqlite::ErrorCode::DatabaseBusy
+                    || ffi.code == rusqlite::ErrorCode::DatabaseLocked
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -300,17 +313,4 @@ mod tests {
         assert_eq!(reason, ShutdownReason::TerminationSignal);
         assert_eq!(exit_code(&reason), 0);
     }
-}
-
-/// True when the error chain contains a SQLite busy/locked failure — transient
-/// lock contention worth retrying with a backoff instead of crashing.
-fn is_sqlite_busy(err: &anyhow::Error) -> bool {
-    err.chain().any(|cause| {
-        matches!(
-            cause.downcast_ref::<rusqlite::Error>(),
-            Some(rusqlite::Error::SqliteFailure(ffi, _))
-                if ffi.code == rusqlite::ErrorCode::DatabaseBusy
-                    || ffi.code == rusqlite::ErrorCode::DatabaseLocked
-        )
-    })
 }

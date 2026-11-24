@@ -110,17 +110,18 @@ pub fn spawn_goal_monitor(
                 let focused_ms = guard.current_focused_duration_ms();
                 let day = chrono::Local::now().format("%Y-%m-%d").to_string();
                 let focused_min = focused_ms / 60_000;
-                if break_after_minutes > 0 && focused_min as u64 >= break_after_minutes {
-                    if break_notified.as_ref().map(|(d, _)| d.as_str()) != Some(day.as_str()) {
-                        pending.push((
-                            "Take a break".to_string(),
-                            format!(
-                                "You've been focused on one window for {} min. Stretch and look away for a moment.",
-                                focused_min
-                            ),
-                        ));
-                        break_notified = Some((day, true));
-                    }
+                if break_after_minutes > 0
+                    && focused_min as u64 >= break_after_minutes
+                    && break_notified.as_ref().map(|(d, _)| d.as_str()) != Some(day.as_str())
+                {
+                    pending.push((
+                        "Take a break".to_string(),
+                        format!(
+                            "You've been focused on one window for {} min. Stretch and look away for a moment.",
+                            focused_min
+                        ),
+                    ));
+                    break_notified = Some((day, true));
                 }
             }
 

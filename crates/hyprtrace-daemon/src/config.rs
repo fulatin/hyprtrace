@@ -2,7 +2,7 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Default, Deserialize, Serialize, Clone)]
 pub struct Config {
     #[serde(default)]
     pub daemon: DaemonConfig,
@@ -184,15 +184,15 @@ impl Default for OpenAiConfig {
     }
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            daemon: DaemonConfig::default(),
-            server: ServerConfig::default(),
-            ai: AiConfig::default(),
-        }
-    }
-}
+// impl Default for Config {
+//     fn default() -> Self {
+//         Self {
+//             daemon: DaemonConfig::default(),
+//             server: ServerConfig::default(),
+//             ai: AiConfig::default(),
+//         }
+//     }
+// }
 
 impl Config {
     /// Load config from ~/.config/hyprtrace/config.toml; create with defaults if missing
@@ -208,20 +208,6 @@ impl Config {
             let config = Config::default();
             config.save_to(&config_path)?;
             Ok(config)
-        }
-    }
-
-    /// Load config in read-only mode; use defaults if file doesn't exist (no auto-create)
-    pub fn load_readonly() -> anyhow::Result<Self> {
-        let config_dir = hyprtrace_common::paths::config_dir()?;
-        let config_path = config_dir.join("config.toml");
-
-        if config_path.exists() {
-            let content = std::fs::read_to_string(&config_path)
-                .with_context(|| format!("Failed to read config file: {:?}", config_path))?;
-            toml::from_str(&content).context("Failed to parse config file")
-        } else {
-            Ok(Config::default())
         }
     }
 

@@ -214,6 +214,52 @@ impl NotifyParser {
     }
 }
 
+fn spawn_clipboard_poller(db: Arc<Mutex<Database>>, running: Arc<AtomicBool>) {
+    let mut last_hash: Option<String> = None;
+    loop {
+        if !running.load(Ordering::Relaxed) {
+            break;
+        }
+        std::thread::sleep(Duration::from_secs(5));
+
+        let output = match Command::new("wl-paste").output() {
+            Ok(o) if o.status.success() => o.stdout,
+            _ => continue, // clipboard empty or unavailable
+        };
+        let hash = fnv1a_short(&output);
+        if let Some(prev) = &last_hash {
+            if prev != &hash {
+                {
+                    let guard = match db.lock() {
+                        Ok(g) => g,
+                        Err(_) => {
+                            last_hash = Some(hash.clone());
+                            continue;
+                        }
+                    };
+                    if let Err(e) = guard.save_clipboard() {
+                        log::warn!("Failed to save clipboard event: {}", e);
+                    }
+                }
+                log::debug!("Clipboard change recorded ({} bytes)", output.len());
+            }
+        }
+        last_hash = Some(hash);
+    }
+}
+
+/// FNV-1a, truncated to the first 4 KiB. Not a cryptographic hash — it is
+/// only used to tell two consecutive notification payloads apart.
+fn fnv1a_short(data: &[u8]) -> String {
+    // Cheap deterministic fingerprint without pulling in a hash crate.
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in data.iter().take(4096) {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    format!("{:x}", h)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -319,50 +365,4 @@ mod tests {
             }]
         );
     }
-}
-
-fn spawn_clipboard_poller(db: Arc<Mutex<Database>>, running: Arc<AtomicBool>) {
-    let mut last_hash: Option<String> = None;
-    loop {
-        if !running.load(Ordering::Relaxed) {
-            break;
-        }
-        std::thread::sleep(Duration::from_secs(5));
-
-        let output = match Command::new("wl-paste").output() {
-            Ok(o) if o.status.success() => o.stdout,
-            _ => continue, // clipboard empty or unavailable
-        };
-        let hash = fnv1a_short(&output);
-        if let Some(prev) = &last_hash {
-            if prev != &hash {
-                {
-                    let guard = match db.lock() {
-                        Ok(g) => g,
-                        Err(_) => {
-                            last_hash = Some(hash.clone());
-                            continue;
-                        }
-                    };
-                    if let Err(e) = guard.save_clipboard() {
-                        log::warn!("Failed to save clipboard event: {}", e);
-                    }
-                }
-                log::debug!("Clipboard change recorded ({} bytes)", output.len());
-            }
-        }
-        last_hash = Some(hash);
-    }
-}
-
-/// FNV-1a, truncated to the first 4 KiB. Not a cryptographic hash — it is
-/// only used to tell two consecutive notification payloads apart.
-fn fnv1a_short(data: &[u8]) -> String {
-    // Cheap deterministic fingerprint without pulling in a hash crate.
-    let mut h: u64 = 0xcbf29ce484222325;
-    for b in data.iter().take(4096) {
-        h ^= *b as u64;
-        h = h.wrapping_mul(0x100000001b3);
-    }
-    format!("{:x}", h)
 }
